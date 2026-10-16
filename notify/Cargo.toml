@@ -1,0 +1,39 @@
+[package]
+name = "caustics-notify"
+version = "0.1.0"
+edition.workspace = true
+description = "the bar's notification sidecar: the org.freedesktop.Notifications daemon, its history as one ABI rows frame on stdout, actions back on stdin"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The witness line, and the drain every zbus stream is handed to the moment
+# it exists (docs/architecture.md, *Rules*): this daemon subscribes
+# to two, `NameAcquired` and `NameLost`, for the queued name.
+caustics-sidecar = { path = "../sidecar", features = ["drain"] }
+# The wire, and nothing else about the bar: this binary writes rows and pixmap
+# frames and reads action frames (docs/abi.md, *Rows*, *Action*, *Pixmap*).
+caustics-bar-abi = { path = "../bar/abi" }
+# Fitting an `image-data` hint to the 64² a slot holds, as `caustics-tray` fits a
+# pixmap.
+tiny-skia = "0.12.0"
+# One current-thread runtime for the server, as the other D-Bus sidecars.
+tokio = { version = "1.53.1", default-features = false, features = [
+    "rt",
+    "net",
+    "sync",
+    "time",
+    "macros",
+] }
+# The server on the session bus. `tokio` instead of the default `async-io`,
+# so the process carries one executor rather than two.
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+# The history file: the snapshot's structs derive their JSON.
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[dev-dependencies]
+# The private `dbus-daemon` every test runs against (`tests/bus.rs`).
+caustics-sidecar = { path = "../sidecar", features = ["drain", "test-bus"] }
+# `StreamExt::next` on the signal streams a test reads.
+futures-lite = "2.6.1"

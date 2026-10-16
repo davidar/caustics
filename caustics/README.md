@@ -1,0 +1,128 @@
+# caustics
+
+The bar's GPU programs, in [Slang](https://shader-slang.org/). A **caustic**
+is a compute program that holds policy: here, everything the bar draws and
+every decision about what it draws (docs/architecture.md, *The caustic*). The
+programs are compiled to SPIR-V by slangc, at build time by `bar/build.rs`,
+which bakes the caustic into the bar binary, and at run time by the
+`caustics-reload` sidecar, which recompiles on every save. They are loaded through
+wgpu's SPIR-V passthrough. Slang rather than WGSL because Slang has modules,
+generics, interfaces, string literals whose hashes reach the host through
+reflection, and a reflection API that lets the Rust side check every shared
+struct's layout against the compiler's.
+
+## The files
+
+| file | what it is | written by |
+|---|---|---|
+| `bar.slang` | the bar caustic: the seven entry points (`bar_build`, `bar_compose`, `bar_shape`, `bar_apply`, `bar_visibility`, `bar_sample`, `bar_draw`), every binding, the layout, the springs, the popups, the witnesses | hand |
+| `bar_tunables.slang` | **the bar's configuration**: every knob as a `public static const` | hand; edit it to configure the bar |
+| `bar_model.slang` | the caustic's private vocabulary: item, block and element kinds and flags, the `Id` type, the dock-menu verbs, the item accessors. Not a contract: no Rust reads it | hand |
+| `bar_abi.slang` | the buffer contract between the bar process and the caustic (docs/abi.md, *The buffer*) | **generated** from `bar/abi/src/buffer.rs` |
+| `bar_wire.slang` | the frames a sidecar writes that the caustic reads in place (docs/abi.md, *The wire*) | **generated** from `bar/abi/src/wire.rs` |
+| `text.slang` | glyph and icon coverage from Bézier outlines (the Slug algorithm; the credit for the reference shader is in its header) | hand |
+| `ot.slang` | OpenType's binary format, walked in place: `cmap`, `hmtx`, `GDEF`, `GSUB`, `GPOS` | hand |
+| `shape.slang` | the shaper: HarfBuzz's default shaper over `ot.slang`, one thread per string | hand |
+| `shape_abi.slang` | the OpenType arena's header | **generated** from `shape/src/abi.rs` |
+| `bar_check.slang` | the oracle's invariants, a test-only eighth entry point (docs/testing.md) | hand |
+| `shape_demo.slang` | the smallest host of `shape.slang`: what `shape/examples/conform.rs` dispatches and the shaper's layout test reflects | hand |
+| `text_demo.slang` | the smallest host of `text.slang`: coverage into a buffer, for `text/examples/render.rs` | hand |
+
+**The generated files are checked in**, because `caustics-reload` and the
+reflection tests compile against the checked-out directory. Edit the Rust
+declaration and regenerate (`cargo run -p caustics-bar-abi --bin gen-slang` for
+the bar's two, `cargo run -p caustics-shape --bin gen-slang` for the arena
+header). A unit test fails, naming the command, when a file on disk differs
+from its rendering.
+
+## The import graph
+
+```
+bar.slang ─┬─ bar_abi ── bar_wire        (bar_abi re-exports bar_wire)
+           ├─ bar_wire
+           ├─ bar_model ── bar_abi        (re-exports bar_abi)
+           ├─ bar_tunables ── bar_model
+           ├─ shape ─┬─ ot ── shape_abi   (re-exports shape_abi)
+           │         └─ shape_abi
+           ├─ text
+           └─ #include "bar_check.slang"  (only under -DCAUSTICS_BAR_CHECK)
+
+shape_demo.slang ── shape        text_demo.slang ── text
+```
+
+`bar_tunables` imports only `bar_model`, which re-exports `bar_abi`, which
+re-exports `bar_wire`, so a tunables file reaches every constant it can name
+(`EDGE_*`, `ITEM_*`, `APPLET_*`, the `ACT_*` verbs) through one import.
+`shape`, `ot` and `text` know nothing about the bar: they are modules with no
+bindings that any host can import.
+
+## Conventions
+
+- **A module declares no bindings and no entry points** unless it is the
+  program. `bar_abi`, `bar_wire`, `bar_model`, `bar_tunables`, `shape`, `ot`
+  and `text` are importable anywhere at no cost; `bar.slang` owns every
+  `[[vk::binding]]` and every `[numthreads]`. A host of `shape` or `text`
+  binds their buffers itself and passes the handles in (see the two demos).
+- **Bindings are named, not numbered, on the host side.** The binding numbers
+  are literals in `bar.slang` (an attribute cannot take a constant). The bar
+  builds its bind groups by reading each binding's name out of slangc's
+  reflection, and refuses a hot reload whose bindings changed.
+- **No vectors in a shared struct.** Every field of anything in `bar_abi` or
+  `bar_wire` is a `uint`, a `float` or an array of them. A 3-vector aligns to
+  16 bytes in std430, and reflection once put one at the wrong offset.
+- **Strings are literals.** A label the bar shows that is not someone else's
+  data is `getStringHash("…")`. The reflection carries the literal's text and
+  the bar copies it into the strings buffer. Witness lines are format literals
+  the same way (docs/abi.md, *The witness ring*).
+- **Everything the arenas say is untrusted.** `ot.slang` and `shape.slang`
+  read bytes another process sent. Every offset is clamped to what was bound,
+  every list the data states is capped and charged against a budget before
+  its first iteration, and an unsupported format raises a flag on the run
+  rather than answering zero. A loop never uses a budget charge as its exit
+  condition: one driver miscompiled exactly that shape.
+- **Two swapchain formats.** `bar.slang` compiles once with
+  `-DDST_FORMAT_RGBA8` and once with `-DDST_FORMAT_BGRA8` (SPIR-V has no BGRA
+  storage-image format, so that variant declares the image format-unknown).
+  The bar picks the pair matching the surface it negotiated.
+
+## The tunables
+
+`bar_tunables.slang` is the only configuration the bar has, and its own
+documentation: each constant carries a comment saying what it does. To change
+anything, edit it in your checkout and save; the running bar moves. It is a
+module like the others in this directory, and the compiler is its validator:
+an edit that does not compile keeps the last good bar and prints slangc's
+diagnostic, naming this file, to the journal. Your edits live in your
+checkout, so an update is a merge like any other.
+
+Two tunables reach the bar process, both as one message on the caustic's
+first frame and again whenever a reload changes them: `EDGE` (`EDGE_TOP`,
+the shipped default, or `EDGE_BOTTOM`) and `BAR_HEIGHT`. Everything else
+(colours, sizes, the wings' contents and order, the dock menu's rows, the
+clock's words, the springs, the shape watchdog) is read by the caustic alone.
+
+## Hot reload
+
+`caustics-reload` watches this directory, the tunables among it. On a save it
+compiles every entry point with slangc, caches the result under
+`$XDG_CACHE_HOME/caustics/reload/` keyed on the bytes that reach the compiler and
+the compiler's version (a cached generation is milliseconds; a cold one is
+seconds), and sends the SPIR-V and the reflection to the bar as one
+generation, which the bar swaps whole or not at all. The caustic's private
+state survives the swap, so an open menu stays open.
+
+**A start compiles nothing.** The bar starts on the SPIR-V baked into it
+from this directory, and when it tells `caustics-reload` its swapchain
+format, the sidecar sends a cached generation for the directory's present
+bytes if there is one and otherwise waits for the next save. A restart after
+a live edit therefore shows the edited bar within a second.
+
+**A file that does not compile sends nothing.** The running caustic stays and
+slangc's diagnostics go to the journal. A reload that changes a binding, or
+the size of the caustic's private buffer, is refused with "restart the bar".
+
+Where `caustics-reload` looks: `caustics/` in its working directory, then
+`$CAUSTICS_DIR`, then the `caustics/` of the checkout the binary was
+built from. An installed bar built from a checkout therefore hot-reloads from
+that checkout. With none of the three present it runs the caustic baked into
+it and never reloads.

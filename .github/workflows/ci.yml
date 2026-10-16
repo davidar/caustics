@@ -1,0 +1,78 @@
+# What a hosted runner can check: the build with warnings as errors, every
+# unit and integration test, the oracle on Mesa's software Vulkan, the link
+# check and the scrub check. The nested gate (docs/testing.md) needs a
+# compositor and a GPU and stays the local merge gate.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  SLANG_VERSION: "2026.14.1"
+
+jobs:
+  check-and-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # libwayland at link time; fontconfig and sans-serif fonts for the text
+      # tests (they skip without one; Noto Sans lacks the chart arrows, DejaVu
+      # Sans has them); lavapipe for the oracle; spirv-val for
+      # the compile tests; dbus-daemon for the sidecars' private test buses.
+      - name: System packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwayland-dev libxkbcommon-dev \
+            fontconfig fonts-noto-core fonts-dejavu-core \
+            mesa-vulkan-drivers libvulkan1 spirv-tools \
+            dbus
+
+      - name: slangc
+        id: slang
+        uses: actions/cache@v4
+        with:
+          path: ~/slang
+          key: slang-${{ env.SLANG_VERSION }}-linux-x86_64
+      - name: slangc (download)
+        if: steps.slang.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/slang
+          curl -sSfL "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz" \
+            | tar -xz -C ~/slang
+      - name: slangc (on PATH)
+        run: |
+          echo "$HOME/slang/bin" >> "$GITHUB_PATH"
+          ~/slang/bin/slangc -v
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check, with warnings as errors
+        run: cargo check --workspace --all-targets --locked
+
+      - name: Formatting
+        run: cargo fmt --all -- --check
+
+      - name: Test
+        run: cargo test --workspace --locked --no-fail-fast
+
+      - name: The oracle, on lavapipe
+        env:
+          CAUSTICS_BAR_ORACLE: "1"
+        run: cargo test -p caustics-bar --locked oracle -- --nocapture
+
+      - name: Links and scrub
+        run: |
+          docs/check-links.sh
+          tools/scrub-check.sh ':!LICENSE'

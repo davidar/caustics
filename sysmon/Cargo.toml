@@ -1,0 +1,21 @@
+[package]
+name = "caustics-sysmon"
+version = "0.1.0"
+edition.workspace = true
+description = "the bar's sampling sidecar: /proc, hwmon and drm sysfs turned into one ABI samples frame per tick on stdout"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The witness line, one copy for every sidecar.
+caustics-sidecar = { path = "../sidecar" }
+# The wire: this binary writes the exact bytes the bar's `samples` buffer holds, and knows nothing else about the bar.
+caustics-bar-abi = { path = "../bar/abi" }
+# `clock_gettime(CLOCK_MONOTONIC)` for the frame's `t`, and nothing else.
+libc = "0.2.189"
+# The NVIDIA half of the `gpu` chart, and the only reason this is a separate
+# process: `Nvml::init` dlopens `libnvidia-ml.so.1`, which opens `/dev/nvidia*`
+# and can pin a runtime-suspended dGPU awake. It never enters the bar's address
+# space — `src/nvidia.rs` holds the lease on it.
+# Default features only: `legacy-functions` and `serde` are not wanted.
+nvml-wrapper = "0.13.0"

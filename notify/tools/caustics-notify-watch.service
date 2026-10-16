@@ -1,0 +1,24 @@
+[Unit]
+Description=caustics-notify-watch: a bug report when a notification's click goes nowhere
+# notify/tools/notify-watch.py. Watches org.freedesktop.Notifications and
+# niri's event stream; writes a report under ~/.local/state/caustics/notify-watch/
+# when a click's ActionInvoked is not followed by a focus change, or its
+# signals were not addressed to the app. Read-only: it never sends a
+# notification of its own except the low-urgency one that names a report.
+PartOf=graphical-session.target
+After=graphical-session.target caustics-bar.service
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+# Nothing installs this: copy notify/tools/notify-watch.py to
+# ~/.local/bin/caustics-notify-watch (bar/install.sh does not).
+ExecStart=%h/.local/bin/caustics-notify-watch
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=5
+MemoryMax=64M
+
+[Install]
+WantedBy=graphical-session.target

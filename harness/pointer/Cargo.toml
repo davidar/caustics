@@ -1,0 +1,17 @@
+[package]
+name = "caustics-pointer"
+version = "0.1.0"
+edition.workspace = true
+description = "The nested gate's pointer: absolute moves, buttons and wheel steps through zwlr_virtual_pointer_v1 (docs/testing.md, *The nested gate*). A harness tool, not a sidecar."
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "caustics-pointer"
+path = "src/main.rs"
+
+[dependencies]
+# The pure-Rust backend: this is a short-lived client and needs no `system` pointers.
+wayland-client = "0.31.15"
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }

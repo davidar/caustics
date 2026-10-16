@@ -1,0 +1,46 @@
+// The nested gate's compositor (docs/testing.md): niri in a window on the
+// developer's desktop, started by bar/nested-run.sh with this file and
+// nothing else. Everything here is about being a quiet, predictable test bench.
+
+// The steps assume a 1280x800 output at scale 2 (640x400 logical), the VM
+// target's size. The window's size is the host's to give;
+// nested-run.sh asks the host niri for it.
+output "winit" {
+    scale 2
+}
+
+// No overlay over the first screenshots, no notification about this file.
+hotkey-overlay {
+    skip-at-startup
+}
+config-notification {
+    disable-failed
+}
+
+// Every screenshot the harness takes names its own file (`--path`, into the
+// run directory); one taken any other way is not written anywhere.
+screenshot-path null
+
+// Nothing starts with the compositor: every client is the harness's, by pid.
+// And no X: a nested xwayland-satellite would be one more process to track.
+xwayland-satellite {
+    off
+}
+
+// Frames as soon as they are asked for; a window that slides in is a
+// screenshot that depends on when it was taken.
+animations {
+    off
+}
+
+// The pointer the harness moves never opens the overview by passing a corner.
+gestures {
+    hot-corners {
+        off
+    }
+}
+
+// No binds at all: the developer's keyboard may reach this window, and
+// nothing typed may quit it, spawn anything, or move what the steps are measuring.
+binds {
+}

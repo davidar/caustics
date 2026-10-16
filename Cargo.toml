@@ -1,0 +1,21 @@
+[workspace]
+# The bar process, its ABI crate, its sidecars, and the crates they share.
+members = ["apps", "audio", "bar", "bar/abi", "bluetooth", "core", "glyphs", "harness/pointer", "network", "notify", "power", "reload", "shape", "sidecar", "sysmon", "text", "tray"]
+# The edition-2024 default, stated because it matters here: `bar` depends on
+# `caustics-core` without features from its build script and with `gpu` from its
+# code (`text` and `shape` likewise from their tests), and only resolver 2 or
+# later keeps a build script's graph from pulling in wgpu.
+resolver = "3"
+
+# Every member inherits these, so the licence, the edition and the oldest
+# toolchain that builds the tree are stated once. The rust-version is the
+# highest any dependency declares (wgpu, zbus, zvariant).
+[workspace.package]
+edition = "2024"
+license = "MIT"
+rust-version = "1.87"
+
+[profile.dev]
+# The debug build is what the tests, the oracle and the nested gate run, so it
+# gets the cheap optimisations: a little compile time for a usable bar.
+opt-level = 1

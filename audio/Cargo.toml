@@ -1,0 +1,26 @@
+[package]
+name = "caustics-audio"
+version = "0.1.0"
+edition.workspace = true
+description = "the bar's audio sidecar: PipeWire's default sink and source as one ABI rows frame on stdout, actions back on stdin, through pactl and wpctl"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The witness line, one copy for every sidecar.
+caustics-sidecar = { path = "../sidecar" }
+# The wire, and nothing else about the bar: this binary writes rows frames and
+# reads action frames (docs/abi.md, *Rows*, *Action*).
+caustics-bar-abi = { path = "../bar/abi" }
+# One current-thread runtime for the long-lived `pactl subscribe` child and the
+# short `wpctl` ones. `process` and `io-util` are what that shape needs. No zbus:
+# there is no bus in this sidecar at all.
+tokio = { version = "1.53.1", default-features = false, features = [
+    "rt",
+    "net",
+    "sync",
+    "time",
+    "macros",
+    "process",
+    "io-util",
+] }

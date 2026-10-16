@@ -1,0 +1,22 @@
+[package]
+name = "caustics-glyphs"
+version = "0.1.0"
+edition.workspace = true
+description = "the bar's curves sidecar: a font and every symbolic icon turned into the caustic's six text buffers on stdout, so the bar links no font parser"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The witness line, one copy for every sidecar, and the icon-theme search
+# behind `icons`, shared with caustics-apps and caustics-tray.
+caustics-sidecar = { path = "../sidecar", features = ["icons"] }
+# The wire, and the whole of what this binary knows about the bar: it writes
+# `Bytes` runs for the six `BUF_*` buffers and answers a `Request`.
+caustics-bar-abi = { path = "../bar/abi" }
+# Glyphs and icons as Bézier curves with Slug's band tables. The band search —
+# 187 of the 198 ms a cold Noto Sans costs — happens in this process, not the
+# bar's.
+caustics-text = { path = "../text" }
+# The arena: `cmap`, `hmtx`, `GDEF`, `GSUB` and `GPOS` sliced out of the font
+# verbatim, behind a directory.
+caustics-shape = { path = "../shape" }

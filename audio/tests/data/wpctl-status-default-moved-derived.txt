@@ -1,0 +1,52 @@
+PipeWire 'pipewire-0' [1.6.8, user@host, cookie:1]
+ └─ Clients:
+         34. WirePlumber                     [1.6.8, user@host, pid:1000]
+         45. pipewire                        [1.6.8, user@host, pid:1000]
+        101. wpctl                           [1.6.8, user@host, pid:1000]
+
+Audio
+ ├─ Devices:
+ │      48. Discrete GPU Audio Controller       [alsa]
+ │      49. Integrated GPU Audio Controller     [alsa]
+ │      50. Built-in Audio Controller           [alsa]
+ │  
+ ├─ Sinks:
+ │      57. Integrated GPU Audio Controller Digital Stereo (HDMI) [vol: 1.00]
+ │      60. Built-in Audio Controller Analog Stereo [vol: 0.72]
+ │  *   95. Headphones                          [vol: 0.40 MUTED]
+ │  
+ ├─ Sources:
+ │      61. Built-in Audio Controller Analog Stereo [vol: 0.27]
+ │  *   96. Headphones                          [vol: 1.00]
+ │  
+ ├─ Filters:
+ │  
+ └─ Streams:
+        77. Firefox                                                     
+             73. output_FR       > Codec Analog:playback_FR	[active]
+             75. output_FL       > Codec Analog:playback_FL	[active]
+        81. speech-dispatcher-dummy                                     
+             82. output_FL       > Codec Analog:playback_FL	[init]
+             83. output_FR       > Codec Analog:playback_FR	[init]
+        88. Firefox                                                     
+             78. output_FR       > Codec Analog:playback_FR	[paused]
+             89. output_FL       > Codec Analog:playback_FL	[paused]
+
+Video
+ ├─ Devices:
+ │      46. Integrated Camera                   [v4l2]
+ │      58. Virtual Camera                      [v4l2]
+ │      59. Integrated Camera                   [v4l2]
+ │      65. Integrated Camera: Integrated C     [libcamera]
+ │  
+ ├─ Sinks:
+ │  
+ ├─ Sources:
+ │  *   68. Integrated Camera (V4L2)           
+ │  
+ ├─ Filters:
+ │  
+ └─ Streams:
+
+Settings
+ └─ Default Configured Devices:

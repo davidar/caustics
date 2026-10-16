@@ -1,0 +1,42 @@
+[package]
+name = "caustics-sidecar"
+version = "0.1.0"
+edition.workspace = true
+description = "What every bar sidecar shares: the witness line, the zbus drain, the stdin inbox, the icon-theme search, the settings-program choice and a private test bus"
+license.workspace = true
+rust-version.workspace = true
+
+[features]
+default = []
+# `drain`, `forward` and `Drain`: only the sidecars with a zbus connection want
+# them, so `caustics-apps`, `caustics-glyphs`, `caustics-reload` and `caustics-sysmon` — which
+# have no async runtime at all — take the witness and nothing else.
+drain = ["dep:tokio", "dep:futures-lite"]
+# The icon-theme search `caustics-apps`, `caustics-glyphs` and `caustics-tray` share
+# (`icons::resolve`, `theme_order`, `is_symbolic`, `in_directory`), written
+# once so no sidecar carries its own copy.
+icons = ["dep:freedesktop-icons"]
+# A private `dbus-daemon` for a test, killed when it drops (`test_bus::Bus`):
+# the D-Bus sidecars' deadlock tests share it as a dev-dependency.
+test-bus = []
+
+[dependencies]
+# The theme search behind the `icons` feature.
+freedesktop-icons = { version = "0.4.0", optional = true }
+# `StreamExt::next` on whatever stream a drain is handed.
+futures-lite = { version = "2.6.1", optional = true }
+# `spawn`, `Notify` and the unbounded channel: the drain task and what it folds
+# into.
+tokio = { version = "1.53.1", default-features = false, features = [
+    "rt",
+    "sync",
+], optional = true }
+
+[dev-dependencies]
+futures-lite = "2.6.1"
+tokio = { version = "1.53.1", default-features = false, features = [
+    "rt",
+    "sync",
+    "time",
+    "macros",
+] }

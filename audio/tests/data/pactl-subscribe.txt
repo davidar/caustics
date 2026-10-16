@@ -1,0 +1,16 @@
+Event 'new' on client #2238
+Event 'remove' on client #2238
+Event 'new' on client #2239
+Event 'remove' on client #2239
+Event 'new' on client #2240
+Event 'remove' on client #2240
+Event 'new' on client #2241
+Event 'remove' on client #2241
+Event 'new' on client #2242
+Event 'remove' on client #2242
+Event 'new' on client #2243
+Event 'remove' on client #2243
+Event 'new' on client #2244
+Event 'remove' on client #2244
+Event 'change' on sink-input #2232
+Got SIGINT, exiting.

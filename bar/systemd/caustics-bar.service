@@ -1,0 +1,50 @@
+[Unit]
+Description=caustics-bar
+PartOf=graphical-session.target
+After=graphical-session.target
+# Ten restarts a minute, then systemd gives up: enough that the fault test in bar/bar-test.sh (the one that kills the bar and waits for a restart) sees one, few enough that a bar which cannot
+# start does not spin.
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+ExecStart=%h/.local/bin/caustics-bar
+# No Vulkan driver is pinned here: the bar prefers a low-power adapter and
+# refuses an NVIDIA one by itself (bar/src/gpu.rs). On a laptop with a
+# discrete GPU that is not enough, because merely enumerating the discrete
+# GPU's driver can wake it; dropins/igpu-only.conf pins the integrated one
+# (`bar/install.sh --dropin bar/systemd/dropins/igpu-only.conf`).
+Environment=RUST_LOG=info
+# The bar's witness lines are its diagnostics and they go to stderr. A user
+# manager's default StandardError is `inherit`, which on some systems is not
+# the journal — without these two the log goes nowhere and `journalctl
+# --user -u caustics-bar` shows only systemd's own "Started".
+StandardOutput=journal
+StandardError=journal
+Restart=always
+RestartSec=1
+# A backstop, not a budget: the bar sits at about 60 MB resident and its big
+# allocations are fixed — the image slots at 1 MiB, the preview slot at 2048²
+# — so anything near this is a leak, and a leak is better killed and
+# restarted than left to grow. No CPUQuota: an interaction burst may use the
+# core, and the stall witness in the journal is what catches a busy loop
+# (bar/src/health.rs).
+#
+# 1 GB rather than less: `caustics-reload` runs slangc inside this unit's cgroup,
+# and one entry point of the caustic peaks at 350–424 MB (`bar_shape` 351 MB,
+# `bar_apply` 424 MB, measured with slangc 2026.14.1). Under a 256 MB cap
+# every hot reload that missed slangc's cache was an OOM kill of the whole
+# unit. The compile is sequential, one slangc at a time, so the peak is one
+# compile plus the set; a leak is still caught long before a gigabyte.
+MemoryMax=1G
+# Exit 2 is the bar refusing to run at all — an adapter it refuses (only a discrete NVIDIA GPU available), an argument
+# it does not understand, or another caustics-bar already holding this edge. Exit 3
+# is the device gone: a driver error, a reset ring, a validation failure wgpu
+# did not capture (bar/src/gpu.rs turns each into exit 3). None of those get
+# better by trying again — the sidecars would replay the same bytes to the
+# next bar within the second — so neither restarts; only a crash or a
+# protocol error (exit 1) does.
+RestartPreventExitStatus=2 3
+
+[Install]
+WantedBy=graphical-session.target

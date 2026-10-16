@@ -1,0 +1,20 @@
+[package]
+name = "caustics-reload"
+version = "0.1.0"
+edition.workspace = true
+description = "the bar's compiler sidecar: it watches the bar's caustic and its tunables, runs slangc, and writes SPIR-V and reflection to the bar over a pipe "
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The witness line, one copy for every sidecar.
+caustics-sidecar = { path = "../sidecar" }
+# The wire, and the whole of what this binary knows about the bar: it reads a
+# `Request` naming the swapchain format and writes `Module` frames back
+# (docs/abi.md, *Request*, *Module*). `ENTRIES` — the entry points to compile and
+# the names the frames carry — comes from here too, so the two ends cannot
+# drift into compiling a program the bar cannot assemble.
+caustics-bar-abi = { path = "../bar/abi" }
+# The slangc driver and the mtime watch. Featureless: nothing here touches
+# wgpu, which is the difference between this process and the bar's.
+caustics-core = { path = "../core" }
