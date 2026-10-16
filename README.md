@@ -111,7 +111,7 @@ running bar keeps its own set's sidecars even after a newer set is installed.
 
 | | |
 |---|---|
-| **Rust** | 1.87 or newer (edition 2024; the workspace declares `rust-version`). |
+| **Rust** | 1.88 or newer (edition 2024; the workspace declares `rust-version`). |
 | **slangc** | Slang's compiler, on `PATH` or named by `$SLANGC`. Built and tested with **2026.14.1**, from [shader-slang's releases](https://github.com/shader-slang/slang/releases). The build needs it (the bar's build script and the text engine's compile Slang); at run time only `caustics-reload` does, for hot reload. Other versions may differ; docs/slangc-numthreads.md is one known crash. `spirv-val` is used by the tests when present. |
 | **Libraries** | `libwayland-client` at link time (your distribution's `libwayland-dev` or equivalent). Fontconfig and an icon theme at run time. |
 | **GPU** | Vulkan, through wgpu with SPIR-V passthrough. The bar asks for a low-power adapter and **refuses an adapter named NVIDIA** (a status bar must not keep a discrete GPU awake) unless `CAUSTICS_BAR_ALLOW_DGPU=1` is set; an NVIDIA-only machine sets that, or uses Mesa's lavapipe. Tested on AMD integrated graphics (RADV) and on lavapipe. |
