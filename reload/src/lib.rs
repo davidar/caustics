@@ -87,8 +87,8 @@ pub const WATCHED: &[&str] = &[
 ];
 
 /// The text engine's modules the caustic imports, directly (`text`, `shape`)
-/// or through them (`ot`, `shape_abi`): punchcutter's, in
-/// [`punchcutter_core::slang_dir`].
+/// or through them (`ot`, `shape_abi`): punchcutter's, compiled into it and
+/// written out by [`punchcutter_core::slang_dir`].
 ///
 /// Inputs to every compile and to its cache key, and **not watched**: an
 /// engine change is a dependency bump and a rebuild, never a live edit.
@@ -97,7 +97,7 @@ pub const ENGINE: &[&str] = &["text.slang", "shape.slang", "ot.slang", "shape_ab
 /// Where slangc finds an engine module for a compile of `dir`: the directory
 /// itself when a copy sits there (the search order puts the source's own
 /// directory first, and a remote test target carries its copy that way), else
-/// the engine's own directory.
+/// the directory the engine writes its compiled-in copies to.
 pub fn engine_file(dir: &Path, name: &str) -> PathBuf {
     let beside = dir.join(name);
     if beside.is_file() {

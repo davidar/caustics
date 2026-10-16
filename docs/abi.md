@@ -1302,8 +1302,8 @@ contract:
 1. `caustics/bar_abi.slang`, the buffer contract rendered;
 2. `caustics/bar_wire.slang`, the wire as the GPU reads it, rendered;
 3. `shape_abi.slang`, the OpenType arena's header, rendered by the text
-   engine from the same kind of tables and read from the engine's own Slang
-   directory (`punchcutter_core::slang_dir()`, a build-dependency of
+   engine from the same kind of tables and taken as the copy compiled into
+   the engine (`punchcutter_core::modules::SHAPE_ABI`, a build-dependency of
    `caustics-bar-abi`), so a dependency bump that changes the arena is a new
    set;
 4. `bar/abi/src/wire.rs`, the framing, the kinds, the caps and the `BUF_*`

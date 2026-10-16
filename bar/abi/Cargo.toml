@@ -20,6 +20,6 @@ path = "src/bin/gen_slang.rs"
 punchcutter-core.workspace = true
 
 [build-dependencies]
-# `slang_dir()`: where the engine's `shape_abi.slang` is, one of the five files
-# the ABI hash covers.
+# `modules::SHAPE_ABI`: the engine's `shape_abi.slang` as compiled into the
+# engine, one of the five inputs the ABI hash covers.
 punchcutter-core.workspace = true

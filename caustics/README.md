@@ -25,10 +25,11 @@ struct's layout against the compiler's.
 **The text engine's modules are imported, not kept here.** `text` (glyph and
 icon coverage, the Slug algorithm), `shape` (the shaper), `ot` (OpenType's
 binary format, walked in place) and `shape_abi` (the arena's header) are
-punchcutter's, in its `slang/` directory; punchcutter is the text engine, a
-dependency. Every compile puts that directory on the include path after this
-one (`punchcutter_core::slang_dir()`): `bar/build.rs`, `caustics-reload`, the
-oracle and the layout tests alike.
+punchcutter's, compiled into `punchcutter-core` (`punchcutter_core::modules`);
+punchcutter is the text engine, a dependency. Every compile puts a directory
+written from those copies on the include path after this one: `bar/build.rs`
+writes it under `OUT_DIR`, and `caustics-reload`, the oracle and the layout
+tests take `punchcutter_core::slang_dir()`, a cache directory written once.
 
 **The generated files are checked in**, because `caustics-reload` and the
 reflection tests compile against the checked-out directory. Edit the Rust

@@ -1461,7 +1461,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 [[package]]
 name = "punchcutter-core"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=bec42d3dbbae807b24abb8511879f7d16c4769cb#bec42d3dbbae807b24abb8511879f7d16c4769cb"
+source = "git+https://github.com/davidar/punchcutter?rev=cf53cd7c2540400e5fc5250ff7b6781eb04b6071#cf53cd7c2540400e5fc5250ff7b6781eb04b6071"
 dependencies = [
  "ash",
  "pollster",
@@ -1473,7 +1473,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-fonts"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=bec42d3dbbae807b24abb8511879f7d16c4769cb#bec42d3dbbae807b24abb8511879f7d16c4769cb"
+source = "git+https://github.com/davidar/punchcutter?rev=cf53cd7c2540400e5fc5250ff7b6781eb04b6071#cf53cd7c2540400e5fc5250ff7b6781eb04b6071"
 dependencies = [
  "punchcutter-core",
  "punchcutter-shape",
@@ -1484,7 +1484,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-shape"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=bec42d3dbbae807b24abb8511879f7d16c4769cb#bec42d3dbbae807b24abb8511879f7d16c4769cb"
+source = "git+https://github.com/davidar/punchcutter?rev=cf53cd7c2540400e5fc5250ff7b6781eb04b6071#cf53cd7c2540400e5fc5250ff7b6781eb04b6071"
 dependencies = [
  "punchcutter-core",
  "ttf-parser",
@@ -1493,7 +1493,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-text"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=bec42d3dbbae807b24abb8511879f7d16c4769cb#bec42d3dbbae807b24abb8511879f7d16c4769cb"
+source = "git+https://github.com/davidar/punchcutter?rev=cf53cd7c2540400e5fc5250ff7b6781eb04b6071#cf53cd7c2540400e5fc5250ff7b6781eb04b6071"
 dependencies = [
  "anyhow",
  "punchcutter-core",

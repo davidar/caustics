@@ -16,14 +16,13 @@ edition = "2024"
 license = "MIT"
 rust-version = "1.88"
 
-# The text engine, one revision for every crate that takes it.
-# PLACEHOLDER: `rev` is not a real commit yet. Set it to the pushed commit of
-# punchcutter's `slang-dir` branch on all four lines, then `cargo fetch`.
+# The text engine, one revision for every crate that takes it. A bump is the
+# same commit on all four lines, then `cargo fetch`.
 [workspace.dependencies]
-punchcutter-core = { git = "https://github.com/davidar/punchcutter", rev = "bec42d3dbbae807b24abb8511879f7d16c4769cb" }
-punchcutter-fonts = { git = "https://github.com/davidar/punchcutter", rev = "bec42d3dbbae807b24abb8511879f7d16c4769cb" }
-punchcutter-shape = { git = "https://github.com/davidar/punchcutter", rev = "bec42d3dbbae807b24abb8511879f7d16c4769cb" }
-punchcutter-text = { git = "https://github.com/davidar/punchcutter", rev = "bec42d3dbbae807b24abb8511879f7d16c4769cb" }
+punchcutter-core = { git = "https://github.com/davidar/punchcutter", rev = "cf53cd7c2540400e5fc5250ff7b6781eb04b6071" }
+punchcutter-fonts = { git = "https://github.com/davidar/punchcutter", rev = "cf53cd7c2540400e5fc5250ff7b6781eb04b6071" }
+punchcutter-shape = { git = "https://github.com/davidar/punchcutter", rev = "cf53cd7c2540400e5fc5250ff7b6781eb04b6071" }
+punchcutter-text = { git = "https://github.com/davidar/punchcutter", rev = "cf53cd7c2540400e5fc5250ff7b6781eb04b6071" }
 
 [profile.dev]
 # The debug build is what the tests, the oracle and the nested gate run, so it

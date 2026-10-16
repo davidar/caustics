@@ -39,19 +39,22 @@ fn main() {
     ] {
         println!("cargo:rerun-if-changed={}", caustics.join(module).display());
     }
-    // And the engine's, which the baked SPIR-V contains as much as the bar's
-    // own. An engine change normally arrives as a dependency bump, which
-    // rebuilds this crate anyway; naming the files covers a local checkout.
-    let engine = punchcutter_core::slang_dir();
-    for module in ["text.slang", "shape.slang", "shape_abi.slang", "ot.slang"] {
-        println!("cargo:rerun-if-changed={}", engine.join(module).display());
-    }
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=SLANGC");
 
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
+    // The engine's modules, which the baked SPIR-V contains as much as the
+    // bar's own: the copies compiled into `punchcutter-core`, written here. An
+    // engine change is a dependency bump, which rebuilds this script.
+    let engine = out_dir.join("slang");
+    punchcutter_core::modules::write_to(&engine).unwrap_or_else(|err| {
+        panic!(
+            "could not write the engine's modules to {}: {err}",
+            engine.display()
+        )
+    });
     let slangc = slang::slangc_program();
-    let includes: [&Path; 2] = [&caustics, engine];
+    let includes: [&Path; 2] = [&caustics, &engine];
     let mut reflected = false;
 
     for format in DstFormat::ALL {

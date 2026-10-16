@@ -156,11 +156,11 @@ binaries already built. Never install one binary on its own: the bar would
 refuse a sidecar from another build anyway, and the script exists so that
 there is no way to make that pairing.
 
-Hot reload compiles against the text engine's Slang modules where cargo
-checked punchcutter out (its `slang/` directory, in cargo's git cache on the
-machine that built the set). Clearing that cache makes every reload fail with
-slangc's `cannot open file` until the next build fetches it again; the
-running bar keeps the caustic it has.
+Hot reload compiles against the text engine's Slang modules as they were
+compiled into the set: `caustics-reload` writes them once into
+`~/.cache/punchcutter/slang/<hash>/` and compiles with that directory on the
+include path, so the engine the bar runs with is the one it was built
+against, whatever has happened to cargo's caches since.
 
 **On a laptop with a discrete GPU**, also install the iGPU-only drop-in,
 which pins the Vulkan loader to the integrated GPU's driver so the discrete
