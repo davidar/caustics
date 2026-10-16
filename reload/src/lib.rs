@@ -45,7 +45,7 @@
 //! # The cache: the same bytes are never compiled twice
 //!
 //! Every generation is written to `$XDG_CACHE_HOME/caustics/reload/`, keyed on
-//! the **content** of what reaches slangc (the `.slang` files [`WATCHED`],
+//! the **content** of what reaches slangc (the `.slang` files [`watched`],
 //! [`RENDERED`] and [`ENGINE`] name), the format define and slangc's own version string; a lookup whose
 //! inputs hash to an entry already there reads it and compiles nothing.
 //! Content, not mtimes: an editor that rewrites a file with the same bytes has
@@ -72,11 +72,38 @@ use crate::watch::{MtimeWatch, POLL_INTERVAL};
 
 pub mod watch;
 
-/// The bar caustic and the modules of its own it imports, all in `caustics/`.
+/// The caustic itself, the file every compile is handed.
+pub const ENTRY: &str = "bar.slang";
+
+/// The bar caustic and every module of its own: each `*.slang` file in `dir`,
+/// [`ENTRY`] first and the rest by name. A copy of a [`RENDERED`] or an
+/// [`ENGINE`] module that sits beside them is not one of them: it is found
+/// by [`unwatched_file`] and is never a live edit.
 ///
 /// A change to any of them has to reach the running bar the same way a change
-/// to the tunables does. `bar_model.slang` is the caustic's own helpers.
-pub const WATCHED: &[&str] = &["bar.slang", "bar_model.slang", TUNABLES];
+/// to the tunables does. The directory is **listed when this is called**,
+/// which for the watch is once, at start: a module added to `caustics/` later
+/// is compiled (an edit to an existing module has to import it, and the
+/// compile reads the directory as slangc finds it) but is not itself watched
+/// until the sidecar restarts. [`ENTRY`] is always listed, present or not, so
+/// a tree without it has no cache key.
+pub fn watched(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| {
+            name.ends_with(".slang")
+                && name != ENTRY
+                && !RENDERED.contains(&name.as_str())
+                && !ENGINE.contains(&name.as_str())
+        })
+        .collect();
+    names.sort();
+    names.insert(0, ENTRY.to_owned());
+    names
+}
 
 /// The bar's own contract as the caustic imports it, `bar_abi` and
 /// `bar_wire`: rendered from `caustics-bar-abi`, the crate this sidecar links,
@@ -167,10 +194,10 @@ pub fn caustics_dir() -> PathBuf {
 // The watch, and what one compile is built from
 // ---------------------------------------------------------------------------
 
-/// The poller over every file [`WATCHED`] names in `dir`, primed with the
-/// state on disk so that startup is not a change.
+/// The poller over every file [`watched`] lists in `dir` now, primed with
+/// the state on disk so that startup is not a change.
 pub fn watch(dir: &Path) -> MtimeWatch {
-    MtimeWatch::new(WATCHED.iter().map(|name| dir.join(name)).collect())
+    MtimeWatch::new(watched(dir).iter().map(|name| dir.join(name)).collect())
 }
 
 /// The `bar.slang` to hand slangc and the module search path: the directory
@@ -185,7 +212,7 @@ pub struct Source {
 /// Where a compile of `dir` comes from.
 pub fn source(dir: &Path) -> Source {
     Source {
-        entry_file: dir.join("bar.slang"),
+        entry_file: dir.join(ENTRY),
         includes: vec![
             dir.to_path_buf(),
             caustics_bar_abi::rendered_dir().to_path_buf(),
@@ -341,11 +368,11 @@ fn slangc_version(program: &OsStr) -> String {
     }
 }
 
-/// The files whose bytes reach slangc, in a fixed order: [`WATCHED`], in
+/// The files whose bytes reach slangc, in a fixed order: [`watched`], in
 /// `dir`, then [`RENDERED`] and [`ENGINE`], wherever [`unwatched_file`] finds
 /// each.
 fn inputs(dir: &Path) -> Vec<PathBuf> {
-    WATCHED
+    watched(dir)
         .iter()
         .map(|name| dir.join(name))
         .chain(

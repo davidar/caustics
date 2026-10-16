@@ -461,14 +461,13 @@ if [[ -n "$ORACLE_BIN" ]]; then
     gscp "$ORACLE_BIN" tester@127.0.0.1:caustics-bar-oracle && pass "oracle binary" ||
         fail "oracle binary"
 fi
-# Every file of the caustic that is in the tree: a directory missing one starts
-# off the baked SPIR-V and **cannot reload** (`cannot open file`), failing every
-# later swap. The list holds at least the files `caustics-reload`'s `WATCHED`
-# names. The modules a caustic imports that are not in the tree, the bar's
-# rendered contract and the text engine's, are not copied: the guest's own
-# binaries write them from their compiled-in copies.
-gscp "$REPO"/caustics/bar.slang "$REPO"/caustics/bar_model.slang \
-    "$REPO"/caustics/bar_tunables.slang "$REPO"/caustics/bar_check.slang \
+# Every file of the caustic that is in the tree, which is every `*.slang` in
+# `caustics/` (the same list `caustics-reload` watches): a directory missing one
+# starts off the baked SPIR-V and **cannot reload** (`cannot open file`),
+# failing every later swap. The modules a caustic imports that are not in the
+# tree, the bar's rendered contract and the text engine's, are not copied: the
+# guest's own binaries write them from their compiled-in copies.
+gscp "$REPO"/caustics/*.slang \
     tester@127.0.0.1:caustics-bar/caustics/ && pass "caustics" || fail "caustics"
 gscp "$REPO"/bar/systemd/caustics-bar.service \
     tester@127.0.0.1:.config/systemd/user/caustics-bar.service && pass "unit" || fail "unit"

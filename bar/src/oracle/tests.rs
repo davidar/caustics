@@ -999,16 +999,17 @@ fn a_second_flag_draws_after_the_first_opened_its_face() {
 // A menu no taller than the screen, and a wheel to scroll it
 // ---------------------------------------------------------------------------
 
-/// `caustics/bar.slang`, for the one number of its own this section names: the
-/// popup state that means "up". Not a module constant, so not in `MODEL`.
-const BAR: &str = include_str!("../../../caustics/bar.slang");
+/// `caustics/bar_state.slang`, for the one number of its own this section
+/// names: the popup state that means "up". The caustic's state and not its
+/// vocabulary, so not in `MODEL`.
+const BAR: &str = include_str!("../../../caustics/bar_state.slang");
 
 fn bar_const(name: &str) -> u32 {
     let needle = format!("static const uint {name} = ");
     let rest = BAR
         .split(&needle)
         .nth(1)
-        .unwrap_or_else(|| panic!("bar.slang declares no {name}"));
+        .unwrap_or_else(|| panic!("bar_state.slang declares no {name}"));
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     digits
         .parse()

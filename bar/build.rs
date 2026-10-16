@@ -22,19 +22,27 @@ use punchcutter_core::slang;
 fn main() {
     let caustics = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../caustics");
     let source = caustics.join("bar.slang");
-    // The named files, not the directory: the bar is one caustic and the
-    // modules it imports, and another file in `caustics/` changing must not
-    // rebuild this crate. The tunables are baked in like anything else — a user's override of `bar_tunables.slang` (caustics/README.md) is read only by `caustics-reload` at run time, never by this build. `bar_model`
-    // is the caustic's own helpers. `bar_abi` and `bar_wire` are not files
-    // here: they are rendered from `bar/abi/` (docs/abi.md, *The two
-    // contracts*) below, and a change to that crate reruns this script.
-    println!("cargo:rerun-if-changed={}", source.display());
-    // Everything `bar.slang` imports, transitively. A module missing from this
-    // list is a silent bug: an edit to it leaves the baked SPIR-V alone, so
-    // `cargo build` rebuilds the binary around the *old* shader and the bar
-    // runs code nobody wrote.
-    for module in ["bar_model.slang", "bar_tunables.slang"] {
-        println!("cargo:rerun-if-changed={}", caustics.join(module).display());
+    // Every `*.slang` in `caustics/`, not the directory: the bar is one
+    // caustic and the modules of its own it imports, which are the directory's
+    // `.slang` files (caustics/README.md, *The files*), and another file there
+    // changing (the README) must not rebuild this crate. The tunables are
+    // baked in like anything else. A module missing from this list is a
+    // silent bug: an edit to it leaves the baked SPIR-V alone, so `cargo
+    // build` rebuilds the binary around the *old* shader and the bar runs code
+    // nobody wrote. A module added later is found when this script next runs,
+    // which an edit to the module that imports it causes. `bar_abi` and
+    // `bar_wire` are not files here: they are rendered from `bar/abi/`
+    // (docs/abi.md, *The two contracts*) below, and a change to that crate
+    // reruns this script.
+    let mut modules: Vec<PathBuf> = std::fs::read_dir(&caustics)
+        .unwrap_or_else(|err| panic!("could not list {}: {err}", caustics.display()))
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "slang"))
+        .collect();
+    modules.sort();
+    for module in &modules {
+        println!("cargo:rerun-if-changed={}", module.display());
     }
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=SLANGC");

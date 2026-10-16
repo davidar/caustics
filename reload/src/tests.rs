@@ -20,10 +20,11 @@ fn offline(cache: &Path) -> Toolchain {
     }
 }
 
-/// A tree with every file [`WATCHED`] names, so a key has something to read.
+/// A tree with every file [`watched`] lists in the shipped `caustics/`, so a
+/// key has something to read.
 fn watched_tree(dir: &Path, body: &str) {
-    for name in WATCHED {
-        std::fs::write(dir.join(name), format!("// {name}\n{body}")).expect("writable");
+    for name in watched(&caustics_dir()) {
+        std::fs::write(dir.join(&name), format!("// {name}\n{body}")).expect("writable");
     }
 }
 
@@ -372,7 +373,7 @@ fn the_key_is_content_and_not_mtime() {
     std::fs::remove_file(dir.join("text.slang")).expect("there");
     assert_eq!(cache_key(&tools, &dir, define, entries), Some(key));
 
-    std::fs::remove_file(dir.join("bar_model.slang")).expect("there");
+    std::fs::remove_file(dir.join(ENTRY)).expect("there");
     assert_eq!(cache_key(&tools, &dir, define, entries), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -504,36 +505,47 @@ fn the_bound_evicts_the_oldest() {
 /// test keeps the lists in step. The rendered and the engine's modules are not
 /// copied: the target's own binaries write them from their compiled-in copies.
 ///
-/// The lists are one fact — *which files the caustic is made of* — kept in
-/// several places because one of them is a shell script. The Rust ones are
-/// checked against the sources; the shell one is checked by reading the
-/// script.
+/// The list is one fact — *which files the caustic is made of* — and its
+/// answer is "every `*.slang` in `caustics/`", spelled three times: by
+/// [`watched`], by `bar/build.rs`'s `rerun-if-changed` and by the harness's
+/// copy, which is a shell glob. The Rust ones read the directory; the shell
+/// one is checked by reading the script.
 #[test]
 fn every_imported_module_is_watched_and_copied() {
     // Anchored on the manifest, not on the working directory: `cargo test -p`
     // runs from the package, so a relative `caustics` finds nothing and a
     // relative `bar/bar-test.sh` is silently absent. `bar_check.slang` is
-    // appended under an `#ifdef` by the oracle rather than imported, and
-    // `bar_tunables.slang` is `TUNABLES`.
+    // appended under an `#ifdef` by the oracle rather than imported, and is
+    // listed like every other file of the directory.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let dir = root.join("caustics");
     assert!(dir.is_dir(), "no caustics directory at {}", dir.display());
     let harness = root.join("bar/bar-test.sh");
     let script = std::fs::read_to_string(&harness)
         .unwrap_or_else(|err| panic!("{} is not readable: {err}", harness.display()));
+    assert!(
+        script.contains("\"$REPO\"/caustics/*.slang"),
+        "`bar/bar-test.sh` does not copy every `caustics/*.slang` into the guest"
+    );
 
-    let files = WATCHED
+    let watched = watched(&dir);
+    assert!(
+        watched.iter().any(|name| name == TUNABLES),
+        "the tunables are a watched module"
+    );
+    let files = watched
         .iter()
-        .map(|name| (*name, dir.join(name)))
-        .chain(
-            RENDERED
-                .iter()
-                .map(|name| (*name, caustics_bar_abi::rendered_dir().join(name))),
-        )
+        .map(|name| (name.clone(), dir.join(name)))
+        .chain(RENDERED.iter().map(|name| {
+            (
+                (*name).to_owned(),
+                caustics_bar_abi::rendered_dir().join(name),
+            )
+        }))
         .chain(
             ENGINE
                 .iter()
-                .map(|name| (*name, punchcutter_core::slang_dir().join(name))),
+                .map(|name| ((*name).to_owned(), punchcutter_core::slang_dir().join(name))),
         );
     for (name, path) in files {
         assert!(path.is_file(), "{name} is not at {}", path.display());
@@ -551,16 +563,10 @@ fn every_imported_module_is_watched_and_copied() {
             let module = rest.trim_end_matches(';').trim();
             let file = format!("{module}.slang");
             assert!(
-                WATCHED.contains(&file.as_str())
+                watched.contains(&file)
                     || RENDERED.contains(&file.as_str())
                     || ENGINE.contains(&file.as_str()),
-                "{name} imports `{module}` and `{file}` is in none of WATCHED, RENDERED and ENGINE"
-            );
-        }
-        if WATCHED.contains(&name) {
-            assert!(
-                script.contains(&format!("caustics/{name}")),
-                "{name} is part of the caustic and `bar/bar-test.sh` does not copy it into the guest"
+                "{name} imports `{module}` and `{file}` is in none of `caustics/`, RENDERED and ENGINE"
             );
         }
     }
