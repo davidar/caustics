@@ -193,9 +193,16 @@ bar_env_clear() { # bar_env_clear <group>
     gssh 20 "rm -f $DROPINS/$1.conf"
 }
 
+# A stop, then a start, rather than one `restart`: the old bar writes until
+# it dies — a last layout, when a sidecar republishes in the gap — and those
+# lines would land after a mark the caller took before calling here. With the
+# unit stopped (`stop` waits for the process), a caller's mark is retaken, so
+# its journal is the new instance's from its first line.
 bar_restart() {
     gssh 30 'systemctl --user daemon-reload; systemctl --user reset-failed caustics-bar 2>/dev/null
-        systemctl --user restart caustics-bar' >/dev/null
+        systemctl --user stop caustics-bar' >/dev/null
+    [[ -n "$JOURNAL_CURSOR" ]] && mark_journal
+    gssh 30 'systemctl --user start caustics-bar' >/dev/null
 }
 
 bar_stop() {

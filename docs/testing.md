@@ -205,7 +205,7 @@ nothing in the steps knows which target it is on:
 | `to_target`, `target_kill <pid>` | `cp`; `kill`, but only a pid the run started or one in the bar's process group |
 | `niri_msg …`, `shot <name>` | the nested niri's IPC; `niri msg action screenshot-screen` into the run directory, re-encoded to the 8-bit RGB PNG the pixel helpers read |
 | `pointer_to <x> <y>`, `button <down>` | `caustics-pointer` (a small client of `zwlr_virtual_pointer_manager_v1`, in `harness/pointer/`; not a sidecar and never installed) |
-| `journal`, `mark_journal`, `wait_for_journal*` | the bar's log and a line count as the cursor |
+| `journal`, `mark_journal`, `wait_for_journal*` | the bar's log from the cursor on; `bar_restart` moves a cursor to the new instance's first line, so the old bar's last lines are never read as the new one's |
 | `bar_env <group> K=V…`, `bar_env_clear <group>` | an environment file per group, sourced at each start (on a systemd target, a drop-in) |
 | `bar_restart`, `bar_stop`, `bar_active`, `bar_restarts`, `bar_pid` | the supervisor |
 | `fixture_start/stop`, `client_spawn` | `setsid`, tracked by pid |

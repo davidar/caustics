@@ -64,24 +64,22 @@ device without the shader clock) are punchcutter's roadmap.
     must grow with it (docs/abi.md, *For the next wire version*).
 7. **A `rows: slot …` witness** from the caustic, designed and not built;
     the wire reader's line stands in for it (docs/abi.md, *The arenas*).
-8. **A layout-line race in the gate's chart-set step**: a chart the sidecar
-    was not asked for is laid out, seen twice, not understood.
-9. **The five VM-only steps** of the gate stay VM-only (one hangs a hardware
+8. **The five VM-only steps** of the gate stay VM-only (one hangs a hardware
     driver's arena) until a live-GPU run is deliberately tried.
-10. **The hot-reload stall.** A swap whose pipelines are new to the driver
+9. **The hot-reload stall.** A swap whose pipelines are new to the driver
     blocks the bar's event loop for several seconds (docs/testing.md). Create
     the pipelines off the loop and swap when they are ready.
 
 ## Icons
 
-11. XPM and ICO `Icon=` paths; KDE colour-scheme SVGs recoloured with the
+10. XPM and ICO `Icon=` paths; KDE colour-scheme SVGs recoloured with the
     text ink (two routes, undecided); a Steam game's icon from its manifest;
     a pixmap whose file went away cannot be retracted; a theme installed
     while a sidecar runs is not searched until it restarts.
 
 ## Watching the bar
 
-12. **A witness watcher.** An always-on local reader of the journal's
+11. **A witness watcher.** An always-on local reader of the journal's
     witnesses that files a report when a stated rule is broken, for the next
     piece of work to pick up. One clause exists: `notify/tools`'
     `caustics-notify-watch`, which reports a notification click that reached no

@@ -436,17 +436,36 @@ bar_env() { # bar_env <group> KEY=VALUE…
 bar_env_clear() { rm -f "$RUN/env.d/$1.env"; }
 
 bar_restart() {
-    local old i pid
+    local old i pid line
     sup_ensure
     old=$(cat "$RUN/sup.pid" 2>/dev/null || echo 0)
     sup_command restart
     [[ "$old" != 0 ]] && kill -TERM "$old" 2>/dev/null
     for i in $(seq 150); do
         pid=$(cat "$RUN/sup.pid" 2>/dev/null || echo 0)
-        [[ "$pid" != 0 && "$pid" != "$old" ]] && return 0
+        [[ "$pid" != 0 && "$pid" != "$old" ]] && break
         sleep 0.1
     done
-    note "the supervisor did not start a bar within 15 s"
+    if [[ "$pid" == 0 || "$pid" == "$old" ]]; then
+        note "the supervisor did not start a bar within 15 s"
+        return 0
+    fi
+    # The old bar writes until it dies — a last layout, when a sidecar
+    # republishes in the gap — and those lines land after a mark the caller
+    # took before calling here. A caller's journal is the new instance's
+    # from its first line: the supervisor's own, which the stamper may still
+    # be writing when `sup.pid` is read.
+    [[ -n "$JOURNAL_CURSOR" ]] || return 0
+    for i in $(seq 50); do
+        line=$(grep -n -F "supervisor: Started caustics-bar (pid $pid)." "$BAR_LOG" |
+            tail -1 | cut -d: -f1)
+        if [[ -n "$line" ]]; then
+            ((line > JOURNAL_CURSOR + 1)) && JOURNAL_CURSOR=$((line - 1))
+            return 0
+        fi
+        sleep 0.1
+    done
+    note "no 'supervisor: Started' line for pid $pid within 5 s; the journal keeps the caller's mark"
 }
 
 bar_stop() {
