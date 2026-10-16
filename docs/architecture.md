@@ -152,8 +152,8 @@ no BlueZ, no session bus) stays up for its stdin, says `absent: <service>`
 once, and publishes an empty frame, so its chip is simply not there.
 
 **A sidecar's settings are its own.** The bar passes none: `caustics-sysmon`
-reads `$CAUSTICS_SYSMON_CHARTS`, `caustics-glyphs` reads `$CAUSTICS_FONT`, and the bar
-has no opinion about either. This is also the extension story. A third-party
+reads `$CAUSTICS_SYSMON_CHARTS`, `caustics-glyphs`'s engine reads
+`$PUNCHCUTTER_FONT`, and the bar has no opinion about either. This is also the extension story. A third-party
 widget is a program that writes `Rows` frames; `bar/abi/examples/rows_demo.rs`
 is a hundred-line one with an icon, two menu rows and a slider. It is not a
 script over a text protocol: the wire is binary and the caustic reads it
@@ -269,65 +269,44 @@ were well-formed. One hash over the whole contract can.
 
 ## Text
 
-The bar shapes and draws all of its text on the GPU, from the font's own
-outlines and tables. The CPU side, `caustics-glyphs`, does I/O only: it finds the
-font through fontconfig (Adwaita Sans, Cantarell, Inter, Noto Sans, DejaVu
-Sans, Liberation Sans in that order, or `$CAUSTICS_FONT`) and sends it over the
-pipe as bytes. A family is passed over if it lacks a glyph the caustic
-composes into runs of its own (the chart arrows, the degree sign, the dash for
-no value, the ellipsis): a label sent whole can be covered by a fallback face,
-a composed run cannot. Noto Sans has no arrows.
+The text engine is **punchcutter** (README.md links it), a dependency:
+OpenType shaping and Slug glyph coverage in Slang compute shaders, with a CPU
+side that finds fonts through fontconfig and parses them into bytes. The bar's caustic imports its `text` and `shape` modules, and the
+bar's binary links only its byte views, its shaping structs and its slangc
+driver. Its contract (the curve buffers, the arena, the merged glyph space,
+the shaping dispatch) is `punchcutter/docs/arena.md`; its gaps (bidirectional
+text, complex-script shapers, colour fonts, variable instances) are on its
+own roadmap.
 
-- **Glyphs are curves.** Coverage is computed per pixel from the glyph's
-  quadratic Béziers with the Slug algorithm (Eric Lengyel, JCGT 2017; its
-  patent was dedicated to the public domain and the reference shaders are
-  MIT OR Apache-2.0; `caustics/text.slang` is a port of the reference pixel
-  shader and carries the credit). A font reaches the GPU once as a curve
-  buffer with its band tables, and a glyph is an index. Nothing is rasterised
-  per size, so there is no atlas, no eviction and no packing, and a
-  fractional or 2× output reads the same buffers as a 1× one.
-- **Shaping is computation over font tables**, so it is the caustic's.
-  `caustics-glyphs` slices `cmap`, `hmtx`, `GDEF`, `GSUB` and `GPOS` out of the
-  font file and sends them **verbatim** into one arena. `caustics/ot.slang`
-  walks OpenType's big-endian format in place, and `caustics/shape.slang` is
-  HarfBuzz's default shaper on top of it: GSUB lookup types 1–8, GPOS 1–9,
-  GDEF classes and lookup flags, feature selection by script and language.
-  Sending the tables as they sit in the file, rather than a flattened form
-  the CPU had to understand, means a new lookup type is an edit to a
-  hot-reloaded shader and not a change to two programs and a format. The
-  reference is harfrust 0.12, HarfBuzz's Rust port, compared at zero
-  tolerance: the bar's own corpus matches exactly, and so does HarfBuzz's
-  shaping test suite (fetched into the cache by `shape/examples/conform.rs`,
-  never committed), less a short list of cases excused by name.
-- **Fallback faces.** When the caustic finds a run with a glyph the font
-  lacks, it pushes that run's bytes as a cover request. `caustics-glyphs` walks
-  fontconfig's fallback chain (`fc-match -s sans-serif`), appends the faces
-  that cover it, with their outlines, their tables and the GSUB closure of
-  what they filled (so a fallback face substitutes and kerns with itself),
-  and the run reshapes against the bigger arena.
-- **Bounded in time.** The arena is input from another process, so the
-  shaper treats it as hostile. Every list the arena states is capped and
-  charged against an operation budget before its first iteration, indices
-  are clamped to the bytes actually bound, and on an adapter with
-  `VK_KHR_shader_clock` each run holds a wall-clock deadline. Above that, the
-  bar process times the shape pass with a timestamp query and, past
+What the bar adds on top:
+
+- **The font arrives over a pipe.** `caustics-glyphs` loads the font through
+  `punchcutter_fonts` (`$PUNCHCUTTER_FONT`, else the first UI family
+  fontconfig has that carries the glyphs the caustic composes into runs of
+  its own: the chart arrows, the degree sign, the dash for no value, the
+  ellipsis; the list is the sidecar's `COMPOSED`, and a test keeps it equal to
+  the tunables' literals) and writes the engine's six buffers to the bar as `Font` and
+  `Bytes` frames. The bar copies them into the bindings the engine's modules
+  declare and reads none of it (docs/abi.md, *Font*, *Bytes*).
+- **Covers go back over the same pipe.** When the caustic finds a run with a
+  glyph the font lacks, it pushes that run's bytes, and the bar sends them to
+  `caustics-glyphs` as a `REQ_COVER` request. The engine opens the fallback
+  faces that draw them into the arena; the sidecar answers with the curve
+  tails, the records filled in place, the arena's changed ranges and the new
+  shape scalars, and the run reshapes (docs/abi.md, *Request*).
+- **Symbolic icons are glyphs** in the same buffers (*Images and icons*).
+- **A watchdog above the engine's bounds.** The engine treats the arena as
+  hostile: every list is capped and charged to an operation budget, and each
+  run holds a wall-clock deadline where `VK_KHR_shader_clock` is available.
+  Above that, the bar times the shape pass with a timestamp query and, past
   `SHAPE_WATCHDOG_MS`, stops shaping until the arena's front block is written
   again. A malformed font draws wrong; it never hangs the graphics ring.
-- **Strings are the caustic's too.** Every label the bar shows that is not
+- **Strings are the caustic's.** Every label the bar shows that is not
   someone else's data (a dock-menu row, the clock's weekday and month names,
   an icon name) is a string literal in Slang, named by `getStringHash`. The
   reflection carries each literal's text, the process copies those bytes
   into the strings buffer, and the caustic shapes them. A label's wording is
   a tunable like a colour, and no CPU code knows what a menu says.
-
-**Not yet.** No bidirectional text, script itemisation or Unicode
-normalisation: a string is cut into runs by face, and a right-to-left title
-draws in visual order. No complex-script shapers: Arabic shapes in isolated
-forms; Indic, Khmer, Myanmar and Hangul composition are not done. No colour
-fonts: an emoji draws from a monochrome fallback face if one is installed.
-Variable fonts shape at their default instance. Each is a shader feature, not
-a return to the CPU. Hinting and subpixel rendering are out by design: Slug
-coverage at the output's real scale is the answer.
 
 ## Images and icons
 

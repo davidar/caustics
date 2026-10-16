@@ -43,14 +43,16 @@ demand) and `caustics-reload` (the shader compiler, with a cache keyed on the
 bytes it compiles). Every D-Bus signal stream is drained by a task that awaits
 nothing else.
 
-**The text engine.** Glyphs and symbolic icons drawn from their outlines on
-the GPU with the Slug algorithm; OpenType Layout applied on the GPU from the
-font's own tables (HarfBuzz's default shaper: GSUB 1–8, GPOS 1–9, GDEF),
-matched against harfrust over HarfBuzz's test suite; fallback faces from
-fontconfig, with the substitution closure of what they cover; every walk over
-font data bounded, with a wall-clock deadline where the device supports one
-and a watchdog on the pass. Not yet: bidirectional text, Unicode
-normalisation, complex-script shapers, colour glyphs, variable-font instances.
+**Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
+their outlines on the GPU with the Slug algorithm, and OpenType Layout
+applied on the GPU from the font's own tables, both as Slang modules the
+caustic imports. The bar adds the font sidecar's wire (the engine's buffers as
+`Bytes` frames, fallback faces covered on request over the pipe), symbolic
+icons as glyphs, and a watchdog on the shape pass. The font is
+`$PUNCHCUTTER_FONT` or fontconfig's choice, and its curves are cached under
+`$XDG_CACHE_HOME/punchcutter/`. The engine's gaps
+(bidirectional text, complex-script shapers, colour glyphs, variable-font
+instances) are on its roadmap.
 
 **The tests.** Unit tests in every crate, against recorded and synthesised bus
 bodies; a GPU oracle that runs the caustic's own passes on a real device; the

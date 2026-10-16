@@ -40,19 +40,20 @@ bar's.
 
 - **Slang, not WGSL**, for every shader. Shaders are compiled to SPIR-V by
   slangc and loaded through wgpu's passthrough.
-- **Shared layouts are declared once, in Rust**: in `bar/abi/` for the bar's
-  two contracts, and in `shape/src/abi.rs` for the OpenType arena's header.
-  The Slang side is generated (`cargo run -p caustics-bar-abi --bin gen-slang`,
-  `cargo run -p caustics-shape --bin gen-slang`) and checked in. Never edit
-  `bar_abi.slang`, `bar_wire.slang` or `shape_abi.slang` by hand. A test
-  fails when the files on disk differ from the rendering, and another compares
-  every struct's offsets with slangc's reflection.
+- **Shared layouts are declared once, in Rust**, in `bar/abi/` for the bar's
+  two contracts. The Slang side is generated
+  (`cargo run -p caustics-bar-abi --bin gen-slang`) and checked in. Never edit
+  `bar_abi.slang` or `bar_wire.slang` by hand. A test fails when the files on
+  disk differ from the rendering, and another compares every struct's offsets
+  with slangc's reflection.
+- **The text engine is a dependency.** Shaping, glyph coverage and the
+  OpenType arena's layout are punchcutter's; a change to them is a change
+  there and a dependency bump here, never a copy in this tree.
 - Every field of a shared struct is a `uint`, a `float` or an array of them.
   No 3-vectors: std430 aligns them to 16 bytes.
 - **Untrusted bytes are bounded.** Anything the caustic reads from a
-  sidecar's arena (a font's tables above all) is clamped to what was bound,
-  and every list it states is capped and charged against a budget before its
-  first iteration. Do not make a budget charge a loop's exit condition: one
+  sidecar's arena is clamped to what was bound, and every list it states is
+  capped and charged against a budget before its first iteration. Do not make a budget charge a loop's exit condition: one
   driver miscompiled exactly that.
 
 ## Formatting
@@ -64,8 +65,9 @@ file they are in.
 ## Licensing
 
 The bar is MIT. Code brought in from elsewhere comes under a licence
-compatible with that, keeps its own notice where it lands (see
-`caustics/text.slang`'s header for how), and is listed in `NOTICE`.
+compatible with that, keeps its own notice where it lands (a header
+comment naming the work, its author and its licence), and is listed in
+`NOTICE`.
 
 ## Dependencies
 

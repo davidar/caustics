@@ -11,18 +11,19 @@ anyhow = "1.0.104"
 # The clock's local-time offset (tzset/localtime_r). Already in Cargo.lock via
 # wgpu's tree, so this costs no new crate and no registry fetch.
 libc = "0.2.189"
-# The slangc driver, the `Plain` byte views, the mtime watch and the wgpu
-# helpers, shared with `caustics-reload` and the test harnesses.
-caustics-core = { path = "../core", features = ["gpu"] }
+# The slangc driver and its reflection, the `Plain` byte views and the wgpu
+# helpers (`gpu`: the device with the shader clock, pipelines, buffers).
+punchcutter-core = { workspace = true, features = ["gpu"] }
 # The ABI as a crate (docs/abi.md, *Writing a sidecar*), so a sidecar can import the
 # declarations without any of the above.
 caustics-bar-abi = { path = "abi" }
-# `ShapeParams` and `MAX_RUN_GLYPHS`: the layout of the buffer `caustics-glyphs` sends as `BUF_SHAPE_FONT`, and the cap on a run's glyph slots. The
-# *tables* are `caustics-glyphs`'s and reach this process as bytes.
+# `ShapeParams` and `MAX_RUN_GLYPHS`: the layout of the buffer `caustics-glyphs`
+# sends as `BUF_SHAPE_FONT`, and the cap on a run's glyph slots. The *tables*
+# are `caustics-glyphs`'s and reach this process as bytes.
 #
-# No `caustics-text` here: the bar holds no curves, parses no font and caches
-# nothing about one. It is a dev-dependency below, for one layout test.
-caustics-shape = { path = "../shape" }
+# No `punchcutter-text` or `punchcutter-fonts` here: the bar holds no curves,
+# parses no font and caches nothing about one. They are dev-dependencies below.
+punchcutter-shape.workspace = true
 pollster = "0.4"
 raw-window-handle = "0.6.2"
 # niri's IPC is line-delimited JSON. The feeder writes requests with `json!`
@@ -46,29 +47,31 @@ wgpu = "30.0.0"
 # the embassy is calloop, start to finish (docs/architecture.md, *The bar process*).
 #
 # No shaper or rasteriser: text is shaped and filled by the caustic from the
-# font's own tables and curves (docs/architecture.md, *Text*). The reference
-# implementations it is checked against are dev-dependencies of `shape/` and
-# `text/`.
+# font's own tables and curves (docs/architecture.md, *Text*), through
+# punchcutter's Slang modules. The reference implementations it is checked
+# against are punchcutter's.
 #
 # No SVG renderer or icon-theme lookup: desktop entries and icon themes are
 # `caustics-apps`'s. A colour icon arrives as one slot of straight RGBA8 over a
 # pipe; the bar copies the bytes and the caustic multiplies them by their own
 # alpha.
-# build.rs bakes the caustic through the same driver the reload loop uses.
-# Featureless: nothing in a build script needs wgpu.
+# build.rs bakes the caustic through the same driver the reload loop uses, with
+# the engine's modules (`slang_dir()`) on the include path. Featureless:
+# nothing in a build script needs wgpu.
 [build-dependencies]
-caustics-core = { path = "../core" }
+punchcutter-core.workspace = true
+# `ENTRIES` and `DstFormat`: which entry points to bake, and for which
+# swapchain formats, from the same crate `caustics-reload` reads them from.
+caustics-bar-abi = { path = "abi" }
 
 [dev-dependencies]
-# The ABI layout test parses slangc's reflection JSON through
-# `caustics_core::slang::struct_offsets`.
-caustics-core = { path = "../core" }
-# The oracle's font: the arena and the curve buffers the bar's own `caustics-glyphs` sends over the pipe, built
-# in-process so a headless test shapes against a real font rather than an empty
-# arena. A path dependency already in the lockfile, and the bar's *binary*
+# The oracle's font: the arena and the curve buffers the bar's own
+# `caustics-glyphs` sends over the pipe, built in-process so a headless test
+# shapes against a real font rather than an empty arena. The bar's *binary*
 # links none of it.
 caustics-glyphs = { path = "../glyphs" }
-# For one test: `bar/src/abi/tests.rs` checks `caustics_text::Glyph`'s field offsets
-# against `caustics/text.slang`'s reflection, and that check has to live where
+punchcutter-fonts.workspace = true
+# For one test: `bar/src/abi/tests.rs` checks `punchcutter_text::Glyph`'s field
+# offsets against the reflection of the bar's own compile, which is where
 # slangc and the baked reflection are. The bar's *binary* links none of this.
-caustics-text = { path = "../text" }
+punchcutter-text.workspace = true

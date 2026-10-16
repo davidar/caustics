@@ -18,23 +18,16 @@ CHANGELOG.md.
    sshd, niri, autologin, UPower and lavapipe, provisioned once into a disk
    that is rebuilt from the recipe and never hand-made, with the QMP, VNC and
    screendump pieces written here.
-2. **Two binaries named `gen-slang`.** `caustics-shape` and `caustics-bar-abi` each
-   carry a private copy of the same job, rendering their declaration into
-   its checked-in Slang module, so a workspace release build warns of an
-   output filename collision (cargo issue 6313 says it may become an error).
-   The warning is right about the shape, and renaming one would only hide
-   it: one generator should know every declared module and write them all,
-   the way the ABI hash already treats them as one contract.
-3. **Small rough edges.** A network in range with no saved profile still
+2. **Small rough edges.** A network in range with no saved profile still
    opens the settings program on click; it should prompt or do nothing. The
-   oracle's module comment, the shape and text examples and the drop-in quote
-   one vendor's Vulkan driver file by name. `DEFAULT_FAVOURITES` seeds a
+   oracle's module comment and the drop-in quote one vendor's Vulkan driver
+   file by name. `DEFAULT_FAVOURITES` seeds a
    COSMIC application set; it is documented, but a first-run default for
    other desktops would be kinder.
 
 ## Packaging
 
-4. **The bar as a distribution image's panel by default.** A build stage
+3. **The bar as a distribution image's panel by default.** A build stage
    with slangc pinned, the set under `/usr/lib/caustics-bar/<hash>/`, `caustics/`
    at `/usr/share/caustics/`, the unit gated on the session and preset-enabled in
    place of the previous panel and notification daemon. After the top-edge
@@ -42,7 +35,7 @@ CHANGELOG.md.
 
 ## Left by the replacement of a desktop panel
 
-5. **Known and small.** The GPU chart's ease stalls ten seconds after a toast
+4. **Known and small.** The GPU chart's ease stalls ten seconds after a toast
    closes (a settle threshold, caustic-only). `caustics-tray`'s journal volume on
    icon flips (debug level, or a health-line count). A suspend cycle has
    never been exercised by a test. `ACTION_TOAST_SHOWN` names rows a short
@@ -53,7 +46,7 @@ CHANGELOG.md.
    hash text bytes only). An evicted image whose pixels the store let go
    falls back to the letter. The bar's resident memory after a cold swap (the
    driver's compile heap stays in-process).
-6. **Not built, by design or for later.** Toasts' hover-hold, close button,
+5. **Not built, by design or for later.** Toasts' hover-hold, close button,
    per-toast progress, sound and top-centre placement; a max-charge toggle,
    keyboard backlight and a discrete-GPU warning; an application library
    button (recommended against); MPRIS media controls; notifications grouped
@@ -61,47 +54,34 @@ CHANGELOG.md.
 
 ## Text
 
-7. **Colour fonts.** COLRv1 and CPAL verbatim in the arena, the paint graph
-   walked in `text.slang`; the gate gains flags in colour (emoji flags are
-   the test: a monochrome fallback draws them as pennants with letter codes).
-   Ahead of Unicode.
-8. **Unicode on the GPU.** Script itemisation, bidi, the normaliser, mark
-   ordering, a face per run.
-9. **Complex scripts**, after Unicode: Arabic and Hangul first; then Indic,
-    Khmer, Myanmar and the Universal Shaping Engine.
-10. **Variable fonts**, optional: shaping at an instance other than the
-    default.
-11. **The per-lookup digest.** Re-measure a hardware driver against lavapipe
-    first (11× per string when last measured on software), then build: an
-    eighth entry point, a binding and an action.
-12. **A shader-clock fallback.** The caustic requires `VK_KHR_shader_clock`
-    for its wall-clock deadline; the true fallback is a slangc define, not
-    built.
+The text engine's own gaps (colour fonts, Unicode itemisation and bidi,
+complex-script shapers, variable instances, a faster shaper, a fallback for a
+device without the shader clock) are punchcutter's roadmap.
 
 ## Wire and harness
 
-13. **Raise `MAX_ROWS`** at the next wire version, with the rows arena that
+6. **Raise `MAX_ROWS`** at the next wire version, with the rows arena that
     must grow with it (docs/abi.md, *For the next wire version*).
-14. **A `rows: slot …` witness** from the caustic, designed and not built;
+7. **A `rows: slot …` witness** from the caustic, designed and not built;
     the wire reader's line stands in for it (docs/abi.md, *The arenas*).
-15. **A layout-line race in the gate's chart-set step**: a chart the sidecar
+8. **A layout-line race in the gate's chart-set step**: a chart the sidecar
     was not asked for is laid out, seen twice, not understood.
-16. **The six VM-only steps** of the gate stay VM-only (one hangs a hardware
+9. **The five VM-only steps** of the gate stay VM-only (one hangs a hardware
     driver's arena) until a live-GPU run is deliberately tried.
-17. **The hot-reload stall.** A swap whose pipelines are new to the driver
+10. **The hot-reload stall.** A swap whose pipelines are new to the driver
     blocks the bar's event loop for several seconds (docs/testing.md). Create
     the pipelines off the loop and swap when they are ready.
 
 ## Icons
 
-18. XPM and ICO `Icon=` paths; KDE colour-scheme SVGs recoloured with the
+11. XPM and ICO `Icon=` paths; KDE colour-scheme SVGs recoloured with the
     text ink (two routes, undecided); a Steam game's icon from its manifest;
     a pixmap whose file went away cannot be retracted; a theme installed
     while a sidecar runs is not searched until it restarts.
 
 ## Watching the bar
 
-19. **A witness watcher.** An always-on local reader of the journal's
+12. **A witness watcher.** An always-on local reader of the journal's
     witnesses that files a report when a stated rule is broken, for the next
     piece of work to pick up. One clause exists: `notify/tools`'
     `caustics-notify-watch`, which reports a notification click that reached no

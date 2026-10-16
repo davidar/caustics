@@ -13,8 +13,8 @@
 //! They are two declarations because they are two promises; both feed one [`ABI_HASH`], and an install set is built whole.
 //!
 //! Its own crate so a sidecar can import the layout
-//! without the bar's dependencies: `caustics-core`'s `plain` module and these two
-//! declarations, nothing else.
+//! without the bar's dependencies: `punchcutter-core`'s `plain` and `decl`
+//! modules and these declarations, nothing else.
 //!
 //! [`ENTRIES`], the caustic's entry-point names, lives here too: the compiler
 //! sidecar compiles every entry in that list and names each `Module` frame
@@ -50,15 +50,20 @@
 pub mod buffer;
 pub mod wire;
 
-/// **Declared once**, and declared once for two crates: the macros and the
-/// renderer live in `caustics-core`, because
-/// `caustics-shape` declares the OpenType arena's header through the same tables
-/// and has no business depending on the bar's ABI crate.
+/// **Declared once**, and declared once for two projects: the macros and the
+/// renderer are `punchcutter-core`'s, because the text engine declares the
+/// OpenType arena's header through the same tables.
 ///
 /// Re-exported here — module and macros both — so every call site in this
 /// crate still reads `crate::decl::…` and `crate::abi_struct!`.
-pub use caustics_core::decl;
-pub use caustics_core::{abi_consts, abi_struct, slang_ty};
+pub use punchcutter_core::decl;
+pub use punchcutter_core::{abi_consts, abi_struct, slang_ty};
+
+/// The swapchain formats a caustic is baked for, and the slangc flags that
+/// select each: one table for the bar's build script, the bar and the compiler
+/// sidecar.
+pub mod format;
+pub use format::DstFormat;
 
 /// How the generated files say where they came from. The test that compares
 /// the checked-in file with the rendering names the same command.
@@ -105,8 +110,8 @@ pub fn slang_source() -> (String, String) {
 #[cfg(test)]
 mod tests;
 
-// `pub const ENTRIES`, in its own file so `bar/build.rs` — which cannot depend
-// on the crate it builds — can `include!` the very same list.
+// `pub const ENTRIES`, in its own file so `build.rs` can hash it as source, one
+// of the five files the ABI hash covers.
 include!("entries.rs");
 
 /// The buffer's names, unqualified: the bar's call sites keep reading

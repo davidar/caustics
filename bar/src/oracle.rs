@@ -104,16 +104,17 @@ impl Oracle {
         let source = dir.join("bar.slang");
         let (define, extra) = gpu.dst_format_args();
         // The same slangc the bar's build script and `caustics-reload` use, with
-        // one define more. Every other entry point comes out identical to the
+        // one define more and the same include path: the caustic's directory,
+        // then the text engine's modules. Every other entry point comes out identical to the
         // baked one — `bar_check` is a file appended under an `#ifdef` — so
         // only this one is loaded, beside the seven already there.
-        let compiled = caustics_core::slang::compile_capturing(
-            &caustics_core::slang::slangc_program(),
+        let compiled = punchcutter_core::slang::compile_capturing(
+            &punchcutter_core::slang::slangc_program(),
             &source,
             "bar_check",
             &[define, "CAUSTICS_BAR_CHECK"],
             extra,
-            &[dir.as_path()],
+            &[dir.as_path(), punchcutter_core::slang_dir()],
         )
         .with_context(|| format!("bar_check does not compile from {}", source.display()))?;
         let mut strings = Strings::baked();
@@ -136,7 +137,8 @@ impl Oracle {
         use crate::abi::wire::{
             BUF_BAND_CURVES, BUF_BANDS, BUF_GLYPHS, BUF_OT, BUF_POINTS, BUF_SHAPE_FONT,
         };
-        let loaded = caustics_glyphs::Loaded::load().map_err(|err| anyhow::anyhow!(err))?;
+        let loaded = punchcutter_fonts::Loaded::load_requiring(caustics_glyphs::COMPOSED)
+            .map_err(|err| anyhow::anyhow!(err))?;
         self.gpu.set_cap_height(loaded.cap_height);
         for buffer in [
             BUF_POINTS,
@@ -146,7 +148,7 @@ impl Oracle {
             BUF_OT,
             BUF_SHAPE_FONT,
         ] {
-            let Some(bytes) = loaded.buffer(buffer) else {
+            let Some(bytes) = caustics_glyphs::buffer(&loaded, buffer) else {
                 anyhow::bail!("caustics-glyphs has no buffer {buffer}");
             };
             self.gpu.write_bytes(buffer, 0, bytes.len() as u32, &bytes);
@@ -164,11 +166,12 @@ impl Oracle {
     /// sidecar holds.
     pub fn load_font_covered(
         &mut self,
-        chain: caustics_glyphs::fallback::Chain,
+        chain: punchcutter_fonts::fallback::Chain,
         covers: &[&str],
     ) -> Result<caustics_glyphs::Sidecar> {
         use crate::abi::wire::{self, Frame};
-        let loaded = caustics_glyphs::Loaded::load().map_err(|err| anyhow::anyhow!(err))?;
+        let loaded = punchcutter_fonts::Loaded::load_requiring(caustics_glyphs::COMPOSED)
+            .map_err(|err| anyhow::anyhow!(err))?;
         self.gpu.set_cap_height(loaded.cap_height);
         let mut sidecar = caustics_glyphs::Sidecar::with_chain(loaded, chain);
         let mut out: Vec<u8> = Vec::new();

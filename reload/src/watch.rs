@@ -1,14 +1,11 @@
-//! The mtime poller under the live-reload loop (caustics-reload).
+//! The mtime poller under the live-reload loop.
 //!
 //! A caustic's dev loop is: save the file, see the pixels change. What makes
-//! that work is a timer that a few times a second asks whether any watched
+//! that work is a clock that a few times a second asks whether any watched
 //! file's mtime moved, and a compile that keeps the old-good module when the
-//! new one does not build. This is the first half — deliberately without the
-//! timer, because the timer is where the two crates differ: the compositor
-//! gets calloop through smithay's re-export and the bar through
-//! smithay-client-toolkit's, at two different versions
-//! (`Cargo.lock`: 0.13.0 and 0.14.4). Three lines of `Timer::from_duration`
-//! each is cheaper than making this crate pick a calloop.
+//! new one does not build. This is the first half, without the clock: the
+//! loop in [`crate::run`] waits on its inbox with [`POLL_INTERVAL`] as the
+//! timeout and polls this on every wake.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};

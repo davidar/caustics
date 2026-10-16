@@ -1,34 +1,19 @@
-This project is licensed under the MIT License (see LICENSE). It contains
-material from, or written from, the following third-party works.
+This project is licensed under the MIT License (see LICENSE).
 
-Slug
-----
+The text engine is punchcutter (MIT), a dependency; README.md links it. The
+caustic the bar compiles imports its Slang modules, so the SPIR-V built into
+the bar contains them, and with them the material punchcutter's own NOTICE
+credits:
 
-The glyph and icon coverage in caustics/text.slang (`textRootCode`,
-`textSolveHoriz`, `textSolveVert`, `textCombine` and the two band loops in
-`textCoverageAniso`) is a port of the Slug reference pixel shader by Eric
-Lengyel, published at https://github.com/EricLengyel/Slug. The reference
-shaders are offered under the MIT License (the source header states
-"MIT OR Apache-2.0"), with the request that distributed use give credit:
+- a port of the Slug reference pixel shader by Eric Lengyel
+  (https://github.com/EricLengyel/Slug), offered under MIT OR Apache-2.0
+  with the request that distributed use give credit:
 
-    Slug shader code Copyright 2017 by Eric Lengyel.
-    SPDX-License-Identifier: MIT OR Apache-2.0
+      Slug shader code Copyright 2017 by Eric Lengyel.
+      SPDX-License-Identifier: MIT OR Apache-2.0
 
-The algorithm is described in Eric Lengyel, "GPU-Centered Font Rendering
-Directly from Glyph Outlines", Journal of Computer Graphics Techniques 6(2),
-2017, https://jcgt.org/published/0006/02/02/. Its patent, US 10,373,352, was
-dedicated to the public domain by its author effective 17 March 2026, as
-announced at https://terathon.com/blog/decade-slug.html.
-
-The band preprocessing in text/src/bands.rs is this project's own, written
-from the paper.
-
-Unicode
--------
-
-caustics/shape.slang writes out the ranges of the Unicode
-Default_Ignorable_Code_Point property. The Unicode Character Database is
-covered by the Unicode License v3:
+- ranges of the Unicode Default_Ignorable_Code_Point property, from the
+  Unicode Character Database, which is covered by the Unicode License v3:
 
     UNICODE LICENSE V3
 

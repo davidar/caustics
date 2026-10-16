@@ -618,7 +618,7 @@ ConstantBuffer<ShapeParams> shapeParams;
 
 /// The **arena**: the face directory `caustics-glyphs` wrote, and behind it every
 /// face's `cmap`, `hmtx`, `GDEF`, `GSUB` and `GPOS` exactly as they sit in the
-/// font files (`caustics/ot.slang` is the reader).
+/// font files (the text engine's `ot.slang` is the reader).
 ///
 /// One binding of raw table bytes rather than one per pre-digested table (a
 /// sorted `cmap`, an advance array, the PairPos matrices, the ligature list,
@@ -8189,7 +8189,7 @@ float4 draw_block_at(uint b, float2 org, float2 p, float4 col, float dim)
     {
         // An icon is a glyph with a name, drawn to fill a `px` square. Its
         // contours run up from the box's *bottom* edge (an SVG's y is flipped
-        // into em space by `caustics-text`'s loader), so the pen is down there.
+        // into em space by the text engine's icon loader), so the pen is down there.
         float2 origin = float2(org.x, org.y + px);
         float4 rect = textGlyphRect(blk.a, origin, px);
         if (p.x < rect.x || p.x >= rect.z || p.y < rect.y || p.y >= rect.w)

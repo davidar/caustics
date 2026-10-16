@@ -224,12 +224,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "caustics-bar-abi",
- "caustics-core",
  "caustics-glyphs",
- "caustics-shape",
- "caustics-text",
  "libc",
  "pollster",
+ "punchcutter-core",
+ "punchcutter-fonts",
+ "punchcutter-shape",
+ "punchcutter-text",
  "raw-window-handle",
  "serde_json",
  "smithay-client-toolkit",
@@ -243,7 +244,7 @@ dependencies = [
 name = "caustics-bar-abi"
 version = "0.1.0"
 dependencies = [
- "caustics-core",
+ "punchcutter-core",
 ]
 
 [[package]]
@@ -257,24 +258,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "caustics-core"
-version = "0.1.0"
-dependencies = [
- "ash",
- "pollster",
- "serde_json",
- "tracing",
- "wgpu",
-]
-
-[[package]]
 name = "caustics-glyphs"
 version = "0.1.0"
 dependencies = [
  "caustics-bar-abi",
- "caustics-shape",
  "caustics-sidecar",
- "caustics-text",
+ "punchcutter-fonts",
+ "punchcutter-shape",
+ "punchcutter-text",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -324,20 +317,8 @@ name = "caustics-reload"
 version = "0.1.0"
 dependencies = [
  "caustics-bar-abi",
- "caustics-core",
  "caustics-sidecar",
-]
-
-[[package]]
-name = "caustics-shape"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "caustics-core",
- "harfrust",
- "pollster",
- "ttf-parser",
- "wgpu",
+ "punchcutter-core",
 ]
 
 [[package]]
@@ -357,21 +338,6 @@ dependencies = [
  "caustics-sidecar",
  "libc",
  "nvml-wrapper",
-]
-
-[[package]]
-name = "caustics-text"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "caustics-core",
- "png",
- "pollster",
- "swash",
- "tracing",
- "ttf-parser",
- "usvg",
- "wgpu",
 ]
 
 [[package]]
@@ -1493,6 +1459,50 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 
 [[package]]
+name = "punchcutter-core"
+version = "0.1.0"
+source = "git+https://github.com/davidar/punchcutter?rev=bec42d3dbbae807b24abb8511879f7d16c4769cb#bec42d3dbbae807b24abb8511879f7d16c4769cb"
+dependencies = [
+ "ash",
+ "pollster",
+ "serde_json",
+ "tracing",
+ "wgpu",
+]
+
+[[package]]
+name = "punchcutter-fonts"
+version = "0.1.0"
+source = "git+https://github.com/davidar/punchcutter?rev=bec42d3dbbae807b24abb8511879f7d16c4769cb#bec42d3dbbae807b24abb8511879f7d16c4769cb"
+dependencies = [
+ "punchcutter-core",
+ "punchcutter-shape",
+ "punchcutter-text",
+ "tracing",
+]
+
+[[package]]
+name = "punchcutter-shape"
+version = "0.1.0"
+source = "git+https://github.com/davidar/punchcutter?rev=bec42d3dbbae807b24abb8511879f7d16c4769cb#bec42d3dbbae807b24abb8511879f7d16c4769cb"
+dependencies = [
+ "punchcutter-core",
+ "ttf-parser",
+]
+
+[[package]]
+name = "punchcutter-text"
+version = "0.1.0"
+source = "git+https://github.com/davidar/punchcutter?rev=bec42d3dbbae807b24abb8511879f7d16c4769cb#bec42d3dbbae807b24abb8511879f7d16c4769cb"
+dependencies = [
+ "anyhow",
+ "punchcutter-core",
+ "tracing",
+ "ttf-parser",
+ "usvg",
+]
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1896,17 +1906,6 @@ checksum = "695b5790b3131dafa99b3bbfd25a216edb3d216dad9ca208d4657bfb8f2abc3d"
 dependencies = [
  "kurbo",
  "siphasher",
-]
-
-[[package]]
-name = "swash"
-version = "0.2.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c2499c2d826531388872b2268718aed907a39bd785ab0dcfe57fab26283f92e"
-dependencies = [
- "skrifa",
- "yazi",
- "zeno",
 ]
 
 [[package]]
@@ -2925,12 +2924,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec7a2a501ed189703dba8b08142f057e887dfc4b2cc4db2d343ac6376ba3e0b9"
 
 [[package]]
-name = "yazi"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e01738255b5a16e78bbb83e7fbba0a1e7dd506905cfc53f4622d89015a03fbb5"
-
-[[package]]
 name = "zbus"
 version = "5.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2994,12 +2987,6 @@ checksum = "d1afec51604565183aeb5c54c20aeab286120d4e4460f7f76e3e8bb8c0d99473"
 dependencies = [
  "serde",
 ]
-
-[[package]]
-name = "zeno"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6df3dc4292935e51816d896edcd52aa30bc297907c26167fec31e2b0c6a32524"
 
 [[package]]
 name = "zerocopy"

@@ -902,13 +902,13 @@ impl Default for State {
 /// The **only** buffer the embassy reads back (docs/abi.md, *Who writes what*).
 pub const STATE_BUFFER_SIZE: u64 = size_of::<State>() as u64;
 pub const COMMAND_RING_SIZE: u64 = size_of::<Command>() as u64 * MAX_COMMANDS as u64;
-/// The run buffer: [`MAX_GLYPHS`] `caustics_shape::ShapedGlyph`s, 32 bytes each
+/// The run buffer: [`MAX_GLYPHS`] `punchcutter_shape::ShapedGlyph`s, 32 bytes each
 /// (a glyph carries its cluster).
 ///
 /// The 32 is that struct's size. It is not named here because a sidecar
 /// importing this crate has no business pulling a font parser in with it; the
 /// pair is pinned by `the_glyph_record_is_thirty_two_bytes` in
-/// `bar/src/abi/tests.rs`, which does have `caustics-shape`.
+/// `bar/src/abi/tests.rs`, which does have `punchcutter-shape`.
 ///
 /// Private in the same sense as `private` itself (docs/abi.md, *The private buffer*): the
 /// embassy allocates it and never writes or reads one of them. It is a
@@ -1123,7 +1123,8 @@ impl SlotFact {
 }
 
 /// The byte views every upload and every readback goes through, from
-/// `caustics_core::plain` — the trait and its three functions are shared with `caustics-shape`; the layouts in this file are the bar's alone.
+/// `punchcutter_core::plain` — the trait and its three functions are the text
+/// engine's too; the layouts in this file are the bar's alone.
 ///
 /// # Safety
 ///
@@ -1132,7 +1133,7 @@ impl SlotFact {
 /// valid value (`u32`, `f32`, and arrays thereof). Every struct in this module
 /// satisfies that by construction — the layout tests (bar/src/abi/tests.rs) pin every struct's size and every field's offset.
 #[allow(unused_imports)]
-pub use caustics_core::plain::{
+pub use punchcutter_core::plain::{
     Plain, bytes_of as as_bytes, bytes_of_slice as slice_as_bytes, write_from_bytes,
 };
 

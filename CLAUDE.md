@@ -2,7 +2,9 @@
 
 A status bar for Wayland compositors that renders everything in one Slang
 compute shader and hosts its data sources as sidecar processes. README.md has
-the overview, the build and the install.
+the overview, the build and the install. The text engine (shaping, glyph
+coverage, fonts) is punchcutter, a dependency; its Slang modules are imported
+through `punchcutter_core::slang_dir()`, never copied into `caustics/`.
 
 **References** (living, in `docs/`): architecture.md the parts and the
 reasons for their shape; abi.md the contracts between the bar, its caustic

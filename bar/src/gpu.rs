@@ -7,7 +7,7 @@
 //!   of its own, so every pipeline build sits inside a validation error scope
 //!   and a reload is all-or-nothing ([`Gpu::reload_all`]).
 //! - **the mirror.** The caustic owns [`State`]; the CPU reads it one frame
-//!   late out of a `MAP_READ` readback buffer, through `caustics_core::gpu::refresh_mirror`. Nothing on the CPU ever writes it, and it is the *only* buffer read back at all (docs/abi.md, *Who writes what*).
+//!   late out of a `MAP_READ` readback buffer, through `surface::refresh_mirror`. Nothing on the CPU ever writes it, and it is the *only* buffer read back at all (docs/abi.md, *Who writes what*).
 //! - **format variants.** Storage-image formats are baked into SPIR-V, so the
 //!   surface format decides which of build.rs's two sets of seven modules loads.
 //!
@@ -22,9 +22,9 @@
 //! # Three bind groups, and where they come from
 //!
 //! Group 0 is the bar's own.
-//! Group 1 is `caustics/text.slang`'s four curve buffers, whose binding numbers
+//! Group 1 is the text engine's `text.slang`'s four curve buffers, whose binding numbers
 //! that module declares for itself — which is what let it be written and tested
-//! before anything imported it. Group 2 is `caustics/shape.slang`'s font tables plus
+//! before anything imported it. Group 2 is the engine's `shape.slang`'s font tables plus
 //! the strings buffer; that module declares no bindings at all, so the numbers
 //! there are `bar.slang`'s choice and `shape_tables()` in it is the gather.
 //!
@@ -50,19 +50,17 @@ use std::num::NonZeroU64;
 use std::ptr::NonNull;
 
 use anyhow::{Context, Result, anyhow, bail};
-use caustics_core::DstFormat;
-use caustics_core::gpu::{
-    ID_FORMAT, acquire, create_id_texture, passthrough_pipeline, refresh_mirror, storage_buffer,
-};
-use caustics_core::slang::{self, Binding, BindingKind};
+use punchcutter_core::gpu::{passthrough_pipeline, storage_buffer};
+use punchcutter_core::slang::{self, Binding, BindingKind};
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
 
 use crate::abi::{self, Command, FrameInputs, Params, State};
 
-// The visibility buffer's format is `caustics_core::gpu::ID_FORMAT`: R32Uint is one of the few formats WebGPU guarantees for
-// read-write storage.
+use self::surface::{ID_FORMAT, acquire, create_id_texture, refresh_mirror};
+
+mod surface;
 
 /// The debug label on this bar's visibility buffer.
 const IDS_LABEL: &str = "caustics-bar-ids";
@@ -98,7 +96,7 @@ pub const SHAPE_BLOCKS: u32 = 512;
 /// an icon is 2 KB, so an eighth is hundreds of icons.
 const CURVE_HEADROOM: f32 = 0.125;
 
-/// One glyph record in `BUF_GLYPHS`, in bytes (`caustics_text::Glyph`, which the bar does not link: `caustics-glyphs` writes them and this is the divisor
+/// One glyph record in `BUF_GLYPHS`, in bytes (`punchcutter_text::Glyph`, which the bar does not link: `caustics-glyphs` writes them and this is the divisor
 /// that turns its `total` into a count). The ABI's own table says 64 B
 /// (docs/abi.md, *Bytes*) and `bar/src/abi/tests.rs` checks the layout against
 /// `text.slang`'s reflection.
@@ -144,7 +142,7 @@ const SPV_BGRA8UNORM: BakedSpv<'static> = BakedSpv {
     draw: include_bytes!(concat!(env!("OUT_DIR"), "/bar_draw.bgra8unorm.spv")),
 };
 
-/// The four curve buffers `caustics/text.slang` reads, and how much they hold.
+/// The four curve buffers the engine's `text.slang` reads, and how much they hold.
 ///
 /// Kept together because they are replaced together: an icon appended to the
 /// font's glyphs grows all four, and a bind group naming any of them has to be
@@ -160,7 +158,7 @@ struct Curves {
 ///
 /// One arena rather than a buffer per flattened table, each of which would be a shape the CPU had to understand in order to build. `ot` is `cmap`, `hmtx`, `GDEF`, `GSUB` and `GPOS` as they
 /// sit in the font files, behind a directory `caustics-glyphs` wrote and
-/// `caustics/ot.slang` reads. Adwaita Sans is 221 KiB this way.
+/// the engine's `ot.slang` reads. Adwaita Sans is 221 KiB this way.
 
 struct ShapeBuffers {
     params: wgpu::Buffer,
@@ -265,7 +263,7 @@ pub struct Gpu {
     queue: wgpu::Queue,
     /// Whether the device came up with `VK_KHR_shader_clock`, which decides
     /// whether the shaper gets a wall-clock deadline.
-    shader_clock: caustics_core::gpu::ShaderClock,
+    shader_clock: punchcutter_core::gpu::ShaderClock,
 
     /// The negotiated swapchain format; both surfaces use it, and it decides
     /// which SPIR-V variant the pipelines were built from.
@@ -280,10 +278,10 @@ pub struct Gpu {
     present_mode: wgpu::PresentMode,
 
     bind_group_layout: wgpu::BindGroupLayout,
-    /// Group 1: `caustics/text.slang`'s four curve buffers, at the bindings that
+    /// Group 1: the engine's `text.slang`'s four curve buffers, at the bindings that
     /// module declares for itself.
     text_layout: wgpu::BindGroupLayout,
-    /// Group 2: `caustics/shape.slang`'s font tables and the strings buffer, at
+    /// Group 2: the engine's `shape.slang`'s font tables and the strings buffer, at
     /// the bindings `bar.slang` chose for them.
     shape_layout: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
@@ -446,7 +444,7 @@ impl Gpu {
     /// surface**: what the oracle runs the caustic on.
     ///
     /// Nothing to present to and nothing to be compatible with, so the adapter
-    /// is chosen the way `shape/examples/check.rs` chooses one — the first
+    /// is chosen the way the text engine's harnesses choose one — the first
     /// integrated or CPU adapter whose name does not say NVIDIA — and the
     /// format is fixed rather than negotiated. Everything after that is the
     /// production path, which is the whole point: the oracle tests what ships.
@@ -577,12 +575,12 @@ impl Gpu {
         );
 
         // **Owns a file descriptor** (the first membership test, docs/architecture.md, *The bar process*): the device is the bar's,
-        // and it is opened through `caustics-core`'s one shared path
+        // and it is opened through the text engine's device helper
         // rather than `request_device` — because wgpu will not ask for
         // `VK_KHR_shader_clock` and the shaper's SPIR-V carries the
         // capability. The shaper holds a wall-clock deadline inside the shader with it, which is what stands between a bar fed
         // a bad arena and a reset graphics ring.
-        let (device, queue, clock) = caustics_core::gpu::open_device(
+        let (device, queue, clock) = punchcutter_core::gpu::open_device(
             &adapter,
             &wgpu::DeviceDescriptor {
                 label: Some("caustics-bar-device"),
@@ -616,12 +614,12 @@ impl Gpu {
         }));
 
         match clock {
-            caustics_core::gpu::ShaderClock::Device => {
+            punchcutter_core::gpu::ShaderClock::Device => {
                 tracing::info!("gpu: VK_KHR_shader_clock is on; the shaper holds a deadline")
             }
             // Never silent: a bar without it runs on the operation budget alone,
             // and the operation budget is only as good as its accounting.
-            caustics_core::gpu::ShaderClock::Absent => tracing::warn!(
+            punchcutter_core::gpu::ShaderClock::Absent => tracing::warn!(
                 "gpu: this adapter has no VK_KHR_shader_clock — the shaper's run deadline \
                  is off and the caps and the operation budget are the only bound"
             ),
@@ -769,7 +767,7 @@ impl Gpu {
         });
         // The buffer the shape pass writes and nothing on the CPU reads. Its
         // stride is the ABI's rather than the reflection's because it is a
-        // module's struct (`caustics_shape::ShapedGlyph`) and not the bar's.
+        // module's struct (`punchcutter_shape::ShapedGlyph`) and not the bar's.
         // `COPY_SRC` for the oracle's readback alone (`Gpu::read_runs`): nothing in
         // production copies out of this buffer.
         let runs = device.create_buffer(&wgpu::BufferDescriptor {
@@ -822,7 +820,7 @@ impl Gpu {
         let shape = ShapeBuffers {
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("caustics-bar-shape-params"),
-                size: size_of::<caustics_shape::ShapeParams>() as u64,
+                size: size_of::<punchcutter_shape::ShapeParams>() as u64,
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
@@ -832,7 +830,7 @@ impl Gpu {
             ot: growable_buffer(
                 &device,
                 "caustics-bar-ot",
-                caustics_shape::OT_TABLES_START as u64,
+                punchcutter_shape::OT_TABLES_START as u64,
             ),
         };
         let shape_group = create_shape_group(&device, &shape_layout, &reflected, &shape, &strings);
@@ -984,7 +982,7 @@ impl Gpu {
     /// The slangc defines and extra flags matching the live swapchain format,
     /// for a reload compile. Mirrors build.rs, which compiles one set per `DstFormat::ALL` with `format.args()`.
     pub fn dst_format_args(&self) -> (&'static str, &'static [&'static str]) {
-        DstFormat::from_wgpu(self.format)
+        surface::dst_format(self.format)
             .unwrap_or_else(|| {
                 unreachable!(
                     "surface format {:?} is not one this bar can select",
@@ -1237,7 +1235,7 @@ impl Gpu {
     /// `BUF_SHAPE_FONT`: the `font` half of `ShapeParams`, verbatim, and behind
     /// it the four scalars that are the *dispatch's* rather than the font's.
     fn write_shape_font(&mut self, bytes: &[u8]) {
-        let expected = size_of::<caustics_shape::abi::ShapeFont>();
+        let expected = size_of::<punchcutter_shape::abi::ShapeFont>();
         if bytes.len() != expected {
             tracing::warn!(
                 "gpu: BUF_SHAPE_FONT is {} bytes, not {expected}",
@@ -1252,13 +1250,15 @@ impl Gpu {
         let mut tail = [0u8; 16];
         tail[0..4].copy_from_slice(&SHAPE_BLOCKS.to_le_bytes());
         tail[4..8].copy_from_slice(&(abi::MAX_GLYPHS as u32).to_le_bytes());
-        tail[8..12].copy_from_slice(&caustics_shape::SHAPE_ABI_VERSION.to_le_bytes());
+        tail[8..12].copy_from_slice(&punchcutter_shape::SHAPE_ABI_VERSION.to_le_bytes());
         // The shaper's wall-clock deadline. Zero where
         // the adapter has no `VK_KHR_shader_clock`, which `Gpu::new` has
         // already warned about — never a deadline that silently does nothing.
         let deadline = match self.shader_clock {
-            caustics_core::gpu::ShaderClock::Device => caustics_shape::abi::SHAPE_DEADLINE_TICKS,
-            caustics_core::gpu::ShaderClock::Absent => 0,
+            punchcutter_core::gpu::ShaderClock::Device => {
+                punchcutter_shape::abi::SHAPE_DEADLINE_TICKS
+            }
+            punchcutter_core::gpu::ShaderClock::Absent => 0,
         };
         tail[12..16].copy_from_slice(&deadline.to_le_bytes());
         self.queue
@@ -2211,7 +2211,7 @@ impl Gpu {
     /// miscompiled the shaper drew the first glyph of every block as `.notdef`
     /// (docs/architecture.md, *Rules*).
     #[cfg(test)]
-    pub fn read_runs(&mut self) -> Vec<caustics_shape::abi::ShapedGlyph> {
+    pub fn read_runs(&mut self) -> Vec<punchcutter_shape::abi::ShapedGlyph> {
         let size = abi::GLYPH_BUFFER_SIZE;
         let back = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("caustics-bar-runs-readback"),
@@ -2231,7 +2231,7 @@ impl Gpu {
         refresh_mirror_slice(&self.device, &back, &mut words);
         words
             .chunks_exact(8)
-            .map(|w| caustics_shape::abi::ShapedGlyph {
+            .map(|w| punchcutter_shape::abi::ShapedGlyph {
                 gid: w[0],
                 x: w[1] as i32,
                 y: w[2] as i32,
@@ -2296,7 +2296,7 @@ impl Gpu {
         Ok(())
     }
     /// Pull the mirror out of the readback buffer, the device having already
-    /// been waited out — `caustics_core::gpu::refresh_mirror`, where the second
+    /// been waited out — `surface::refresh_mirror`, where the second
     /// poll and the keep-the-old-mirror failure policy are explained.
     fn refresh_mirror(&mut self) {
         refresh_mirror(&self.device, &self.mirror_readback, &mut *self.mirror);
@@ -2534,7 +2534,7 @@ fn create_preview(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
 
 /// slangc's reflection of the baked program, verbatim — `bar/build.rs` writes
 /// it beside the SPIR-V out of the first compile, and every entry point and
-/// both [`DstFormat`] variants reflect the same parameters.
+/// both [`DstFormat`](caustics_bar_abi::DstFormat) variants reflect the same parameters.
 ///
 /// This is the *only* declaration of the bar's bindings on the CPU side. The
 /// `[[vk::binding(n, g)]]` literals in the caustics are the source of truth;
@@ -2544,10 +2544,10 @@ const BAKED_REFLECTION: &str = include_str!(concat!(env!("OUT_DIR"), "/bar.refle
 
 /// The bar's own bind group: the state buffer, the rings, the target's images, the facts, the arenas and the samples frame.
 const SET_BAR: u32 = 0;
-/// `caustics/text.slang`'s four curve buffers, at the bindings that module
+/// The engine's `text.slang`'s four curve buffers, at the bindings that module
 /// declares for itself.
 const SET_TEXT: u32 = 1;
-/// `caustics/shape.slang`'s scalars and tables plus the strings buffer.
+/// The engine's `shape.slang`'s scalars and tables plus the strings buffer.
 const SET_SHAPE: u32 = 2;
 
 /// Every descriptor set the bar builds a layout for, in the order the pipeline
@@ -2701,7 +2701,7 @@ fn layout_entry(binding: &Binding, format: wgpu::TextureFormat) -> wgpu::BindGro
 /// texel format.
 ///
 /// SPIR-V bakes it into the module, and the `dst` image is declared
-/// format-*unknown* on the Bgra8 variant ([`DstFormat::Bgra8`]) precisely
+/// format-*unknown* on the Bgra8 variant ([`DstFormat::Bgra8`](caustics_bar_abi::DstFormat::Bgra8)) precisely
 /// because SPIR-V has no BGRA storage format to name — so slangc reflects no
 /// format for it at all there. Two images, two arms, and a third one is a
 /// panic rather than a guess: a storage image bound at the wrong format is
@@ -2843,7 +2843,7 @@ fn curve_index(buffer: u32) -> Option<usize> {
 /// A storage buffer that can be **grown**: `COPY_SRC` beside the usual pair, so
 /// what is in it survives into its replacement.
 ///
-/// `caustics_core::gpu::storage_buffer` makes a buffer nothing copies out of; this is the bar's own, for the six buffers `caustics-glyphs` fills a run at a time.
+/// `punchcutter_core::gpu::storage_buffer` makes a buffer nothing copies out of; this is the bar's own, for the six buffers `caustics-glyphs` fills a run at a time.
 fn growable_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),

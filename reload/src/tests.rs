@@ -53,7 +53,10 @@ fn the_shipped_module_is_compiled_in_place() {
     let dir = caustics_dir();
     let source = source(&dir);
     assert_eq!(source.entry_file, dir.join("bar.slang"));
-    assert_eq!(source.includes, vec![dir.clone()]);
+    assert_eq!(
+        source.includes,
+        vec![dir.clone(), punchcutter_core::slang_dir().to_path_buf()]
+    );
     let watched = watch(&dir);
     assert!(
         watched.paths().contains(&dir.join(TUNABLES)),
@@ -358,7 +361,14 @@ fn the_key_is_content_and_not_mtime() {
 
     // A tree a compile would fail on has no key, so it writes no entry and
     // finds none: an unreadable input is never cached over.
+    // An engine module is read where slangc will find it: a copy beside the
+    // caustic comes first on the search path, so it is what the key hashes.
+    std::fs::write(dir.join("text.slang"), "// a copy\n").expect("writable");
+    assert_ne!(cache_key(&tools, &dir, define, entries), Some(key));
     std::fs::remove_file(dir.join("text.slang")).expect("there");
+    assert_eq!(cache_key(&tools, &dir, define, entries), Some(key));
+
+    std::fs::remove_file(dir.join("bar_model.slang")).expect("there");
     assert_eq!(cache_key(&tools, &dir, define, entries), None);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -481,22 +491,24 @@ fn the_bound_evicts_the_oldest() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Every module the caustics `import` is a module this sidecar watches, and a
-/// file `bar/bar-test.sh` copies to a remote target.
+/// Every module the caustic `import`s is one this sidecar watches or one of
+/// the engine's, and a file `bar/bar-test.sh` copies to a remote target.
 ///
-/// A module that is watched but not copied leaves a remote target running its
-/// baked SPIR-V, and every reload there fails with `cannot open file`; this
-/// test keeps the lists in step.
+/// A module that is not copied leaves a remote target running its baked
+/// SPIR-V, and every reload there fails with `cannot open file`; this test
+/// keeps the lists in step.
 ///
-/// The three lists are one fact — *which files the caustic is made of* — kept
-/// in three places because the third is a shell script. This is the pair that
-/// can be checked from Rust; the shell one is checked by reading the script.
+/// The lists are one fact — *which files the caustic is made of* — kept in
+/// several places because one of them is a shell script. The Rust ones are
+/// checked against the sources; the shell one is checked by reading the
+/// script.
 #[test]
 fn every_imported_module_is_watched_and_copied() {
     // Anchored on the manifest, not on the working directory: `cargo test -p`
     // runs from the package, so a relative `caustics` finds nothing and a
-    // relative `bar/bar-test.sh` is silently absent — so the paths are resolved from the manifest directory. `bar_check.slang` is appended under an `#ifdef` by the oracle
-    // rather than imported, and `bar_tunables.slang` is `TUNABLES`.
+    // relative `bar/bar-test.sh` is silently absent. `bar_check.slang` is
+    // appended under an `#ifdef` by the oracle rather than imported, and
+    // `bar_tunables.slang` is `TUNABLES`.
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let dir = root.join("caustics");
     assert!(dir.is_dir(), "no caustics directory at {}", dir.display());
@@ -504,19 +516,18 @@ fn every_imported_module_is_watched_and_copied() {
     let script = std::fs::read_to_string(&harness)
         .unwrap_or_else(|err| panic!("{} is not readable: {err}", harness.display()));
 
-    for name in WATCHED {
-        let path = dir.join(name);
-        assert!(
-            path.is_file(),
-            "{name} is watched and is not in {}",
-            dir.display()
-        );
-        let text = std::fs::read_to_string(&path).expect("a readable caustic");
+    let files = WATCHED.iter().map(|name| (*name, dir.join(name))).chain(
+        ENGINE
+            .iter()
+            .map(|name| (*name, punchcutter_core::slang_dir().join(name))),
+    );
+    for (name, path) in files {
+        assert!(path.is_file(), "{name} is not at {}", path.display());
+        let text = std::fs::read_to_string(&path).expect("a readable module");
         for line in text.lines() {
             let line = line.trim();
-            // Both spellings. `__exported import` is how a module re-exports
-            // the names it imports, and `shape_abi` arrives that way — so both spellings are read and the target's reload
-            // could not compile. The second reading is here.
+            // Both spellings: `__exported import` is how a module re-exports
+            // the names it imports, and `shape_abi` arrives that way.
             let Some(rest) = line
                 .strip_prefix("import ")
                 .or_else(|| line.strip_prefix("__exported import "))
@@ -526,135 +537,18 @@ fn every_imported_module_is_watched_and_copied() {
             let module = rest.trim_end_matches(';').trim();
             let file = format!("{module}.slang");
             assert!(
-                WATCHED.contains(&file.as_str()),
-                "{name} imports `{module}` and `{file}` is not in WATCHED"
+                WATCHED.contains(&file.as_str()) || ENGINE.contains(&file.as_str()),
+                "{name} imports `{module}` and `{file}` is in neither WATCHED nor ENGINE"
             );
         }
+        let copied = if WATCHED.contains(&name) {
+            script.contains(&format!("caustics/{name}"))
+        } else {
+            script.contains(name)
+        };
         assert!(
-            script.contains(&format!("caustics/{name}")),
-            "{name} is watched and `bar/bar-test.sh` does not copy it into the guest"
+            copied,
+            "{name} is part of the caustic and `bar/bar-test.sh` does not copy it into the guest"
         );
     }
-}
-
-// ---------------------------------------------------------------------------
-// The loop lint
-// ---------------------------------------------------------------------------
-
-/// A name assignment's right-hand side, or `None` for a line that assigns
-/// nothing — which includes every `<=`, `>=`, `==` and `!=` in a condition.
-fn assigned<'a>(code: &'a str) -> Option<(&'a str, &'a str)> {
-    let bytes = code.as_bytes();
-    for (at, byte) in bytes.iter().enumerate() {
-        if *byte != b'=' {
-            continue;
-        }
-        if bytes.get(at + 1) == Some(&b'=') {
-            continue;
-        }
-        if at > 0
-            && matches!(
-                bytes[at - 1],
-                b'<' | b'>' | b'!' | b'=' | b'+' | b'-' | b'*' | b'/' | b'&' | b'|' | b'^'
-            )
-        {
-            continue;
-        }
-        return Some((&code[..at], &code[at + 1..]));
-    }
-    None
-}
-
-/// **No loop in the shaper takes its trip count from the arena.**
-///
-/// It sits here, beside the test that keeps the three caustics-file lists one
-/// fact, because it is the same kind of guard: a rule about the caustics that
-/// no compiler checks and that a future edit would quietly break.
-///
-/// The failure it exists to prevent has happened. A bar ran beside an older
-/// `caustics-glyphs`, whose flattened `cmap` array went out under the number the
-/// bar had given the arena, and the shaper read a list of `(codepoint, gid)`
-/// pairs as a table directory. Every `u16` it read for a loop bound came back
-/// enormous, two of those loops were nested, and the dispatch went from 31 ms
-/// to 152 ms — and with an all-`0xFF` arena it hung RADV's graphics ring
-/// outright. `MAX_OPS` did not bite, because none of those loops was an
-/// operation.
-///
-/// So the rule: a `for` or `while` may take its bound from a constant, from the
-/// glyph buffer, or from `otCount`/`otTake` — which cap it *and* charge it to
-/// the run's budget — and from nothing else. It fails on a raw read in a loop's
-/// own header, and on a header naming a local that a raw read assigned
-/// **directly** in the same function.
-///
-/// What it deliberately does not chase: a bound assigned from a bound, which is
-/// every binary search in `ot.slang` (`hi = count`). Those are log-bounded by
-/// construction — thirty-two steps whatever the bytes say — and a rule that
-/// failed on them would have to be turned off rather than obeyed.
-#[test]
-fn no_loop_in_the_shaper_is_bounded_by_the_arena() {
-    let dir = caustics_dir();
-    if !dir.join("shape.slang").is_file() {
-        eprintln!("skipping: no caustics directory at {}", dir.display());
-        return;
-    }
-    // The reads that answer with a byte of the arena. `otCount` and `otTake`
-    // are the sanctioned wrappers and are *not* here.
-    const RAW: [&str; 4] = ["be16(", "be32(", "otByte(", "otWord("];
-    let word = |text: &str, name: &str| {
-        text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
-            .any(|w| w == name)
-    };
-
-    let mut complaints: Vec<String> = Vec::new();
-    for file in ["shape.slang", "ot.slang"] {
-        let text = std::fs::read_to_string(dir.join(file))
-            .unwrap_or_else(|err| panic!("could not read {file}: {err}"));
-
-        // Taint is per function, and a function is what starts in column 0.
-        let mut tainted: Vec<String> = Vec::new();
-        for (number, line) in text.lines().enumerate() {
-            let code = line.split("//").next().unwrap_or(line);
-            if !code.is_empty() && !code.starts_with(char::is_whitespace) {
-                tainted.clear();
-            }
-            if let Some((left, right)) = assigned(code) {
-                if RAW.iter().any(|read| right.contains(read))
-                    && !right.contains("otCount(")
-                    && !right.contains("otTake(")
-                    && let Some(name) = left.split_whitespace().last()
-                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    && !name.is_empty()
-                {
-                    tainted.push(name.to_owned());
-                }
-            }
-
-            let trimmed = code.trim_start();
-            if !(trimmed.starts_with("for (") || trimmed.starts_with("while (")) {
-                continue;
-            }
-            if let Some(read) = RAW.iter().find(|read| code.contains(**read)) {
-                complaints.push(format!(
-                    "{file}:{}: a loop header reads {read} — bound it with otCount/otTake\n    {}",
-                    number + 1,
-                    trimmed
-                ));
-                continue;
-            }
-            if let Some(name) = tainted.iter().find(|name| word(code, name)) {
-                complaints.push(format!(
-                    "{file}:{}: the bound `{name}` came from a raw arena read — assign it \
-                     through otCount/otTake\n    {}",
-                    number + 1,
-                    trimmed
-                ));
-            }
-        }
-    }
-    assert!(
-        complaints.is_empty(),
-        "a loop in the shaper takes its trip count from the arena: a font's count is \
-         untrusted, and a loop it bounds can hang the GPU's graphics ring:\n{}",
-        complaints.join("\n")
-    );
 }

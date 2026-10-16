@@ -61,7 +61,9 @@ wake a sleeping GPU.
 
 ### Text on the GPU
 
-The parts usually left on the CPU are the shader's too:
+The parts usually left on the CPU are the shader's too. The text engine is
+[punchcutter](https://github.com/davidar/punchcutter), a dependency whose Slang
+modules the bar's shader imports:
 
 - **Strings.** Every label the bar itself shows (a menu row, a weekday) is a
   string literal in Slang. The compiler's reflection carries the literal's
@@ -77,15 +79,16 @@ The parts usually left on the CPU are the shader's too:
   shaper walks them in place, one thread per string. It is checked against
   harfrust, HarfBuzz's Rust port, at zero tolerance over HarfBuzz's own test
   suite. Glyphs the font lacks are covered from fontconfig's fallback faces,
-  appended on demand.
+  appended on demand: the bar asks its font sidecar over a pipe and copies
+  the answer into the GPU's buffers.
 
 Done on the CPU, each of those was code in the bar process that had to
 understand a format and could fail on someone else's input. Done in the
 shader, it is hot-reloadable, bounded (every loop over font data is capped and
 charged against a budget, and a watchdog stops a runaway pass), and gone from
-the process that must not die. docs/architecture.md, *Text*, has the details
-and what is not done yet: bidirectional text, complex-script shapers and
-colour fonts.
+the process that must not die. docs/architecture.md, *Text*, has what the bar
+adds to the engine; what is not done yet (bidirectional text, complex-script
+shapers, colour fonts) is on punchcutter's roadmap.
 
 ### One ABI, one set of binaries
 
@@ -109,7 +112,7 @@ running bar keeps its own set's sidecars even after a newer set is installed.
 | | |
 |---|---|
 | **Rust** | 1.87 or newer (edition 2024; the workspace declares `rust-version`). |
-| **slangc** | Slang's compiler, on `PATH` or named by `$SLANGC`. Built and tested with **2026.14.1**, from [shader-slang's releases](https://github.com/shader-slang/slang/releases). The build needs it (three crates compile Slang in their build scripts); at run time only `caustics-reload` does, for hot reload. Other versions may differ; docs/slangc-numthreads.md is one known crash. `spirv-val` is used by the tests when present. |
+| **slangc** | Slang's compiler, on `PATH` or named by `$SLANGC`. Built and tested with **2026.14.1**, from [shader-slang's releases](https://github.com/shader-slang/slang/releases). The build needs it (the bar's build script and the text engine's compile Slang); at run time only `caustics-reload` does, for hot reload. Other versions may differ; docs/slangc-numthreads.md is one known crash. `spirv-val` is used by the tests when present. |
 | **Libraries** | `libwayland-client` at link time (your distribution's `libwayland-dev` or equivalent). Fontconfig and an icon theme at run time. |
 | **GPU** | Vulkan, through wgpu with SPIR-V passthrough. The bar asks for a low-power adapter and **refuses an adapter named NVIDIA** (a status bar must not keep a discrete GPU awake) unless `CAUSTICS_BAR_ALLOW_DGPU=1` is set; an NVIDIA-only machine sets that, or uses Mesa's lavapipe. Tested on AMD integrated graphics (RADV) and on lavapipe. |
 | **Compositor** | `wlr-layer-shell` and `ext-foreign-toplevel-list` (required, for the bar and the dock); `xdg-activation` (a notification's click raising its app) and `idle-inhibit` (the caffeine toggle), each optional. **niri** for the rest: which window is focused or urgent, focusing, closing and launching from the dock, and the overview button go through niri's IPC socket (`$NIRI_SOCKET`). Without it the dock lists windows but cannot act on them. Hover previews need `ext-image-copy-capture` with the foreign-toplevel capture source, which at the time of writing is in a patched niri rather than upstream's; without it there are no previews and nothing else changes. |
@@ -152,6 +155,12 @@ it is installed, and prints the bar's first `set:` and `health` lines.
 binaries already built. Never install one binary on its own: the bar would
 refuse a sidecar from another build anyway, and the script exists so that
 there is no way to make that pairing.
+
+Hot reload compiles against the text engine's Slang modules where cargo
+checked punchcutter out (its `slang/` directory, in cargo's git cache on the
+machine that built the set). Clearing that cache makes every reload fail with
+slangc's `cannot open file` until the next build fetches it again; the
+running bar keeps the caustic it has.
 
 **On a laptop with a discrete GPU**, also install the iGPU-only drop-in,
 which pins the Vulkan loader to the integrated GPU's driver so the discrete
@@ -196,7 +205,8 @@ Two things are not tunables. **The dock's favourites** are state, at
 dock entry's right-click menu. Until the first pin a compiled-in list seeds
 the dock; it names COSMIC's applications, so pin your own. **A sidecar's
 settings are its own**: `$CAUSTICS_SYSMON_CHARTS` picks the charts and
-`$CAUSTICS_FONT` the font, both set on the unit. The "Settings…" rows open
+`$PUNCHCUTTER_FONT` the font (the text engine reads it), both set on the
+unit. The "Settings…" rows open
 `$CAUSTICS_SETTINGS` if it is set, else your desktop's settings program by
 `$XDG_CURRENT_DESKTOP`, else the first of `cosmic-settings`,
 `gnome-control-center` and `systemsettings` on `PATH`. With none, there is no
@@ -238,18 +248,11 @@ support.
 
 MIT (`LICENSE`); third-party notices are in `NOTICE`.
 
-- **Slug**, Eric Lengyel's algorithm for rendering glyphs from their outlines
-  (*GPU-Centered Font Rendering Directly from Glyph Outlines*, JCGT 2017). Its
-  patent was dedicated to the public domain; `caustics/text.slang` ports the
-  reference pixel shader, published under MIT OR Apache-2.0, and carries the
-  credit it asks for.
-- **harfrust**, HarfBuzz's Rust port, is the reference the GPU shaper is
-  compared against, and **HarfBuzz**'s shaping test suite is the corpus
-  (`shape/examples/conform.rs` fetches it into a cache at run time; it is not
-  committed). Nothing is copied from either: the shaper is written from the
-  OpenType specification and matched by test.
-- **Unicode** property ranges in `caustics/shape.slang` are Unicode data
-  (Unicode-3.0).
+- **punchcutter**, the text engine: shaping and glyph coverage in Slang. Its
+  own notices credit Slug, Eric Lengyel's algorithm for rendering glyphs from
+  their outlines, whose reference shader it ports, and the Unicode data its
+  shaper writes out; harfrust and HarfBuzz's test suite are the reference it
+  is checked against.
 - Built on wgpu, smithay-client-toolkit, zbus, tokio, nvml-wrapper and resvg,
   among the crates in `Cargo.lock`.
 

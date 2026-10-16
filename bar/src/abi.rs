@@ -2,7 +2,7 @@
 //! are their own crate so a sidecar can import the layout without the bar's
 //! dependencies), the caustic's entry-point names,
 //! and the **buffer's** layout tests — which stay here because the reflection
-//! test needs slangc and `caustics-core/reflect`, neither of which a sidecar
+//! test needs slangc and the engine's reflection reader, neither of which a sidecar
 //! should carry. The wire's own tests live in the crate, which needs neither.
 //!
 //! Everything inside the bar keeps saying `abi::Note`, `abi::ACT_SPAWN`,

@@ -2,7 +2,7 @@
 //!
 //! A caustic that wants a label writes `getStringHash("Close")` and puts the
 //! hash in the mirror; slangc records the literal behind every such call in its
-//! reflection, and [`caustics_core::slang`] hands that table back on the same
+//! reflection, and [`punchcutter_core::slang`] hands that table back on the same
 //! compile that produced the SPIR-V. So the text of the bar's chrome lives in
 //! exactly one place — the Slang source, beside the decision to show it — and
 //! the embassy, which has to shape it, looks it up by hash. No list of strings
@@ -61,7 +61,7 @@ impl Strings {
     /// to start is not a bar at all.
     pub fn baked() -> Strings {
         const REFLECTION: &str = include_str!(concat!(env!("OUT_DIR"), "/bar.reflection.json"));
-        match caustics_core::slang::hashed_strings(REFLECTION) {
+        match punchcutter_core::slang::hashed_strings(REFLECTION) {
             Ok(table) => {
                 let strings = Strings { table };
                 tracing::info!("strings: {} literals (baked)", strings.len());

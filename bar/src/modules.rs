@@ -81,7 +81,7 @@ impl Ready {
     pub fn strings(&self) -> Result<BTreeMap<u32, String>, String> {
         let mut table = BTreeMap::new();
         for module in &self.modules {
-            match caustics_core::slang::hashed_strings(&module.reflection) {
+            match punchcutter_core::slang::hashed_strings(&module.reflection) {
                 Ok(strings) => table.extend(strings),
                 Err(err) => {
                     return Err(format!(

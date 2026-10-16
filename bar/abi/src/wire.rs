@@ -98,9 +98,9 @@ pub const WIRE_MODULE: u32 = 10;
 pub const WIRE_HELLO: u32 = 11;
 
 /// Which buffer a `Bytes` frame writes. The four curve buffers are
-/// `caustics/text.slang`'s (`caustics-text`'s layout); `BUF_SHAPE_FONT` is the
-/// `ShapeFont` half of `shapeParams`, and `BUF_OT` is the **arena** —
-/// `caustics/ot.slang`'s directory and the faces' `cmap`, `hmtx`, `GDEF`,
+/// the text engine's `text.slang`'s (`punchcutter-text`'s layout);
+/// `BUF_SHAPE_FONT` is the `ShapeFont` half of `shapeParams`, and `BUF_OT` is
+/// the **arena** — the engine's directory and the faces' `cmap`, `hmtx`, `GDEF`,
 /// `GSUB` and `GPOS` exactly as they sit in the font files.
 ///
 /// One name where there were nine. The nine were nine flattened tables — a sorted `cmap`, an advance array, the PairPos

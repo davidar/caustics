@@ -15,6 +15,7 @@ caustics-sidecar = { path = "../sidecar" }
 # the names the frames carry — comes from here too, so the two ends cannot
 # drift into compiling a program the bar cannot assemble.
 caustics-bar-abi = { path = "../bar/abi" }
-# The slangc driver and the mtime watch. Featureless: nothing here touches
+# The slangc driver, and `slang_dir()`: where the engine's modules are, which
+# go on the include path of every compile. Featureless: nothing here touches
 # wgpu, which is the difference between this process and the bar's.
-caustics-core = { path = "../core" }
+punchcutter-core.workspace = true

@@ -116,8 +116,8 @@ nested_prelude() {
     printf 'T_HOME=%q; T_CONFIG=%q; T_STATE=%q; T_CACHE=%q; T_BIN=%q; T_CAUSTICS=%q; ' \
         "$RUN/home" "$RUN/xdg/config" "$RUN/xdg/state" "$RUN/xdg/cache" \
         "$REPO/target/debug" "$RUN/caustics"
-    printf 'T_SLANGC=%q; T_ORACLE=%q; T_GARBAGE=%q; T_FAKE_UPOWER=%q; ' \
-        "$RUN/bin/slangc" "${ORACLE_BIN:-}" "${GARBAGE_BIN:-}" "${FAKE_UPOWER_BIN:-}"
+    printf 'T_SLANGC=%q; T_ORACLE=%q; T_FAKE_UPOWER=%q; ' \
+        "$RUN/bin/slangc" "${ORACLE_BIN:-}" "${FAKE_UPOWER_BIN:-}"
     printf 'export WAYLAND_DISPLAY=%q XDG_RUNTIME_DIR=%q NIRI_SOCKET=%q ' \
         "$NESTED_WAYLAND" "$NESTED_RT" "$NESTED_NIRI_SOCKET"
     printf 'XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q XDG_CACHE_HOME=%q CAUSTICS_DIR=%q ' \

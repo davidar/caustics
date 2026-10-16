@@ -163,15 +163,12 @@ is one `SKIP` line, counted as skipped and never as passed:
 
 1. copying the install set, the unit, slangc and lavapipe into a guest (the
    gate asserts slangc runs instead);
-2. the shaper's fuzzer, which runs on a software rasteriser on purpose: on a
-   real GPU a stalled shader is a reset graphics ring under the developer's
-   session;
-3. the half of the notification step that hands the bus name over from
+2. the half of the notification step that hands the bus name over from
    another daemon (on a private bus nothing else holds it);
-4. audio devices, which loads null sinks into the session's PipeWire and
+3. audio devices, which loads null sinks into the session's PipeWire and
    moves its default sink;
-5. `bar/install.sh` end to end, even into a throwaway prefix;
-6. a known-bad OpenType arena handed to a running bar on the live GPU.
+4. `bar/install.sh` end to end, even into a throwaway prefix;
+5. a known-bad OpenType arena handed to a running bar on the live GPU.
 
 ### Known behaviour the steps account for
 
@@ -271,8 +268,7 @@ first, and stops only a guest it started.
 What the VM target covers that the nested gate skips: a fresh boot of the
 whole set on a stock image through the unit and the install script, the
 notification name handover from a daemon that already holds it, a guest
-without a battery, the shaper's fuzzer on a software rasteriser, and the
-known-bad arena. It runs on lavapipe, so its timings are not the bar's real
+without a battery, and the known-bad arena. It runs on lavapipe, so its timings are not the bar's real
 ones, and a run takes twenty minutes or more. It is a smoke run before an
 install, not the per-change gate.
 

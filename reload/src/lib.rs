@@ -45,14 +45,14 @@
 //! # The cache: the same bytes are never compiled twice
 //!
 //! Every generation is written to `$XDG_CACHE_HOME/caustics/reload/`, keyed on
-//! the **content** of what reaches slangc (the `.slang` files [`WATCHED`]
-//! names), the format define and slangc's own version string; a lookup whose
+//! the **content** of what reaches slangc (the `.slang` files [`WATCHED`] and
+//! [`ENGINE`] name), the format define and slangc's own version string; a lookup whose
 //! inputs hash to an entry already there reads it and compiles nothing.
 //! Content, not mtimes: an editor that rewrites a file with the same bytes has
 //! to hit, and a `git checkout` that restores older bytes with an older mtime
-//! has to miss. `caustics-glyphs`'s font cache is the precedent for the shape —
-//! one file per key, written to a temp name and renamed, and every way of
-//! being wrong is a miss and a witness, never a frame.
+//! has to miss. The text engine's font cache has the same shape: one file per
+//! key, written to a temp name and renamed, and every way of being wrong is a
+//! miss and a witness, never a frame.
 
 use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
@@ -61,34 +61,51 @@ use std::process::Command;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::SystemTime;
 
+use caustics_bar_abi::DstFormat;
 use caustics_bar_abi::ENTRIES;
 use caustics_bar_abi::wire::{
     self, Frame, MAX_MODULES, Module, REQ_PROGRAM, WIRE_MAX_BODY, format_code,
 };
-use caustics_core::DstFormat;
-use caustics_core::slang;
-use caustics_core::watch::{MtimeWatch, POLL_INTERVAL};
+use punchcutter_core::slang;
 
-/// The bar caustic and the modules it imports, all in `caustics/`.
+use crate::watch::{MtimeWatch, POLL_INTERVAL};
+
+pub mod watch;
+
+/// The bar caustic and the modules of its own it imports, all in `caustics/`.
 ///
 /// A change to any of them has to reach the running bar the same way a change
-/// to the tunables does. `bar_abi.slang`, `bar_wire.slang` and
-/// `shape_abi.slang` are generated from the Rust declarations; `bar_model.slang`
-/// is the caustic's own helpers; `text.slang` and `shape.slang` are the text
-/// engine; and `ot.slang` is `shape.slang`'s other half: the reader for
-/// OpenType's own binary format, and the file a new lookup type is most likely
-/// to need a line in.
+/// to the tunables does. `bar_abi.slang` and `bar_wire.slang` are generated
+/// from the Rust declarations, and `bar_model.slang` is the caustic's own
+/// helpers.
 pub const WATCHED: &[&str] = &[
     "bar.slang",
     "bar_abi.slang",
     "bar_wire.slang",
     "bar_model.slang",
-    "text.slang",
-    "ot.slang",
-    "shape.slang",
-    "shape_abi.slang",
     TUNABLES,
 ];
+
+/// The text engine's modules the caustic imports, directly (`text`, `shape`)
+/// or through them (`ot`, `shape_abi`): punchcutter's, in
+/// [`punchcutter_core::slang_dir`].
+///
+/// Inputs to every compile and to its cache key, and **not watched**: an
+/// engine change is a dependency bump and a rebuild, never a live edit.
+pub const ENGINE: &[&str] = &["text.slang", "shape.slang", "ot.slang", "shape_abi.slang"];
+
+/// Where slangc finds an engine module for a compile of `dir`: the directory
+/// itself when a copy sits there (the search order puts the source's own
+/// directory first, and a remote test target carries its copy that way), else
+/// the engine's own directory.
+pub fn engine_file(dir: &Path, name: &str) -> PathBuf {
+    let beside = dir.join(name);
+    if beside.is_file() {
+        beside
+    } else {
+        punchcutter_core::slang_dir().join(name)
+    }
+}
 
 /// The tunables module's file name: the bar's configuration, watched like
 /// every other module the caustic imports.
@@ -150,7 +167,7 @@ pub fn watch(dir: &Path) -> MtimeWatch {
 
 /// The `bar.slang` to hand slangc and the module search path: the directory
 /// itself, compiled in place, so slangc's diagnostics name the files a person
-/// edits.
+/// edits, and then the text engine's modules ([`ENGINE`]).
 pub struct Source {
     pub entry_file: PathBuf,
     pub includes: Vec<PathBuf>,
@@ -160,7 +177,10 @@ pub struct Source {
 pub fn source(dir: &Path) -> Source {
     Source {
         entry_file: dir.join("bar.slang"),
-        includes: vec![dir.to_path_buf()],
+        includes: vec![
+            dir.to_path_buf(),
+            punchcutter_core::slang_dir().to_path_buf(),
+        ],
     }
 }
 
@@ -184,9 +204,6 @@ pub const CACHE_KEEP: usize = 8;
 const CACHE_SUFFIX: &str = "modules";
 
 /// `$XDG_CACHE_HOME/caustics/reload`, or `~/.cache/caustics/reload`.
-///
-/// Beside `caustics/glyphs`, which caches a font's curves for the same reason and
-/// in the same shape.
 pub fn cache_dir() -> PathBuf {
     let base = std::env::var_os("XDG_CACHE_HOME")
         .map(PathBuf::from)
@@ -314,9 +331,14 @@ fn slangc_version(program: &OsStr) -> String {
     }
 }
 
-/// The files whose bytes reach slangc, in a fixed order: [`WATCHED`], in `dir`.
+/// The files whose bytes reach slangc, in a fixed order: [`WATCHED`], in
+/// `dir`, then [`ENGINE`], wherever [`engine_file`] finds each.
 fn inputs(dir: &Path) -> Vec<PathBuf> {
-    WATCHED.iter().map(|name| dir.join(name)).collect()
+    WATCHED
+        .iter()
+        .map(|name| dir.join(name))
+        .chain(ENGINE.iter().map(|name| engine_file(dir, name)))
+        .collect()
 }
 
 /// The key for one program: everything that changes the SPIR-V and nothing

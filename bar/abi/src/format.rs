@@ -6,9 +6,11 @@
 //! got. One table, so the build script and the runtime cannot disagree: otherwise a driver would
 //! quietly accept a module written for the other layout.
 //!
-//! This module is compiled unconditionally, without the `gpu` feature: a build
-//! script needs the table and cannot depend on wgpu. The `wgpu::TextureFormat`
-//! conversions live in [`crate::gpu`], behind the feature, on the same type.
+//! Here, in the ABI crate, because three parties read the one table:
+//! `bar/build.rs` bakes a set of modules per variant, the bar picks the set
+//! matching its surface, and `caustics-reload` compiles for the variant a
+//! `REQ_PROGRAM` request names. None of them needs wgpu for it; the bar's
+//! `wgpu::TextureFormat` conversions are its own (`bar/src/gpu/surface.rs`).
 
 /// One swapchain format the destination storage image can be baked for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

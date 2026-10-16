@@ -10,16 +10,20 @@
 //!
 //! 1. `caustics/bar_abi.slang` — the buffer contract, rendered (docs/abi.md, *The two contracts*);
 //! 2. `caustics/bar_wire.slang` — the wire as the GPU reads it, rendered;
-//! 3. `caustics/shape_abi.slang` — the OpenType arena's header, rendered by
-//!    `caustics-shape` from the same declaration tables (`caustics_core::decl`). It is
-//!    a wire contract too: `caustics-glyphs` fills that arena with a `Bytes` frame.
+//! 3. `shape_abi.slang` — the OpenType arena's header, rendered by the text
+//!    engine (`punchcutter-shape`) from the same declaration tables
+//!    (`punchcutter_core::decl`) and read from the engine's own Slang directory
+//!    (`punchcutter_core::slang_dir()`, a build-dependency). It is a wire
+//!    contract too: `caustics-glyphs` fills that arena with a `Bytes` frame, so
+//!    an engine whose arena changed is a new set.
 //! 4. `bar/abi/src/wire.rs` — the framing, the kinds, the caps and the
 //!    `BUF_*` numbers, none of which has a Slang half to be rendered into;
 //! 5. `bar/abi/src/entries.rs` — the entry list a `Module` frame is named by.
 //!
 //! The first three are generated from the Rust and checked in, and a test in
-//! this crate fails when either of the bar's two differs from the rendering —
-//! so hashing the file on disk is hashing the declaration. The last two are
+//! this crate fails when either of the bar's two differs from the rendering
+//! (punchcutter's own test does the same for the third) — so hashing the file
+//! on disk is hashing the declaration. The last two are
 //! hashed as *source*, comments and all, which is coarse in the safe
 //! direction: a comment edit makes a new set, and a set is installed whole.
 
@@ -30,7 +34,7 @@ fn main() {
     let files = [
         repo.join("caustics/bar_abi.slang"),
         repo.join("caustics/bar_wire.slang"),
-        repo.join("caustics/shape_abi.slang"),
+        punchcutter_core::slang_dir().join("shape_abi.slang"),
         repo.join("bar/abi/src/wire.rs"),
         repo.join("bar/abi/src/entries.rs"),
     ];

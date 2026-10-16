@@ -20,20 +20,21 @@ struct's layout against the compiler's.
 | `bar_model.slang` | the caustic's private vocabulary: item, block and element kinds and flags, the `Id` type, the dock-menu verbs, the item accessors. Not a contract: no Rust reads it | hand |
 | `bar_abi.slang` | the buffer contract between the bar process and the caustic (docs/abi.md, *The buffer*) | **generated** from `bar/abi/src/buffer.rs` |
 | `bar_wire.slang` | the frames a sidecar writes that the caustic reads in place (docs/abi.md, *The wire*) | **generated** from `bar/abi/src/wire.rs` |
-| `text.slang` | glyph and icon coverage from Bézier outlines (the Slug algorithm; the credit for the reference shader is in its header) | hand |
-| `ot.slang` | OpenType's binary format, walked in place: `cmap`, `hmtx`, `GDEF`, `GSUB`, `GPOS` | hand |
-| `shape.slang` | the shaper: HarfBuzz's default shaper over `ot.slang`, one thread per string | hand |
-| `shape_abi.slang` | the OpenType arena's header | **generated** from `shape/src/abi.rs` |
 | `bar_check.slang` | the oracle's invariants, a test-only eighth entry point (docs/testing.md) | hand |
-| `shape_demo.slang` | the smallest host of `shape.slang`: what `shape/examples/conform.rs` dispatches and the shaper's layout test reflects | hand |
-| `text_demo.slang` | the smallest host of `text.slang`: coverage into a buffer, for `text/examples/render.rs` | hand |
+
+**The text engine's modules are imported, not kept here.** `text` (glyph and
+icon coverage, the Slug algorithm), `shape` (the shaper), `ot` (OpenType's
+binary format, walked in place) and `shape_abi` (the arena's header) are
+punchcutter's, in its `slang/` directory; punchcutter is the text engine, a
+dependency. Every compile puts that directory on the include path after this
+one (`punchcutter_core::slang_dir()`): `bar/build.rs`, `caustics-reload`, the
+oracle and the layout tests alike.
 
 **The generated files are checked in**, because `caustics-reload` and the
 reflection tests compile against the checked-out directory. Edit the Rust
-declaration and regenerate (`cargo run -p caustics-bar-abi --bin gen-slang` for
-the bar's two, `cargo run -p caustics-shape --bin gen-slang` for the arena
-header). A unit test fails, naming the command, when a file on disk differs
-from its rendering.
+declaration and regenerate (`cargo run -p caustics-bar-abi --bin gen-slang`).
+A unit test fails, naming the command, when a file on disk differs from its
+rendering.
 
 ## The import graph
 
@@ -42,27 +43,25 @@ bar.slang ─┬─ bar_abi ── bar_wire        (bar_abi re-exports bar_wire)
            ├─ bar_wire
            ├─ bar_model ── bar_abi        (re-exports bar_abi)
            ├─ bar_tunables ── bar_model
-           ├─ shape ─┬─ ot ── shape_abi   (re-exports shape_abi)
-           │         └─ shape_abi
-           ├─ text
+           ├─ shape                       (punchcutter's; imports ot and shape_abi)
+           ├─ text                        (punchcutter's)
            └─ #include "bar_check.slang"  (only under -DCAUSTICS_BAR_CHECK)
-
-shape_demo.slang ── shape        text_demo.slang ── text
 ```
 
 `bar_tunables` imports only `bar_model`, which re-exports `bar_abi`, which
 re-exports `bar_wire`, so a tunables file reaches every constant it can name
 (`EDGE_*`, `ITEM_*`, `APPLET_*`, the `ACT_*` verbs) through one import.
-`shape`, `ot` and `text` know nothing about the bar: they are modules with no
-bindings that any host can import.
+`shape` and `text` know nothing about the bar: `text` declares its four curve
+buffers in descriptor set 1 and `shape` declares no bindings, and the bar binds
+their buffers and passes the handles in (punchcutter/docs/arena.md, *A shaping
+dispatch*).
 
 ## Conventions
 
 - **A module declares no bindings and no entry points** unless it is the
-  program. `bar_abi`, `bar_wire`, `bar_model`, `bar_tunables`, `shape`, `ot`
-  and `text` are importable anywhere at no cost; `bar.slang` owns every
-  `[[vk::binding]]` and every `[numthreads]`. A host of `shape` or `text`
-  binds their buffers itself and passes the handles in (see the two demos).
+  program. `bar_abi`, `bar_wire`, `bar_model` and `bar_tunables` are
+  importable anywhere at no cost; `bar.slang` owns every `[[vk::binding]]` of
+  its own and every `[numthreads]`.
 - **Bindings are named, not numbered, on the host side.** The binding numbers
   are literals in `bar.slang` (an attribute cannot take a constant). The bar
   builds its bind groups by reading each binding's name out of slangc's
@@ -74,12 +73,12 @@ bindings that any host can import.
   data is `getStringHash("…")`. The reflection carries the literal's text and
   the bar copies it into the strings buffer. Witness lines are format literals
   the same way (docs/abi.md, *The witness ring*).
-- **Everything the arenas say is untrusted.** `ot.slang` and `shape.slang`
-  read bytes another process sent. Every offset is clamped to what was bound,
-  every list the data states is capped and charged against a budget before
-  its first iteration, and an unsupported format raises a flag on the run
-  rather than answering zero. A loop never uses a budget charge as its exit
-  condition: one driver miscompiled exactly that shape.
+- **Everything a sidecar sends is untrusted.** The caustic bounds every read
+  of what a sidecar wrote by what was bound, and the engine treats the
+  OpenType arena the same way: every offset clamped, every list capped and
+  charged against a budget before its first iteration
+  (punchcutter/docs/arena.md, *Bounded in time*). A loop never uses a budget
+  charge as its exit condition: one driver miscompiled exactly that shape.
 - **Two swapchain formats.** `bar.slang` compiles once with
   `-DDST_FORMAT_RGBA8` and once with `-DDST_FORMAT_BGRA8` (SPIR-V has no BGRA
   storage-image format, so that variant declares the image format-unknown).
@@ -103,10 +102,11 @@ clock's words, the springs, the shape watchdog) is read by the caustic alone.
 
 ## Hot reload
 
-`caustics-reload` watches this directory, the tunables among it. On a save it
-compiles every entry point with slangc, caches the result under
-`$XDG_CACHE_HOME/caustics/reload/` keyed on the bytes that reach the compiler and
-the compiler's version (a cached generation is milliseconds; a cold one is
+`caustics-reload` watches this directory, the tunables among it. The text
+engine's modules are not watched: an engine change is a dependency bump and a
+rebuild. On a save it compiles every entry point with slangc, caches the
+result under `$XDG_CACHE_HOME/caustics/reload/` keyed on the bytes that reach
+the compiler (the engine's modules included) and the compiler's version (a cached generation is milliseconds; a cold one is
 seconds), and sends the SPIR-V and the reflection to the bar as one
 generation, which the bar swaps whole or not at all. The caustic's private
 state survives the swap, so an open menu stays open.

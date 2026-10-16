@@ -10,7 +10,7 @@
 #
 #   on_target <deadline> <cmd>   a shell command where the bar runs, with
 #                                `$T_HOME $T_CONFIG $T_STATE $T_CACHE $T_BIN
-#                                $T_CAUSTICS $T_SLANGC $T_ORACLE $T_GARBAGE
+#                                $T_CAUSTICS $T_SLANGC $T_ORACLE
 #                                $T_FAKE_UPOWER` and `bus_env gui_env vk_env`
 #                                defined in it (the target's prelude)
 #   to_target <src> <dst>        a file there (dst relative to $T_HOME)
@@ -76,7 +76,7 @@ U_SESSION_BUS='unix:path=%t/bus'
 # set up the session bus, the graphical session, and lavapipe.
 T_PRELUDE='T_HOME=$HOME; T_CONFIG=$HOME/.config; T_STATE=$HOME/.local/state; T_CACHE=$HOME/.cache;
 T_BIN=$HOME/.local/bin; T_CAUSTICS=$HOME/caustics-bar/caustics; T_SLANGC=$HOME/.local/bin/slangc;
-T_ORACLE=$HOME/caustics-bar-oracle; T_GARBAGE=$HOME/caustics-shape-garbage;
+T_ORACLE=$HOME/caustics-bar-oracle;
 T_FAKE_UPOWER=$HOME/caustics-bar/caustics-fake-upower;
 bus_env() { export XDG_RUNTIME_DIR=/run/user/$(id -u); export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus; };
 gui_env() { export WAYLAND_DISPLAY=$(systemctl --user show-environment | sed -n "s/^WAYLAND_DISPLAY=//p"); export XDG_RUNTIME_DIR=/run/user/$(id -u); };

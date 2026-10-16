@@ -14,7 +14,12 @@ name = "gen-slang"
 path = "src/bin/gen_slang.rs"
 
 [dependencies]
-# `Plain` and the byte views, and nothing else: featureless `caustics-core` is
-# std-only, which is what lets a sidecar with no GPU, no Wayland and no tokio
-# depend on this crate.
-caustics-core = { path = "../../core" }
+# `Plain`, the byte views and the declare-once macros, and nothing else:
+# featureless `punchcutter-core` is std-only, which is what lets a sidecar with
+# no GPU, no Wayland and no tokio depend on this crate.
+punchcutter-core.workspace = true
+
+[build-dependencies]
+# `slang_dir()`: where the engine's `shape_abi.slang` is, one of the five files
+# the ABI hash covers.
+punchcutter-core.workspace = true

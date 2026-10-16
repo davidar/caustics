@@ -1,10 +1,11 @@
 [workspace]
-# The bar process, its ABI crate, its sidecars, and the crates they share.
-members = ["apps", "audio", "bar", "bar/abi", "bluetooth", "core", "glyphs", "harness/pointer", "network", "notify", "power", "reload", "shape", "sidecar", "sysmon", "text", "tray"]
+# The bar process, its ABI crate, its sidecars, and the crates they share. The
+# text engine is punchcutter, a dependency.
+members = ["apps", "audio", "bar", "bar/abi", "bluetooth", "glyphs", "harness/pointer", "network", "notify", "power", "reload", "sidecar", "sysmon", "tray"]
 # The edition-2024 default, stated because it matters here: `bar` depends on
-# `caustics-core` without features from its build script and with `gpu` from its
-# code (`text` and `shape` likewise from their tests), and only resolver 2 or
-# later keeps a build script's graph from pulling in wgpu.
+# `punchcutter-core` without features from its build script and with `gpu` from
+# its code, and only resolver 2 or later keeps a build script's graph from
+# pulling in wgpu.
 resolver = "3"
 
 # Every member inherits these, so the licence, the edition and the oldest
@@ -14,6 +15,15 @@ resolver = "3"
 edition = "2024"
 license = "MIT"
 rust-version = "1.87"
+
+# The text engine, one revision for every crate that takes it.
+# PLACEHOLDER: `rev` is not a real commit yet. Set it to the pushed commit of
+# punchcutter's `slang-dir` branch on all four lines, then `cargo fetch`.
+[workspace.dependencies]
+punchcutter-core = { git = "https://github.com/davidar/punchcutter", rev = "bec42d3dbbae807b24abb8511879f7d16c4769cb" }
+punchcutter-fonts = { git = "https://github.com/davidar/punchcutter", rev = "bec42d3dbbae807b24abb8511879f7d16c4769cb" }
+punchcutter-shape = { git = "https://github.com/davidar/punchcutter", rev = "bec42d3dbbae807b24abb8511879f7d16c4769cb" }
+punchcutter-text = { git = "https://github.com/davidar/punchcutter", rev = "bec42d3dbbae807b24abb8511879f7d16c4769cb" }
 
 [profile.dev]
 # The debug build is what the tests, the oracle and the nested gate run, so it

@@ -8,12 +8,12 @@
 
 use super::*;
 
-use crate::fallback::Chain;
+use punchcutter_fonts::fallback::Chain;
 
 /// The font, loaded once for the whole binary — a cold load is 200 ms and
 /// there is no reason to pay it per test.
 fn loaded() -> Option<Loaded> {
-    let (family, path) = pick_family()?;
+    let (family, path) = punchcutter_fonts::pick_family(COMPOSED)?;
     match Loaded::load_path(&family, &path) {
         Ok(loaded) => Some(loaded),
         Err(why) => {
@@ -37,8 +37,7 @@ fn frames(bytes: &[u8]) -> Vec<Frame> {
 fn every_buffer_the_abi_names_has_bytes() {
     let Some(loaded) = loaded() else { return };
     for buffer in BUFFERS {
-        let bytes = loaded
-            .buffer(buffer)
+        let bytes = crate::buffer(&loaded, buffer)
             .unwrap_or_else(|| panic!("buffer {buffer} is not known"));
         // Every one of the six is non-empty for a real font: the arena always
         // carries at least a `cmap` and an `hmtx` behind its directory.
@@ -55,14 +54,13 @@ fn every_buffer_the_abi_names_has_bytes() {
         );
     }
     assert_eq!(
-        loaded
-            .buffer(BUF_SHAPE_FONT)
+        crate::buffer(&loaded, BUF_SHAPE_FONT)
             .expect("the shape scalars")
             .len(),
-        size_of::<caustics_shape::abi::ShapeFont>(),
+        size_of::<punchcutter_shape::abi::ShapeFont>(),
         "BUF_SHAPE_FONT is the `font` half of ShapeParams and nothing else"
     );
-    assert!(loaded.buffer(0).is_none() && loaded.buffer(BUF_LAST + 1).is_none());
+    assert!(crate::buffer(&loaded, 0).is_none() && crate::buffer(&loaded, BUF_LAST + 1).is_none());
 }
 
 #[test]
@@ -83,7 +81,7 @@ fn the_font_goes_out_as_one_font_frame_then_contiguous_runs() {
         font.icon_base, font.glyph_count,
         "no icons have been appended yet"
     );
-    assert_eq!(font.family, sidecar.loaded.family);
+    assert_eq!(font.family, sidecar.loaded().family);
 
     // Reassemble every run and compare it with what the sidecar holds.
     let mut rebuilt: HashMap<u32, Vec<u8>> = HashMap::new();
@@ -110,7 +108,7 @@ fn the_font_goes_out_as_one_font_frame_then_contiguous_runs() {
         slot[at..at + bytes.bytes.len()].copy_from_slice(&bytes.bytes);
     }
     for buffer in BUFFERS {
-        let want = sidecar.loaded.buffer(buffer).expect("a known buffer");
+        let want = crate::buffer(sidecar.loaded(), buffer).expect("a known buffer");
         if want.is_empty() {
             assert!(
                 !rebuilt.contains_key(&buffer),
@@ -127,7 +125,11 @@ fn the_font_goes_out_as_one_font_frame_then_contiguous_runs() {
     // The order the ABI fixes: the Font, the four curve buffers, the shape scalars, then the arena — skipping whatever this font has none of.
     let expected: Vec<u32> = BUFFERS
         .into_iter()
-        .filter(|b| !sidecar.loaded.buffer(*b).expect("known").is_empty())
+        .filter(|b| {
+            !crate::buffer(sidecar.loaded(), *b)
+                .expect("known")
+                .is_empty()
+        })
         .collect();
     assert_eq!(order, expected);
 }
@@ -144,7 +146,7 @@ fn an_icon_is_a_tail_of_each_curve_buffer_and_one_glyph() {
     let mut sidecar = Sidecar::new(loaded);
     let mut start: Vec<u8> = Vec::new();
     sidecar.write_font(&mut start).expect("writing to a Vec");
-    let before = sidecar.loaded.curve_lengths();
+    let before = sidecar.loaded().curve_lengths();
 
     let mut answer: Vec<u8> = Vec::new();
     sidecar
@@ -172,7 +174,7 @@ fn an_icon_is_a_tail_of_each_curve_buffer_and_one_glyph() {
         !deltas.is_empty(),
         "an appended icon moves at least the glyph record"
     );
-    let after = sidecar.loaded.curve_lengths();
+    let after = sidecar.loaded().curve_lengths();
     for delta in &deltas {
         let i = CURVE_BUFFERS
             .iter()
@@ -201,7 +203,7 @@ fn an_icon_is_a_tail_of_each_curve_buffer_and_one_glyph() {
     let repeat = frames(&again);
     assert_eq!(repeat.len(), 1, "a repeat appends nothing");
     assert!(matches!(&repeat[0], Frame::Glyph(g) if g.gid == glyph.gid));
-    assert_eq!(sidecar.loaded.curve_lengths(), after);
+    assert_eq!(sidecar.loaded().curve_lengths(), after);
     assert_eq!(sidecar.known(name), Some(Some(glyph.gid)));
 }
 
@@ -327,27 +329,6 @@ fn only_a_symbolic_svg_is_curves() {
 }
 
 #[test]
-fn the_cache_lives_under_caustics_glyphs() {
-    let dir = cache_dir();
-    assert!(
-        dir.ends_with("caustics/glyphs"),
-        "{} is not the glyph cache directory",
-        dir.display()
-    );
-    let key = cache_key(&dir, b"a font, notionally");
-    assert!(key.starts_with(&dir));
-    assert!(
-        key.to_string_lossy()
-            .ends_with(&format!("-18-{}.curves", caustics_text::CACHE_VERSION)),
-        "the key carries the length and the layout version: {}",
-        key.display()
-    );
-    // The same bytes name the same file, and different bytes do not.
-    assert_eq!(key, cache_key(&dir, b"a font, notionally"));
-    assert_ne!(key, cache_key(&dir, b"a font, notionallY"));
-}
-
-#[test]
 fn the_theme_order_ends_at_hicolor_with_no_duplicates() {
     let order = theme_order();
     assert_eq!(order.last().map(String::as_str), Some("hicolor"));
@@ -374,7 +355,7 @@ fn a_cover_opens_a_face_and_fills_what_the_primary_lacks() {
     let mut sidecar = Sidecar::with_chain(loaded, chain);
     let mut start: Vec<u8> = Vec::new();
     sidecar.write_font(&mut start).expect("writing to a Vec");
-    let before_curves = sidecar.loaded.curve_lengths();
+    let before_curves = sidecar.loaded().curve_lengths();
 
     let mut out: Vec<u8> = Vec::new();
     sidecar
@@ -434,7 +415,7 @@ fn a_cover_opens_a_face_and_fills_what_the_primary_lacks() {
         }
     }
 
-    let arena = &sidecar.loaded.arena;
+    let arena = &sidecar.loaded().arena;
     assert!(
         arena.faces().len() >= 2,
         "a cover opens at least one fallback face"
@@ -450,7 +431,7 @@ fn a_cover_opens_a_face_and_fills_what_the_primary_lacks() {
             "a face opened by a cover fills glyph by glyph"
         );
         assert_eq!(
-            sidecar.loaded.curves.glyphs.len() as u32 >= info.glyph_base + info.glyph_count,
+            sidecar.loaded().curves.glyphs.len() as u32 >= info.glyph_base + info.glyph_count,
             true,
             "face {face}'s reserved range has no records"
         );
@@ -507,7 +488,7 @@ fn test_chain() -> Option<Chain> {
         let data = std::fs::read(&path).ok()?;
         // A face that claims the codepoint and draws it with a colour table is
         // no use to this test — and is exactly what the chain walks past.
-        let drawn = caustics_text::font::codepoint_curves(&data, index, ch)
+        let drawn = punchcutter_text::font::codepoint_curves(&data, index, ch)
             .ok()
             .flatten()
             .is_some_and(|glyph| glyph.has_ink());
@@ -548,149 +529,6 @@ pub(crate) fn family_face(family: &str) -> Option<(String, PathBuf, u32)> {
         }
     }
     None
-}
-
-/// Filled records in arena face `face`, as face gids.
-fn filled_in(sidecar: &Sidecar, face: usize) -> Vec<u32> {
-    let arena = &sidecar.loaded.arena;
-    (0..arena.faces()[face].glyph_count)
-        .filter(|gid| arena.is_filled(face, *gid))
-        .collect()
-}
-
-/// `🇦🇺 Australia` asks Noto Emoji for two regional
-/// indicators; the GPU shaper ligates them to `flagAustralia` (face gid 1626 in
-/// the 1,895-glyph build of the face), and that record must be filled and carry
-/// bands — filled per codepoint only, it is a reserved blank and the flag draws
-/// as a gap.
-#[test]
-fn a_flag_cover_fills_the_ligature_the_shaper_reaches() {
-    let Some(loaded) = loaded() else { return };
-    let Some(face) = family_face("Noto Emoji") else {
-        witness("tests: Noto Emoji is not installed; skipping");
-        return;
-    };
-    let mut sidecar = Sidecar::with_chain(loaded, Chain::of([face]));
-    let mut start: Vec<u8> = Vec::new();
-    sidecar.write_font(&mut start).expect("writing to a Vec");
-    let ot_before = sidecar.loaded.arena.bytes().len();
-    let curves_before: usize = sidecar.loaded.curve_lengths().iter().sum();
-
-    let started = std::time::Instant::now();
-    let mut out: Vec<u8> = Vec::new();
-    sidecar
-        .answer_cover(&mut out, "🇦🇺 Australia")
-        .expect("writing to a Vec");
-    let took = started.elapsed();
-
-    let arena = &sidecar.loaded.arena;
-    let emoji = arena.faces().len() - 1;
-    assert!(emoji >= 1, "Noto Emoji was not opened");
-    let info = arena.faces()[emoji];
-    let filled = filled_in(&sidecar, emoji);
-    eprintln!(
-        "🇦🇺 Australia: {} glyphs filled in Noto Emoji ({:?}) of {} reserved, curves +{} KiB, arena +{} KiB, {:.1} ms",
-        filled.len(),
-        filled,
-        info.glyph_count,
-        (sidecar.loaded.curve_lengths().iter().sum::<usize>() - curves_before).div_ceil(1024),
-        (arena.bytes().len() - ot_before).div_ceil(1024),
-        took.as_secs_f64() * 1000.0,
-    );
-    assert!(
-        filled.len() > 2,
-        "only the two regional indicators were filled: {filled:?}"
-    );
-    if info.glyph_count == 1895 {
-        assert!(
-            filled.contains(&1626),
-            "flagAustralia (1626) is not filled: {filled:?}"
-        );
-        let record = sidecar.loaded.curves.glyphs[(info.glyph_base + 1626) as usize];
-        assert!(
-            record.hband_count > 0 && record.vband_count > 0,
-            "the flag's record has no bands"
-        );
-    }
-    // The fill went out: the arena's bitmap and the curve tails are in the answer.
-    assert!(!frames(&out).is_empty());
-}
-
-/// An Arabic word fills its letters and everything their substitutions reach —
-/// the joining forms an Arabic shaper selects, filled because the face's `GSUB`
-/// is in the arena and the closure walks it.
-#[test]
-fn an_arabic_cover_fills_the_forms_its_letters_substitute_to() {
-    let Some(loaded) = loaded() else { return };
-    let Some(face) = family_face("Noto Sans Arabic") else {
-        witness("tests: Noto Sans Arabic is not installed; skipping");
-        return;
-    };
-    let data = std::fs::read(&face.1).expect("the file fontconfig named");
-    let index = face.2;
-    let mut sidecar = Sidecar::with_chain(loaded, Chain::of([face]));
-    let mut start: Vec<u8> = Vec::new();
-    sidecar.write_font(&mut start).expect("writing to a Vec");
-    let curves_before: usize = sidecar.loaded.curve_lengths().iter().sum();
-
-    let word = "مرحبا بالعالم";
-    let started = std::time::Instant::now();
-    let mut out: Vec<u8> = Vec::new();
-    sidecar
-        .answer_cover(&mut out, word)
-        .expect("writing to a Vec");
-    let took = started.elapsed();
-
-    let arabic = sidecar.loaded.arena.faces().len() - 1;
-    let filled = filled_in(&sidecar, arabic);
-    let letters: Vec<u16> = word
-        .chars()
-        .filter(|ch| !sidecar.loaded.primary_draws(*ch))
-        .filter_map(|ch| {
-            caustics_text::font::codepoint_curves(&data, index, ch)
-                .ok()
-                .flatten()
-        })
-        .map(|glyph| glyph.gid)
-        .collect();
-    if letters.is_empty() {
-        // DejaVu Sans, for one, carries Arabic itself: nothing reaches the
-        // fallback face, and there is no cover to check.
-        witness(&format!(
-            "tests: {} draws {word:?} itself; the cover test needs a primary without Arabic; skipping",
-            sidecar.loaded.family
-        ));
-        return;
-    }
-    let closure = caustics_text::closure::gsub_closure(
-        &data,
-        index,
-        &letters,
-        caustics_text::closure::Limits::COVER,
-    )
-    .expect("a face");
-    eprintln!(
-        "{word:?}: {} codepoint glyphs, {} filled after the closure, curves +{} KiB, {:.1} ms",
-        {
-            let mut distinct = letters.clone();
-            distinct.sort_unstable();
-            distinct.dedup();
-            distinct.len()
-        },
-        filled.len(),
-        (sidecar.loaded.curve_lengths().iter().sum::<usize>() - curves_before).div_ceil(1024),
-        took.as_secs_f64() * 1000.0,
-    );
-    assert!(
-        !closure.added.is_empty(),
-        "Noto Sans Arabic's letters substitute to nothing?"
-    );
-    for gid in closure.added.iter().chain(&letters) {
-        assert!(
-            filled.contains(&u32::from(*gid)),
-            "face gid {gid} is reachable and not filled"
-        );
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -737,7 +575,7 @@ fn a_second_cover_sends_the_records_it_filled_in_place() {
     replay(&mut bar, BUF_GLYPHS, &first);
     // The first answer's record tail ends where the second answer's begins.
     let watermark = bar.len();
-    assert_eq!(watermark, sidecar.loaded.curve_lengths()[3]);
+    assert_eq!(watermark, sidecar.loaded().curve_lengths()[3]);
 
     let mut second: Vec<u8> = Vec::new();
     sidecar
@@ -746,7 +584,7 @@ fn a_second_cover_sends_the_records_it_filled_in_place() {
     let second = frames(&second);
     replay(&mut bar, BUF_GLYPHS, &second);
 
-    let stride = size_of::<caustics_text::Glyph>();
+    let stride = size_of::<punchcutter_text::Glyph>();
     let below: Vec<(u32, usize)> = second
         .iter()
         .filter_map(|frame| match frame {
@@ -772,14 +610,14 @@ fn a_second_cover_sends_the_records_it_filled_in_place() {
     );
 
     // The bar's copy is the sidecar's, record for record — the whole promise.
-    let whole = sidecar.loaded.buffer(BUF_GLYPHS).expect("a known buffer");
+    let whole = crate::buffer(sidecar.loaded(), BUF_GLYPHS).expect("a known buffer");
     assert_eq!(bar.len(), whole.len());
     assert!(
         bar == *whole,
         "the bar's record table differs from the sidecar's"
     );
 
-    let arena = &sidecar.loaded.arena;
+    let arena = &sidecar.loaded().arena;
     let emoji = arena.faces().len() - 1;
     let info = arena.faces()[emoji];
     if info.glyph_count == 1895 {
@@ -796,7 +634,7 @@ fn a_second_cover_sends_the_records_it_filled_in_place() {
             }),
             "flagJapan's record was not in a write below the tail"
         );
-        let glyph = sidecar.loaded.curves.glyphs[record];
+        let glyph = sidecar.loaded().curves.glyphs[record];
         assert!(
             glyph.hband_count > 0 && glyph.vband_count > 0,
             "flagJapan's record is the blank"
@@ -818,7 +656,7 @@ fn a_second_cover_sends_the_records_it_filled_in_place() {
 
 /// Every non-ASCII character the tunables put into a `getStringHash` literal
 /// is either one the caustic composes into a run, listed in
-/// [`COMPOSED_CHARS`] so the font choice requires it, or the overview item's
+/// [`COMPOSED`] so the font choice requires it, or the overview item's
 /// glyph, a label the bar sends whole and the fallback chain can cover. A new
 /// composed glyph must join the list, or a font that lacks it is chosen and
 /// draws a box.
@@ -836,7 +674,7 @@ fn every_composed_literal_is_in_the_font_requirement() {
             let Some(end) = lit.find('"') else { break };
             for c in lit[..end].chars().filter(|c| !c.is_ascii()) {
                 assert!(
-                    COMPOSED_CHARS.contains(&c) || covered_whole.contains(&c),
+                    COMPOSED.contains(&c) || covered_whole.contains(&c),
                     "{c:?} (U+{:04X}) in {line:?} is neither a composed glyph the font must carry nor a whole label",
                     c as u32
                 );
@@ -845,18 +683,10 @@ fn every_composed_literal_is_in_the_font_requirement() {
             rest = &lit[end..];
         }
     }
-    for c in COMPOSED_CHARS {
+    for c in COMPOSED {
         assert!(
             seen.contains(c),
             "{c:?} is required of the font but no literal composes it"
         );
     }
-}
-
-#[test]
-fn the_composed_charset_is_asked_of_fontconfig_in_hex() {
-    assert_eq!(
-        pattern_with_composed("Noto Sans"),
-        "Noto Sans:charset=2193 2191 b0 2013 2026"
-    );
 }

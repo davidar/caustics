@@ -654,7 +654,7 @@ fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
 /// Every glyph of an all-ASCII bar comes out of the font.
 ///
 /// A driver's miscompile once drew the **first** glyph of every run as `.notdef` on RADV
-/// — the clock read `▮ed 16 Sep ▮0:54` — while `shape/examples/conform.rs`
+/// — the clock read `▮ed 16 Sep ▮0:54` — while the text engine's conformance runner
 /// shaped the same strings through the same `shapeRun` at 792/0 and
 /// `bar/bar-test.sh` passed 203/0 on lavapipe. Neither gate could see it: the
 /// harness dispatches its own entry point with its own requests and never the
@@ -737,7 +737,7 @@ fn every_glyph_of_an_ascii_bar_comes_out_of_the_font() {
         }
         checked += 1;
         for (offset, glyph) in runs[start..start + count].iter().enumerate() {
-            if glyph.flags & caustics_shape::abi::SHAPE_GLYPH_NOTDEF == 0 {
+            if glyph.flags & punchcutter_shape::abi::SHAPE_GLYPH_NOTDEF == 0 {
                 continue;
             }
             complaints.push(format!(
@@ -919,14 +919,14 @@ fn a_second_flag_draws_after_the_first_opened_its_face() {
         }
     };
     let sidecar =
-        match oracle.load_font_covered(caustics_glyphs::fallback::Chain::of([face]), &FLAGS) {
+        match oracle.load_font_covered(punchcutter_fonts::fallback::Chain::of([face]), &FLAGS) {
             Ok(sidecar) => sidecar,
             Err(err) => {
                 eprintln!("skipping the oracle: no font to shape with ({err:#})");
                 return;
             }
         };
-    let info = *sidecar.loaded.arena.faces().last().expect("a face");
+    let info = *sidecar.loaded().arena.faces().last().expect("a face");
     if info.glyph_count != 1895 {
         eprintln!(
             "skipping: Noto Emoji has {} glyphs, not the 1895 of the build flagJapan (1734) was read from",
@@ -970,24 +970,22 @@ fn a_second_flag_draws_after_the_first_opened_its_face() {
         shaped.len()
     );
     assert!(!shaped.is_empty(), "no run shaped 🇯🇵 to flagJapan");
-    let bad = caustics_shape::abi::SHAPE_GLYPH_NOTDEF | caustics_shape::abi::SHAPE_GLYPH_UNFILLED;
+    let bad =
+        punchcutter_shape::abi::SHAPE_GLYPH_NOTDEF | punchcutter_shape::abi::SHAPE_GLYPH_UNFILLED;
     assert!(
         shaped.iter().all(|glyph| glyph.flags & bad == 0),
         "flagJapan came out flagged: {shaped:?}"
     );
 
     // The GPU's record table is the sidecar's, and flagJapan's record has ink.
-    let want = sidecar
-        .loaded
-        .buffer(wire::BUF_GLYPHS)
-        .expect("a known buffer");
+    let want = caustics_glyphs::buffer(sidecar.loaded(), wire::BUF_GLYPHS).expect("a known buffer");
     let have = oracle.gpu.read_buffer(wire::BUF_GLYPHS, want.len() as u64);
     assert_eq!(have.len(), want.len());
     assert!(
         have == *want,
         "the GPU's glyph records differ from the sidecar's"
     );
-    let record = flag_japan as usize * size_of::<caustics_text::Glyph>();
+    let record = flag_japan as usize * size_of::<punchcutter_text::Glyph>();
     let hbands = word(&have, record + 4);
     let vbands = word(&have, record + 8);
     eprintln!("oracle: flagJapan's record on the GPU has {hbands} x {vbands} bands");
@@ -2369,7 +2367,7 @@ impl ReadBody {
 
 fn read_body(
     private: &[u8],
-    runs: &[caustics_shape::abi::ShapedGlyph],
+    runs: &[punchcutter_shape::abi::ShapedGlyph],
     region: &[u8],
     item: u32,
 ) -> ReadBody {
@@ -2390,7 +2388,7 @@ fn read_body(
             base = 0.0;
         }
         assert_eq!(
-            block_word(private, block, "flags") & caustics_shape::abi::SHAPE_RUN_NOTDEF,
+            block_word(private, block, "flags") & punchcutter_shape::abi::SHAPE_RUN_NOTDEF,
             0,
             "body block {block} drew a .notdef"
         );
@@ -3424,7 +3422,7 @@ fn the_chart_numbers_draw_from_the_font() {
             let glyphs = block_word(&private, block, "glyph_count");
             let width = f32::from_bits(block_word(&private, block, "size"));
             assert_eq!(
-                flags & caustics_shape::abi::SHAPE_RUN_NOTDEF,
+                flags & punchcutter_shape::abi::SHAPE_RUN_NOTDEF,
                 0,
                 "line {index}'s block {block} has a glyph the font lacks"
             );

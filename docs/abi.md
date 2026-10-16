@@ -97,9 +97,10 @@ both contracts.
 | `private` | one `Private`, stride from reflection | the caustic | the caustic; tests by reflection |
 | `ids`, `dst` | storage textures | `bar_visibility`, `bar_draw` | `bar_sample`, the swapchain |
 
-Set 1 is `text.slang`'s four curve buffers and set 2 the shape tables, both
-filled by `Bytes` frames (*Bytes*) and declared by those modules; the bar never
-reads a byte of either. The process writes `state` and `private` **never**.
+Set 1 is the text engine's four curve buffers, declared by its `text` module,
+and set 2 the shape tables, both filled by `Bytes` frames (*Bytes*); the bar
+never reads a byte of either. Their layouts are the engine's
+(punchcutter/docs/arena.md, *The curve buffers*, *A shaping dispatch*). The process writes `state` and `private` **never**.
 Both start zero (wgpu zero-initialises a buffer at creation) and the caustic
 initialises itself (*The private buffer*).
 
@@ -521,7 +522,7 @@ the menu level, the springs, the pointer's wake, and every value a witness is
 compared against.
 
 **`runs` is private in the same sense** and is a binding only because
-`shape.slang`'s `shapeRun` writes through an `RWStructuredBuffer<ShapedGlyph>`
+the engine's `shapeRun` writes through an `RWStructuredBuffer<ShapedGlyph>`
 handle, and an array inside a struct is not one. The process allocates
 `MAX_GLYPHS × 32` bytes for it and never writes or reads one of them, which
 is why `MAX_GLYPHS` is the one capacity of the caustic's own memory that
@@ -550,7 +551,7 @@ imported by `bar.slang` and by `bar_tunables.slang` (which needs
 `ITEM_KIND_COUNT` for `TEXT_PX` and `WHEN_*` for `DOCK_MENU`). It is the
 caustic's own module, hand-written, hot-reloadable, and **not a contract**: no
 Rust reads it. No id crosses the buffer. Tests reach into `private` by name
-through `caustics_core::slang::struct_offsets` (*Bindings and the oracle*), which is legibility, not a
+through `punchcutter_core::slang::struct_offsets` (*Bindings and the oracle*), which is legibility, not a
 promise.
 
 ### Bindings and the oracle
@@ -611,13 +612,14 @@ forwarded, under a header that says it is generated. Both files are
 checked-out `caustics/`, and slangc prefers the importing file's directory),
 written by `cargo run -p caustics-bar-abi --bin gen-slang`, and a unit test in the
 crate asserts the file on disk equals the rendering, naming that command
-when it does not. The OpenType arena's header is declared the same way in
-`shape/src/abi.rs`, through `caustics-core`'s `decl` module, and rendered into
-`caustics/shape_abi.slang` by `cargo run -p caustics-shape --bin gen-slang`.
+when it does not. The macros and the renderer are the text engine's
+(`punchcutter_core::decl`), which declares the OpenType arena's header the same
+way and checks in its own rendering, `shape_abi.slang`
+(punchcutter/docs/arena.md, *Declared once*).
 
 Two tests remain on the buffer side. The **layout test**: the macro also
 emits each struct's `offsets()` from `offset_of!`, and the test compares every
-struct in both tables against `caustics_core::slang::struct_offsets` of the
+struct in both tables against `punchcutter_core::slang::struct_offsets` of the
 reflection, both ways (a field on one side only fails). The **compile test**:
 every entry point in every swapchain-format variant, zero warnings. slangc
 lays out only the types a binding's layout needs, so a struct nothing binds
@@ -944,8 +946,8 @@ nowhere else to land. `Skipped { kind, why }` carries `why` as an enum
 (`Skip::{Kind, Length, Body}`), which is what lets the reader's caller key
 "one witness per kind per child" on it and count skips.
 
-The crate depends on `caustics-core` for the plain byte views and on nothing
-else. `SAMPLES_SIZE` (8336) is the `Samples` body's size, the constant a
+The crate depends on `punchcutter-core` for the plain byte views and the
+declare-once macros, and on nothing else. `SAMPLES_SIZE` (8336) is the `Samples` body's size, the constant a
 reader checks a frame's `len` against. The crate has its own tests for the
 wire (round trips, every reader rule above with a crafted stream, the
 builder); the buffer's layout and compile tests stay in `bar/src/abi/tests.rs`
@@ -981,23 +983,24 @@ struct BytesHeader {    // 16 B
 // then `len` bytes
 ```
 
-| `BUF_*` | | binding | element |
+| `BUF_*` | | binding | the engine's buffer |
 |---|---|---|---|
-| 1 | `BUF_POINTS` | set 1, 0 | `caustics_text::layout::Point`, 16 B |
-| 2 | `BUF_BANDS` | set 1, 1 | `Band`, 8 B |
-| 3 | `BUF_BAND_CURVES` | set 1, 2 | `CurveRef`, 4 B |
-| 4 | `BUF_GLYPHS` | set 1, 3 | `Glyph`, 64 B |
-| 5 | `BUF_SHAPE_FONT` | set 2, 0 (the `font` half of `ShapeParams`) | `caustics_shape::abi::ShapeFont` |
-| 6 | `BUF_OT` | set 2, 1 | 4 B (a word arena) |
+| 1 | `BUF_POINTS` | set 1, 0 | points |
+| 2 | `BUF_BANDS` | set 1, 1 | bands |
+| 3 | `BUF_BAND_CURVES` | set 1, 2 | band curves |
+| 4 | `BUF_GLYPHS` | set 1, 3 | glyph records |
+| 5 | `BUF_SHAPE_FONT` | set 2, 0 (the `font` half of `ShapeParams`) | `ShapeFont` |
+| 6 | `BUF_OT` | set 2, 1 | the arena |
 
-`BUF_LAST` = 6. `BUF_OT` is one arena: a fixed-capacity face directory
-(`caustics_shape::abi::OtHeader` and `OtFace`) and behind it every face's `cmap`,
-`hmtx`, `GDEF`, `GSUB` and `GPOS` **exactly as they sit in the font file**.
-`caustics/ot.slang` walks OpenType's own binary format; nothing on the bar's
-side of the wire, and nothing in `caustics-glyphs` either, reads a lookup. The
-arena's header is **generated** from `shape/src/abi.rs` into
-`caustics/shape_abi.slang` (*Declared once*), and is a wire contract too, since
-`caustics-glyphs` fills that arena over this frame.
+`BUF_LAST` = 6. The six are the text engine's buffers, byte for byte: their
+element types, strides and contents are punchcutter/docs/arena.md, *The curve
+buffers* and *The arena*, and this frame only says which one a run lands in.
+`BUF_OT` is the arena: a face directory and behind it every face's `cmap`,
+`hmtx`, `GDEF`, `GSUB` and `GPOS` exactly as they sit in the font file.
+Nothing on the bar's side of the wire, and nothing in `caustics-glyphs`
+either, reads a lookup. The arena's header (`shape_abi.slang`) is a wire
+contract too, since `caustics-glyphs` fills that arena over this frame, so it
+is one of the files the ABI hash covers (*The ABI hash*).
 
 **Reader rules**: `buffer` 0 or past `BUF_LAST` → skip (body); `len` ≠ the
 bytes present → skip (length); `offset + len > total` → skip (body). **The
@@ -1006,20 +1009,26 @@ write and its bind group re-created; the caustic's counts (`glyph_capacity`,
 the `ShapeFont` scalars, the arena's face count) come from the writer's own
 `total`, the `BUF_SHAPE_FONT` body and the arena's own header, never from the
 bar reading a byte of a table. The bar never validates the contents: a
-malformed table draws wrong and stalls nothing, because every index in
-`text.slang`, `ot.slang` and `shape.slang` is bounded, and `ot.slang` clamps
-the arena's stated length to the words the driver actually bound, so a
-header that arrives before its tables cannot send a walk off the end.
+malformed table draws wrong and stalls nothing, because every index the
+engine's modules take is bounded and the arena's stated length is clamped to
+the words the driver actually bound, so a header that arrives before its
+tables cannot send a walk off the end (punchcutter/docs/arena.md, *Bounded in
+time*).
 
-`BUF_OT` is the one buffer a sender writes **in three pieces**: the front
-block at offset 0 (rewritten whenever a face is opened), a face's fill bitmap
-in the middle, and the new face's tables as a tail. The others are a whole
-buffer or a tail.
+After the first full write, `caustics-glyphs` sends only what changed, the
+way punchcutter/docs/arena.md, *Keeping a GPU copy current*, describes: each
+curve buffer's tail, the glyph records a cover filled in place below what was
+already sent, and for `BUF_OT` three pieces: the front block at offset 0
+(rewritten whenever a face is opened), a face's fill bitmap in the middle,
+and the new face's tables as a tail. The tails go first and everything that
+names a glyph after them, because the wire has no transaction.
 
 ### Font: `WIRE_FONT`
 
 What the font is, sent once by the curves sidecar before its `Bytes` and
-again if the font changes.
+again if the font changes: the facts the text engine's loaded font carries
+that the caustic sizes text by, and nothing about the buffers' contents
+(punchcutter/docs/arena.md, *The curve buffers*, has those).
 
 ```
 struct FontBody {       // 32 B
@@ -1040,7 +1049,10 @@ Reader rules: `upem` 0, `cap_height` ≤ 0, `icon_base < glyph_count` → skip
 
 The curves sidecar's answer to a `Request` of kind `REQ_GLYPH`: the name
 became a glyph id (its curves arrived, or are arriving, as `Bytes`), or it
-could not.
+could not. A symbolic icon's filled paths go through the text engine's icon
+loader into the same curve buffers as the font's glyphs, so an icon is one
+more record in the merged glyph space (punchcutter/docs/arena.md, *The merged
+glyph space*).
 
 ```
 struct GlyphBody {      // 16 B
@@ -1090,7 +1102,8 @@ text block the caustic flagged as having a glyph the font lacks (an
 bar's own copy of those bytes, capped like every other name by
 `MAX_NAME_LEN`. The bar decodes none of it. Which codepoints are missing,
 which face on the fontconfig chain has them, and what they cost is the
-sidecar's business, and the answer is the curve buffers, the `cmap` and
+sidecar's business (the text engine's cover, punchcutter/docs/arena.md, *The
+merged glyph space*), and the answer is the curve buffers, the arena and
 `BUF_SHAPE_FONT` growing under *Bytes*'s incremental rule. The run then
 re-shapes against the bigger font, loses its flag, and leaves the list.
 
@@ -1288,15 +1301,18 @@ contract:
 
 1. `caustics/bar_abi.slang`, the buffer contract rendered;
 2. `caustics/bar_wire.slang`, the wire as the GPU reads it, rendered;
-3. `caustics/shape_abi.slang`, the OpenType arena's header, rendered by
-   `caustics-shape` from the same tables;
+3. `shape_abi.slang`, the OpenType arena's header, rendered by the text
+   engine from the same kind of tables and read from the engine's own Slang
+   directory (`punchcutter_core::slang_dir()`, a build-dependency of
+   `caustics-bar-abi`), so a dependency bump that changes the arena is a new
+   set;
 4. `bar/abi/src/wire.rs`, the framing, the kinds, the caps and the `BUF_*`
    numbers, none of which has a Slang half to be rendered into;
 5. `bar/abi/src/entries.rs`, the entry list a `Module` frame is named by.
 
-The first three are generated and checked in, and the generated-file test
-fails when a rendering differs from the file, so hashing the file is hashing
-the declaration. The last two are hashed as source, comments and all: coarse
+The first three are generated and checked in, and each one's generated-file
+test (the third's is the engine's) fails when a rendering differs from the
+file, so hashing the file is hashing the declaration. The last two are hashed as source, comments and all: coarse
 in the safe direction, since a comment edit makes a new set, and a set is
 installed whole (`bar/install.sh`).
 

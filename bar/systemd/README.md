@@ -147,7 +147,7 @@ Environment="CAUSTICS_SIDECARS=caustics-sysmon caustics-glyphs /path/to/target/r
 
 **A sidecar's settings are its own**; the bar passes none on. `caustics-sysmon`
 reads `$CAUSTICS_SYSMON_CHARTS` (`sysmon/README.md` lists every chart word), and
-`caustics-glyphs` reads `$CAUSTICS_FONT`. Set them on the bar's unit, which every
+`caustics-glyphs`'s text engine reads `$PUNCHCUTTER_FONT`. Set them on the bar's unit, which every
 sidecar inherits, and restart it:
 
 ```ini

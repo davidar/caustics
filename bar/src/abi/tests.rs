@@ -51,7 +51,7 @@ fn command_layout() {
     assert_eq!(MAX_COMMANDS, 256);
 }
 
-/// The run buffer's stride is `caustics_shape::ShapedGlyph`'s size, and
+/// The run buffer's stride is `punchcutter_shape::ShapedGlyph`'s size, and
 /// `GLYPH_BUFFER_SIZE` spells the 32 as a literal because a sidecar
 /// importing `caustics-bar-abi` has no business pulling a font parser in with
 /// it. This is the pair, pinned — the note beside the constant names this
@@ -61,13 +61,13 @@ fn command_layout() {
 /// request's string a glyph came from, which bidi reordering needs.
 #[test]
 fn the_glyph_record_is_thirty_two_bytes() {
-    assert_eq!(size_of::<caustics_shape::ShapedGlyph>(), 32);
+    assert_eq!(size_of::<punchcutter_shape::ShapedGlyph>(), 32);
     assert_eq!(GLYPH_BUFFER_SIZE, 32 * MAX_GLYPHS as u64);
     assert_eq!(STRINGS_BUFFER_SIZE, 4 * MAX_STRING_WORDS as u64);
     // And a block never asks the shaper for more slots than it will write:
     // `Build::text` caps a block at `MAX_RUN_GLYPHS` slots, and the caustic
     // caps a run at the same number.
-    assert!(caustics_shape::MAX_RUN_GLYPHS as usize <= MAX_GLYPHS);
+    assert!(punchcutter_shape::MAX_RUN_GLYPHS as usize <= MAX_GLYPHS);
 }
 
 /// One literal of the pool: 16 B, four plain words.
@@ -353,16 +353,16 @@ fn byte_views_round_trip() {
 // -----------------------------------------------------------------------
 // The caustic. Everything below runs slangc over `caustics/bar.slang` — the
 // two halves of the ABI cannot drift silently, and the entry points cannot rot in either swapchain format, without one of these two tests
-// going red. Modelled on `caustics_core::slang`'s own compile tests.
+// going red. Modelled on `punchcutter_core::slang`'s own compile tests.
 //
-// The slangc invocation *is* `caustics_core::slang`'s, not a copy of it: the
+// The slangc invocation *is* `punchcutter_core::slang`'s, not a copy of it: the
 // same flags in the same order the build script baked with and
 // the reload loop recompiles with, so what is tested and what runs cannot drift.
 // -----------------------------------------------------------------------
 
 use std::path::{Path, PathBuf};
 
-use caustics_core::slang::{self, SlangError};
+use punchcutter_core::slang::{self, SlangError};
 
 /// The repository's `caustics/` directory, resolved against this crate so
 /// the tests do not care about the harness's working directory.
@@ -374,8 +374,31 @@ fn bar_slang() -> PathBuf {
     caustics_dir().join("bar.slang")
 }
 
+/// The include path every compile of the caustic takes: its own directory,
+/// then the text engine's modules.
+fn includes() -> [PathBuf; 2] {
+    [caustics_dir(), punchcutter_core::slang_dir().to_path_buf()]
+}
+
+/// slangc's reflection of `bar.slang` for one entry point, from a compile
+/// with the caustic's include path ([`includes`]): the JSON
+/// `slang::struct_offsets` and `slang::bindings` read.
+fn reflect_bar(entry: &str, defines: &[&str]) -> Result<String, SlangError> {
+    let includes = includes();
+    let includes: Vec<&Path> = includes.iter().map(PathBuf::as_path).collect();
+    slang::compile_capturing(
+        &slang::slangc_program(),
+        &bar_slang(),
+        entry,
+        defines,
+        &[],
+        &includes,
+    )
+    .map(|compiled| compiled.reflection)
+}
+
 /// Whether a failure means "slangc is not installed", in which case every
-/// caller skips rather than fails — the same posture `caustics_core::slang`
+/// caller skips rather than fails — the same posture `punchcutter_core::slang`
 /// takes for `spirv-val`, and what lets a checkout without the Slang
 /// toolchain still `cargo test` green.
 fn is_missing_toolchain(err: &SlangError) -> Option<String> {
@@ -395,9 +418,9 @@ fn is_missing_toolchain(err: &SlangError) -> Option<String> {
 /// walks both tables and compares each struct against the reflection **both
 /// ways**: a field on one side only fails. A table written out again here would leave a struct added to the ABI untested until someone remembered this file.
 ///
-/// The structs the bar shares with `caustics-shape` and `caustics-text` are not in
-/// either table — they are those crates' contracts — so they stay as the
-/// explicit list below.
+/// The structs the bar shares with `punchcutter-shape` and `punchcutter-text`
+/// are not in either table — they are the text engine's contracts — so they
+/// stay as the explicit list below.
 ///
 /// `bar_apply` is enough for all of them: slangc reflects the whole global
 /// parameter block of the module, not only what one entry point happens to
@@ -406,7 +429,7 @@ fn is_missing_toolchain(err: &SlangError) -> Option<String> {
 fn the_slang_layout_matches_this_one() {
     use std::collections::BTreeMap;
 
-    let json = match slang::reflect(&bar_slang(), "bar_apply", &["DST_FORMAT_RGBA8"], &[]) {
+    let json = match reflect_bar("bar_apply", &["DST_FORMAT_RGBA8"]) {
         Ok(json) => json,
         Err(err) => match is_missing_toolchain(&err) {
             Some(why) => {
@@ -443,14 +466,17 @@ fn the_slang_layout_matches_this_one() {
         (
             "ShapedGlyph",
             vec![
-                ("gid", offset_of!(caustics_shape::ShapedGlyph, gid)),
-                ("x", offset_of!(caustics_shape::ShapedGlyph, x)),
-                ("y", offset_of!(caustics_shape::ShapedGlyph, y)),
-                ("cluster", offset_of!(caustics_shape::ShapedGlyph, cluster)),
-                ("flags", offset_of!(caustics_shape::ShapedGlyph, flags)),
-                ("_rsvd0", offset_of!(caustics_shape::ShapedGlyph, _rsvd0)),
-                ("_rsvd1", offset_of!(caustics_shape::ShapedGlyph, _rsvd1)),
-                ("_rsvd2", offset_of!(caustics_shape::ShapedGlyph, _rsvd2)),
+                ("gid", offset_of!(punchcutter_shape::ShapedGlyph, gid)),
+                ("x", offset_of!(punchcutter_shape::ShapedGlyph, x)),
+                ("y", offset_of!(punchcutter_shape::ShapedGlyph, y)),
+                (
+                    "cluster",
+                    offset_of!(punchcutter_shape::ShapedGlyph, cluster),
+                ),
+                ("flags", offset_of!(punchcutter_shape::ShapedGlyph, flags)),
+                ("_rsvd0", offset_of!(punchcutter_shape::ShapedGlyph, _rsvd0)),
+                ("_rsvd1", offset_of!(punchcutter_shape::ShapedGlyph, _rsvd1)),
+                ("_rsvd2", offset_of!(punchcutter_shape::ShapedGlyph, _rsvd2)),
             ],
         ),
         // Every word of `ShapeFont`, not a subset. It is four words: the
@@ -459,34 +485,43 @@ fn the_slang_layout_matches_this_one() {
         (
             "ShapeFont",
             vec![
-                ("upem", offset_of!(caustics_shape::ShapeFont, upem)),
+                ("upem", offset_of!(punchcutter_shape::ShapeFont, upem)),
                 (
                     "glyph_count",
-                    offset_of!(caustics_shape::ShapeFont, glyph_count),
+                    offset_of!(punchcutter_shape::ShapeFont, glyph_count),
                 ),
-                ("ascender", offset_of!(caustics_shape::ShapeFont, ascender)),
+                (
+                    "ascender",
+                    offset_of!(punchcutter_shape::ShapeFont, ascender),
+                ),
                 (
                     "descender",
-                    offset_of!(caustics_shape::ShapeFont, descender),
+                    offset_of!(punchcutter_shape::ShapeFont, descender),
                 ),
             ],
         ),
         (
             "TextGlyph",
             vec![
-                ("band_base", offset_of!(caustics_text::Glyph, band_base)),
-                ("hband_count", offset_of!(caustics_text::Glyph, hband_count)),
-                ("vband_count", offset_of!(caustics_text::Glyph, vband_count)),
-                ("flags", offset_of!(caustics_text::Glyph, flags)),
+                ("band_base", offset_of!(punchcutter_text::Glyph, band_base)),
+                (
+                    "hband_count",
+                    offset_of!(punchcutter_text::Glyph, hband_count),
+                ),
+                (
+                    "vband_count",
+                    offset_of!(punchcutter_text::Glyph, vband_count),
+                ),
+                ("flags", offset_of!(punchcutter_text::Glyph, flags)),
                 (
                     "band_transform",
-                    offset_of!(caustics_text::Glyph, band_transform),
+                    offset_of!(punchcutter_text::Glyph, band_transform),
                 ),
-                ("bounds", offset_of!(caustics_text::Glyph, bounds)),
-                ("advance", offset_of!(caustics_text::Glyph, advance)),
-                ("_rsvd0", offset_of!(caustics_text::Glyph, _rsvd0)),
-                ("_rsvd1", offset_of!(caustics_text::Glyph, _rsvd1)),
-                ("_rsvd2", offset_of!(caustics_text::Glyph, _rsvd2)),
+                ("bounds", offset_of!(punchcutter_text::Glyph, bounds)),
+                ("advance", offset_of!(punchcutter_text::Glyph, advance)),
+                ("_rsvd0", offset_of!(punchcutter_text::Glyph, _rsvd0)),
+                ("_rsvd1", offset_of!(punchcutter_text::Glyph, _rsvd1)),
+                ("_rsvd2", offset_of!(punchcutter_text::Glyph, _rsvd2)),
             ],
         ),
     ]);
@@ -567,11 +602,11 @@ fn the_samples_body_is_8336_bytes_in_the_documented_layout() {
 fn the_caustic_compiles_for_every_variant() {
     let source = bar_slang();
     let slangc = slang::slangc_program();
-    let caustics = caustics_dir();
-    let includes: [&Path; 1] = [&caustics];
+    let includes = includes();
+    let includes: Vec<&Path> = includes.iter().map(PathBuf::as_path).collect();
 
     for entry in ENTRIES {
-        for format in caustics_core::DstFormat::ALL {
+        for format in caustics_bar_abi::DstFormat::ALL {
             let (define, extra) = format.args();
             // `compile_capturing` runs `spirv-val` over the module itself
             // where SPIRV-Tools is installed, so a rejected module is an
@@ -691,7 +726,7 @@ fn the_dock_menu_is_four_tunable_rows_whose_words_slangc_knows() {
 
     // ...and every one of those labels reaches the embassy the only way it
     // can: through the reflection of the program `bar_apply` is compiled from.
-    let json = match slang::reflect(&bar_slang(), "bar_apply", &["DST_FORMAT_RGBA8"], &[]) {
+    let json = match reflect_bar("bar_apply", &["DST_FORMAT_RGBA8"]) {
         Ok(json) => json,
         Err(err) => match is_missing_toolchain(&err) {
             Some(why) => {
@@ -1189,7 +1224,7 @@ fn the_clock_composes_what_strftime_would() {
 
     // Every one of those words reaches the GPU the only way it can: through the
     // literal pool, whose bytes are the reflection's `hashedStrings`.
-    let json = match slang::reflect(&bar_slang(), "bar_compose", &["DST_FORMAT_RGBA8"], &[]) {
+    let json = match reflect_bar("bar_compose", &["DST_FORMAT_RGBA8"]) {
         Ok(json) => json,
         Err(err) => match is_missing_toolchain(&err) {
             Some(why) => {
@@ -1238,7 +1273,7 @@ fn the_overview_and_caffeine_icons_are_the_tunables_own_lists() {
         "and they are told apart by the icon and nothing else"
     );
 
-    let json = match slang::reflect(&bar_slang(), "bar_build", &["DST_FORMAT_RGBA8"], &[]) {
+    let json = match reflect_bar("bar_build", &["DST_FORMAT_RGBA8"]) {
         Ok(json) => json,
         Err(err) => match is_missing_toolchain(&err) {
             Some(why) => {
@@ -1336,4 +1371,88 @@ fn a_label_is_its_first_line() {
     // A multi-byte codepoint is never split: the rule looks at ASCII bytes
     // only, and every byte of a UTF-8 sequence past the first is >= 0x80.
     assert_eq!(first_line("héllo\nworld".as_bytes()), "héllo".as_bytes());
+}
+
+/// The bar's own caustic, reflected for real: the 23 bindings across three
+/// spaces that `bar/src/gpu.rs` builds its layouts from, and the two facts
+/// about them the layout cannot get from anywhere else.
+///
+/// `bar/src/gpu/tests.rs` pins the counts against the *baked* JSON; this one
+/// stands between a slangc whose output shape moved and a bar that panics at
+/// startup.
+#[test]
+fn the_bars_caustic_reflects_its_bindings() {
+    let json = match reflect_bar("bar_shape", &["DST_FORMAT_RGBA8"]) {
+        Ok(json) => json,
+        Err(err) => match is_missing_toolchain(&err) {
+            Some(why) => {
+                eprintln!("skipping the binding check: slangc is not runnable ({why})");
+                return;
+            }
+            None => panic!("the bar's caustic should reflect:\n{err}"),
+        },
+    };
+    let bindings = slang::bindings(&json).expect("the bar's own reflection classifies");
+
+    // 23: set 2 holds the font as one arena of verbatim OpenType bytes, and the rows and answers arenas sit
+    // in set 0 (docs/abi.md, *The arenas*). A change here is an ABI change.
+    assert_eq!(bindings.len(), 23, "{bindings:#?}");
+    let spaces: std::collections::BTreeSet<u32> =
+        bindings.iter().map(|binding| binding.set).collect();
+    assert_eq!(spaces, [0, 1, 2].into_iter().collect());
+
+    // Every set is dense from zero, which is what makes a positional layout
+    // list legal at all (wgpu-hal numbers a Vulkan binding by position).
+    for space in spaces {
+        let indices: Vec<u32> = bindings
+            .iter()
+            .filter(|binding| binding.set == space)
+            .map(|binding| binding.index)
+            .collect();
+        assert_eq!(
+            indices,
+            (0..indices.len() as u32).collect::<Vec<u32>>(),
+            "space {space} has a gap"
+        );
+    }
+
+    let named = |name: &str| {
+        bindings
+            .iter()
+            .find(|binding| binding.name == name)
+            .unwrap_or_else(|| panic!("`{name}` is not among {bindings:#?}"))
+            .clone()
+    };
+    // The two storage images, which is the pair whose texel format the
+    // reflection cannot carry on the Bgra8 variant.
+    assert_eq!(
+        named("ids").kind,
+        slang::BindingKind::StorageTexture { write_only: false }
+    );
+    assert_eq!(
+        named("dst").kind,
+        slang::BindingKind::StorageTexture { write_only: true }
+    );
+    // The fixed-slot image array, and the one plain 2D preview.
+    assert_eq!(
+        named("images").kind,
+        slang::BindingKind::Texture { array: true }
+    );
+    assert_eq!(
+        named("preview").kind,
+        slang::BindingKind::Texture { array: false }
+    );
+    // `State` is one element, so its stride is the whole state buffer. The
+    // exact size is `caustics-bar`'s to pin (its ABI test compares slangc's layout
+    // against `size_of::<State>()` on every build) and it moves with every ABI
+    // bump, so here it is only "read-write, and reflected at all".
+    match named("state").kind {
+        slang::BindingKind::Storage {
+            read_only: false,
+            stride: Some(stride),
+        } => {
+            assert!(stride > 0, "the state buffer's stride is zero");
+        }
+        other => panic!("`state` is {other:?}, not a read-write storage buffer with a stride"),
+    }
 }

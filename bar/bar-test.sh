@@ -401,15 +401,6 @@ else
     fail "the oracle's test binary did not build"
 fi
 
-# The shaper's fuzzer, built here: a fresh worktree has no examples.
-GARBAGE_BIN="$REPO/target/debug/examples/garbage"
-(cd "$REPO" && cargo build --offline -p caustics-shape --example garbage) >/dev/null 2>&1 || true
-if [[ -x "$GARBAGE_BIN" ]]; then
-    pass "the shaper's fuzzer ($(basename "$GARBAGE_BIN"))"
-else
-    fail "the shaper's fuzzer did not build"
-fi
-
 # A battery for a target that has none (the battery-menu step).
 FAKE_UPOWER_BIN="$REPO/target/debug/examples/fake_upower"
 (cd "$REPO" && cargo build --offline -p caustics-power --example fake_upower) >/dev/null 2>&1 || true
@@ -470,19 +461,26 @@ if [[ -n "$ORACLE_BIN" ]]; then
     gscp "$ORACLE_BIN" tester@127.0.0.1:caustics-bar-oracle && pass "oracle binary" ||
         fail "oracle binary"
 fi
-if [[ -x "$GARBAGE_BIN" ]]; then
-    gscp "$GARBAGE_BIN" tester@127.0.0.1:caustics-shape-garbage && pass "fuzzer binary" ||
-        fail "fuzzer binary"
-fi
 # Every module `bar.slang` imports or includes: a directory missing one starts
 # off the baked SPIR-V and **cannot reload** (`cannot open file`), failing every
-# later swap. The list holds at least the files `caustics-reload`'s `WATCHED` names.
+# later swap. The list holds at least the files `caustics-reload`'s `WATCHED`
+# and `ENGINE` name. The engine's modules go into the same directory: a
+# compile searches the caustic's own directory first, and a target need not
+# have the checkout `punchcutter_core::slang_dir()` names.
+engine_slang=$( (cd "$REPO" && cargo metadata --offline --locked --format-version 1) |
+    python3 -c 'import json, os, sys
+for p in json.load(sys.stdin)["packages"]:
+    if p["name"] == "punchcutter-core":
+        print(os.path.normpath(os.path.join(os.path.dirname(p["manifest_path"]), "..", "slang")))
+        break')
+engine_modules=()
+for module in text.slang shape.slang ot.slang shape_abi.slang; do
+    engine_modules+=("$engine_slang/$module")
+done
 gscp "$REPO"/caustics/bar.slang "$REPO"/caustics/bar_abi.slang \
     "$REPO"/caustics/bar_wire.slang "$REPO"/caustics/bar_model.slang \
-    "$REPO"/caustics/bar_tunables.slang "$REPO"/caustics/text.slang \
-    "$REPO"/caustics/ot.slang "$REPO"/caustics/shape.slang \
-    "$REPO"/caustics/shape_abi.slang \
-    "$REPO"/caustics/bar_check.slang "$REPO"/caustics/shape_demo.slang \
+    "$REPO"/caustics/bar_tunables.slang "$REPO"/caustics/bar_check.slang \
+    "${engine_modules[@]}" \
     tester@127.0.0.1:caustics-bar/caustics/ && pass "caustics" || fail "caustics"
 gscp "$REPO"/bar/systemd/caustics-bar.service \
     tester@127.0.0.1:.config/systemd/user/caustics-bar.service && pass "unit" || fail "unit"
@@ -598,22 +596,6 @@ assert_contains "a notification's body wraps under its summary" "$oracle_out" \
 # A toast's rows name themselves when clicked, even across a re-indexing build.
 assert_contains "a toast is the rows it opened with" "$oracle_out" \
     "oracle: a toast is the rows it opened with, and a click names the row under it"
-
-say "2c. the shaper's fuzzer: a damaged arena never stalls"
-# Lavapipe only: there a stall is a slow process; on a real GPU, a ring reset.
-if vm_only "the fuzzer runs on lavapipe, where a stall is a slow process; on a real GPU it is a ring reset under the developer's session"; then
-# The real arena with seeded damage, 200 dispatches (lavapipe is slow) each
-# under a wall-clock cap. It catches a loop in `ot.slang`/`shape.slang` whose
-# trip count comes from the arena: on damaged data such a loop can run long
-# enough for the driver to reset the ring (`reload/src/tests.rs` lints the source).
-garbage_out=$(on_target 600 'cd "$T_HOME" && vk_env && SLANGC=$T_SLANGC \
-    CAUSTICS_DIR=$T_CAUSTICS \
-    "$T_GARBAGE" --mutate 200 2>&1' | tail -12)
-note "$(printf '%s' "$garbage_out" | grep -E 'clock|mutations|warm-up' | tail -6)"
-assert_contains "the fuzzer ran every mutation under its cap" \
-    "$garbage_out" "mutations: worst dispatch"
-assert_contains "and the kernel holds a wall-clock deadline" "$garbage_out" "shader clock: Device"
-fi
 
 say "3. wake the session, then output scale 2"
 # The guest parks and locks after ~30 minutes idle; a nested output never does.
@@ -3913,12 +3895,19 @@ if vm_only "a malformed arena can hang a real GPU's ring; on lavapipe a hang is 
 # arena's buffer number, handed to a *running* bar after the real font. The
 # in-kernel deadline keeps the walk short, so the bar draws nonsense and must
 # survive (the ABI-hash greeting prevents it in practice; the next step proves
-# the watchdog).
-gssh 300 'cd ~ && VK_DRIVER_FILES=$HOME/lvp_icd.json \
-    VK_LOADER_LAYERS_DISABLE="~all~" SLANGC=$HOME/.local/bin/slangc \
-    CAUSTICS_DIR=$HOME/caustics-bar/caustics \
-    ./caustics-shape-garbage --dump-mismatch $HOME/bad-arena.bin 2>&1 | tail -1' |
-    while read -r line; do note "$line"; done
+# the watchdog). The array is the shape a `cmap` flattens to: one `u32`
+# codepoint and one `u32` glyph id a pair, sorted by codepoint, over the ranges
+# a Latin, Greek and Cyrillic UI font covers. Read as an arena, its first pair
+# is a version and a face count.
+python3 - "$SHOTS/bad-arena.bin" <<'PY'
+import struct, sys
+ranges = [(0x20, 0x7F), (0xA0, 0x250), (0x370, 0x400), (0x400, 0x530), (0x2000, 0x2C00)]
+pairs = [cp for lo, hi in ranges for cp in range(lo, hi)]
+with open(sys.argv[1], "wb") as out:
+    for gid, cp in enumerate(pairs, start=3):
+        out.write(struct.pack("<II", cp, gid))
+PY
+gscp "$SHOTS/bad-arena.bin" tester@127.0.0.1:bad-arena.bin >/dev/null
 arena_bytes=$(gssh 20 'stat -c %s ~/bad-arena.bin 2>/dev/null || echo 0')
 if [[ "${arena_bytes:-0}" -gt 1024 ]]; then
     pass "the mismatch arena is $arena_bytes bytes"

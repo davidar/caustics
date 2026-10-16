@@ -1,6 +1,6 @@
 //! Bakes `caustics/bar.slang` into SPIR-V, once per swapchain format.
 //!
-//! The slangc driver is `caustics_core::slang`, the same one `caustics-reload` calls
+//! The slangc driver is `punchcutter_core::slang`, the same one `caustics-reload` calls
 //! at run time, so a baked caustic and a hot-reloaded one are compiled alike.
 //! Its `compile_capturing` takes `(program, source, entry, defines, extra_args, includes)`;
 //! the search path is the source's own directory — which is exactly
@@ -13,15 +13,10 @@
 
 use std::path::{Path, PathBuf};
 
-use caustics_core::DstFormat;
-use caustics_core::slang;
-
-// The entry points, from the one place they are named (`caustics-bar-abi`
-// `include!`s the same file and re-exports it as `abi::ENTRIES`, and the
-// compiler sidecar reads it from there — one list, no copies). A build script
-// cannot depend on the crate it builds, which is why this is an `include!` and
-// not a `use`.
-include!("abi/src/entries.rs");
+// The entry points and the swapchain formats, from the one place each is
+// named: the compiler sidecar reads the same two from the same crate.
+use caustics_bar_abi::{DstFormat, ENTRIES};
+use punchcutter_core::slang;
 
 fn main() {
     let caustics = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../caustics");
@@ -41,20 +36,22 @@ fn main() {
         "bar_wire.slang",
         "bar_model.slang",
         "bar_tunables.slang",
-        "text.slang",
-        "shape.slang",
-        "shape_abi.slang",
-        "ot.slang",
     ] {
         println!("cargo:rerun-if-changed={}", caustics.join(module).display());
     }
+    // And the engine's, which the baked SPIR-V contains as much as the bar's
+    // own. An engine change normally arrives as a dependency bump, which
+    // rebuilds this crate anyway; naming the files covers a local checkout.
+    let engine = punchcutter_core::slang_dir();
+    for module in ["text.slang", "shape.slang", "shape_abi.slang", "ot.slang"] {
+        println!("cargo:rerun-if-changed={}", engine.join(module).display());
+    }
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=abi/src/entries.rs");
     println!("cargo:rerun-if-env-changed=SLANGC");
 
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     let slangc = slang::slangc_program();
-    let includes: [&Path; 1] = [&caustics];
+    let includes: [&Path; 2] = [&caustics, engine];
     let mut reflected = false;
 
     for format in DstFormat::ALL {

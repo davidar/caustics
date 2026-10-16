@@ -13,10 +13,16 @@ caustics-sidecar = { path = "../sidecar", features = ["icons"] }
 # The wire, and the whole of what this binary knows about the bar: it writes
 # `Bytes` runs for the six `BUF_*` buffers and answers a `Request`.
 caustics-bar-abi = { path = "../bar/abi" }
-# Glyphs and icons as Bézier curves with Slug's band tables. The band search —
-# 187 of the 198 ms a cold Noto Sans costs — happens in this process, not the
-# bar's.
-caustics-text = { path = "../text" }
-# The arena: `cmap`, `hmtx`, `GDEF`, `GSUB` and `GPOS` sliced out of the font
-# verbatim, behind a directory.
-caustics-shape = { path = "../shape" }
+# The font: found through fontconfig, turned into curves and band tables (the
+# band search, most of a cold load, happens in this process, not the bar's),
+# its arena sliced out, and the fallback faces a cover opens.
+punchcutter-fonts.workspace = true
+# Icons as curves into the same buffers (`icon::load_file`, `Builder`), and the
+# glyph record's stride.
+punchcutter-text.workspace = true
+# The arena's front block, which a cover resends (`OT_TABLES_START`).
+punchcutter-shape.workspace = true
+# The engine reports through `tracing`; this process turns each event into a
+# witness line, so a cover says what it did in the bar's journal.
+tracing = "0.1"
+tracing-subscriber = "0.3"
