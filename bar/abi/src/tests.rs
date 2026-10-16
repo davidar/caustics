@@ -1,50 +1,44 @@
-use std::path::{Path, PathBuf};
-
-use crate::GEN_COMMAND;
-
-/// The repository's `caustics/`, resolved against this crate so the test does
-/// not care about the harness's working directory.
-fn caustics_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../caustics")
-}
-
-/// The checked-in Slang is the rendering of the declarations, byte for byte.
-///
-/// Both files are checked in rather than generated at build time because
-/// slangc resolves an import from the importing file's own directory before
-/// any `-I`: `caustics-reload` and the reflection test hand it the
-/// checked-out `caustics/`, and a file that only existed in `OUT_DIR` would
-/// not be there. So this is the guard that the two stay the same thing.
+/// The rendered modules are written once into a directory named by the hash,
+/// and what is there is the rendering, byte for byte: a compile at run time
+/// puts this directory on slangc's include path and reads nothing else for
+/// `import bar_abi;`.
 #[test]
-fn the_checked_in_slang_is_the_rendering() {
-    let (abi, wire) = crate::slang_source();
-    for (name, rendered) in [("bar_abi.slang", abi), ("bar_wire.slang", wire)] {
-        let path = caustics_dir().join(name);
+fn the_rendered_dir_holds_the_rendering() {
+    let dir = crate::rendered_dir();
+    assert!(dir.is_absolute(), "{} is not absolute", dir.display());
+    assert_eq!(
+        dir.file_name().and_then(|name| name.to_str()),
+        Some(format!("{:016x}", crate::ABI_HASH).as_str()),
+        "{} is not named by the ABI hash",
+        dir.display()
+    );
+    let rendered = crate::rendered();
+    assert_eq!(
+        rendered.each_ref().map(|(name, _)| *name),
+        crate::RENDERED,
+        "rendered() names its modules as RENDERED does"
+    );
+    for (name, text) in rendered {
+        let path = dir.join(name);
         let on_disk = std::fs::read_to_string(&path)
             .unwrap_or_else(|err| panic!("could not read {}: {err}", path.display()));
-        if on_disk == rendered {
-            continue;
-        }
-        let line = on_disk
-            .lines()
-            .zip(rendered.lines())
-            .position(|(a, b)| a != b)
-            .map_or_else(
-                || "the end".to_string(),
-                |index| format!("line {}", index + 1),
-            );
-        panic!(
-            "{} is not what the declarations render ({line} differs). \
-             It is generated: run `{GEN_COMMAND}`.",
+        assert!(
+            on_disk == text,
+            "{} is not what the declarations render",
             path.display()
         );
     }
+    assert_eq!(
+        crate::rendered_dir(),
+        dir,
+        "the directory is resolved once per process"
+    );
 }
 
 /// `ABI_HASH` is a hash of something.
 ///
 /// There is no second copy to compare it against — that is the point of it —
-/// so what can be asserted is that `build.rs` read its five files and folded
+/// so what can be asserted is that `build.rs` read its four inputs and folded
 /// them in: a value still at FNV's offset basis means it hashed nothing, and
 /// zero means it was never written at all. The property that matters, "the
 /// number moves when the contract does", is `build.rs`'s `rerun-if-changed`
@@ -86,7 +80,7 @@ fn the_two_modules_declare_disjoint_names() {
 /// and a constant would be a second copy that could drift.
 #[test]
 fn no_binding_number_is_declared_as_a_constant() {
-    let (abi, wire) = crate::slang_source();
+    let [(_, abi), (_, wire)] = crate::rendered();
     for gone in [
         // The bindings are read from the reflection by name (docs/abi.md, *Bindings and the oracle*).
         "SAMPLES_BINDING",

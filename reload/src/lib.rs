@@ -45,8 +45,8 @@
 //! # The cache: the same bytes are never compiled twice
 //!
 //! Every generation is written to `$XDG_CACHE_HOME/caustics/reload/`, keyed on
-//! the **content** of what reaches slangc (the `.slang` files [`WATCHED`] and
-//! [`ENGINE`] name), the format define and slangc's own version string; a lookup whose
+//! the **content** of what reaches slangc (the `.slang` files [`WATCHED`],
+//! [`RENDERED`] and [`ENGINE`] name), the format define and slangc's own version string; a lookup whose
 //! inputs hash to an entry already there reads it and compiles nothing.
 //! Content, not mtimes: an editor that rewrites a file with the same bytes has
 //! to hit, and a `git checkout` that restores older bytes with an older mtime
@@ -75,33 +75,41 @@ pub mod watch;
 /// The bar caustic and the modules of its own it imports, all in `caustics/`.
 ///
 /// A change to any of them has to reach the running bar the same way a change
-/// to the tunables does. `bar_abi.slang` and `bar_wire.slang` are generated
-/// from the Rust declarations, and `bar_model.slang` is the caustic's own
-/// helpers.
-pub const WATCHED: &[&str] = &[
-    "bar.slang",
-    "bar_abi.slang",
-    "bar_wire.slang",
-    "bar_model.slang",
-    TUNABLES,
-];
+/// to the tunables does. `bar_model.slang` is the caustic's own helpers.
+pub const WATCHED: &[&str] = &["bar.slang", "bar_model.slang", TUNABLES];
+
+/// The bar's own contract as the caustic imports it, `bar_abi` and
+/// `bar_wire`: rendered from `caustics-bar-abi`, the crate this sidecar links,
+/// and written out by [`caustics_bar_abi::rendered_dir`]
+/// (docs/abi.md, *The two contracts*).
+///
+/// The first of two kinds of input that are **not watched**: these are not
+/// files a person edits, and they change only with a rebuild, which is a new
+/// install set with a new sidecar. Inputs to every compile and to its cache
+/// key all the same.
+pub use caustics_bar_abi::RENDERED;
 
 /// The text engine's modules the caustic imports, directly (`text`, `shape`)
 /// or through them (`ot`, `shape_abi`): punchcutter's, compiled into it and
 /// written out by [`punchcutter_core::slang_dir`].
 ///
-/// Inputs to every compile and to its cache key, and **not watched**: an
-/// engine change is a dependency bump and a rebuild, never a live edit.
+/// The second kind of input that is **not watched**, beside [`RENDERED`]:
+/// inputs to every compile and to its cache key, but an engine change is a
+/// dependency bump and a rebuild, never a live edit.
 pub const ENGINE: &[&str] = &["text.slang", "shape.slang", "ot.slang", "shape_abi.slang"];
 
-/// Where slangc finds an engine module for a compile of `dir`: the directory
-/// itself when a copy sits there (the search order puts the source's own
-/// directory first, and a remote test target carries its copy that way), else
-/// the directory the engine writes its compiled-in copies to.
-pub fn engine_file(dir: &Path, name: &str) -> PathBuf {
+/// Where slangc finds an unwatched module ([`RENDERED`] or [`ENGINE`]) for a
+/// compile of `dir`: the directory itself when a copy sits there (the search
+/// order puts the source's own directory first, so a copy beside the caustic
+/// wins), else the directory its compiled-in copy is written to —
+/// [`caustics_bar_abi::rendered_dir`] for the bar's, [`punchcutter_core::slang_dir`]
+/// for the engine's.
+pub fn unwatched_file(dir: &Path, name: &str) -> PathBuf {
     let beside = dir.join(name);
     if beside.is_file() {
         beside
+    } else if RENDERED.contains(&name) {
+        caustics_bar_abi::rendered_dir().join(name)
     } else {
         punchcutter_core::slang_dir().join(name)
     }
@@ -167,7 +175,8 @@ pub fn watch(dir: &Path) -> MtimeWatch {
 
 /// The `bar.slang` to hand slangc and the module search path: the directory
 /// itself, compiled in place, so slangc's diagnostics name the files a person
-/// edits, and then the text engine's modules ([`ENGINE`]).
+/// edits, then the bar's rendered contract ([`RENDERED`]), then the text
+/// engine's modules ([`ENGINE`]).
 pub struct Source {
     pub entry_file: PathBuf,
     pub includes: Vec<PathBuf>,
@@ -179,6 +188,7 @@ pub fn source(dir: &Path) -> Source {
         entry_file: dir.join("bar.slang"),
         includes: vec![
             dir.to_path_buf(),
+            caustics_bar_abi::rendered_dir().to_path_buf(),
             punchcutter_core::slang_dir().to_path_buf(),
         ],
     }
@@ -332,12 +342,18 @@ fn slangc_version(program: &OsStr) -> String {
 }
 
 /// The files whose bytes reach slangc, in a fixed order: [`WATCHED`], in
-/// `dir`, then [`ENGINE`], wherever [`engine_file`] finds each.
+/// `dir`, then [`RENDERED`] and [`ENGINE`], wherever [`unwatched_file`] finds
+/// each.
 fn inputs(dir: &Path) -> Vec<PathBuf> {
     WATCHED
         .iter()
         .map(|name| dir.join(name))
-        .chain(ENGINE.iter().map(|name| engine_file(dir, name)))
+        .chain(
+            RENDERED
+                .iter()
+                .chain(ENGINE)
+                .map(|name| unwatched_file(dir, name)),
+        )
         .collect()
 }
 

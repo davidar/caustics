@@ -1,6 +1,6 @@
 //! The bar's ABI: **two contracts, named apart** (docs/abi.md, the
-//! normative document; this crate and `caustics/bar_abi.slang` are the two
-//! halves that implement it).
+//! normative document; this crate and the Slang it renders, `bar_abi.slang`
+//! and `bar_wire.slang`, are the two halves that implement it).
 //!
 //! | | [`buffer`] | [`wire`] |
 //! |---|---|---|
@@ -42,10 +42,15 @@
 //!
 //! Every struct and constant below is written through [`abi_struct!`] and
 //! [`abi_consts!`], which emit the Rust item *and* a table describing it.
-//! [`slang_source`] renders those tables into `caustics/bar_abi.slang` and
-//! `caustics/bar_wire.slang`, which are checked in and written by
-//! `cargo run -p caustics-bar-abi --bin gen-slang`; a test in this crate fails
-//! when either file on disk differs from the rendering. So the Slang half is never a second copy to keep in step.
+//! [`rendered`] renders those tables into `bar_abi.slang` and
+//! `bar_wire.slang`, which are not in the tree: the bar's build script writes
+//! them beside its build ([`write_rendered`]) and a process that compiles the
+//! caustic at run time finds them in [`rendered_dir`]. So the Slang half is
+//! never a second copy to keep in step; there is no copy at all.
+
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 pub mod buffer;
 pub mod wire;
@@ -65,13 +70,12 @@ pub use punchcutter_core::{abi_consts, abi_struct, slang_ty};
 pub mod format;
 pub use format::DstFormat;
 
-/// How the generated files say where they came from. The test that compares
-/// the checked-in file with the rendering names the same command.
-pub const GEN_COMMAND: &str = "cargo run -p caustics-bar-abi --bin gen-slang";
+/// How the rendered modules say where they came from, in their first line.
+const RENDERER: &str = "`caustics_bar_abi::rendered()`";
 
-// `pub const ABI_HASH: u64`, hashed by `build.rs` from the five files that
-// *are* the contract — the three rendered Slang modules, the wire's own
-// declaration, and the entry list. Its doc comment is here because a build
+// `pub const ABI_HASH: u64`, hashed by `build.rs` from the four inputs that
+// *are* the contract — the buffer's and the wire's declarations as source, the
+// text engine's arena header, and the entry list. Its doc comment is here because a build
 // script cannot write one that rustdoc will keep.
 //
 /// **One number for the whole contract** (docs/abi.md, *Hello*).
@@ -94,24 +98,120 @@ mod hash {
     include!(concat!(env!("OUT_DIR"), "/abi_hash.rs"));
 }
 
-/// The sentence the generated modules carry above their own prose.
+/// The sentence the rendered modules carry above their own prose.
 pub(crate) const NORMATIVE: &[&str] = &[
     "docs/abi.md is the normative document and `bar/abi/` is the one",
-    "declaration; this file is that declaration rendered (docs/abi.md, *The two contracts*). Edit the Rust",
-    "and re-run the command above.",
+    "declaration; this file is that declaration rendered (docs/abi.md, *The two contracts*)",
+    "and is not in the tree. Edit the Rust; a build renders it again.",
 ];
 
-/// The two generated modules, as `caustics/bar_abi.slang` and
-/// `caustics/bar_wire.slang` should read.
-pub fn slang_source() -> (String, String) {
-    (buffer::slang_module(), wire::slang_module())
+/// The file names of the two rendered modules, as a caustic's `import`
+/// resolves them: the buffer, then the wire.
+pub const RENDERED: [&str; 2] = ["bar_abi.slang", "bar_wire.slang"];
+
+/// The two rendered modules, each with the file name in [`RENDERED`]: what
+/// slangc reads when the caustic says `import bar_abi;`.
+pub fn rendered() -> [(&'static str, String); 2] {
+    [
+        (RENDERED[0], buffer::slang_module()),
+        (RENDERED[1], wire::slang_module()),
+    ]
+}
+
+/// Writes the two rendered modules into `dir`, creating it, so that `dir` can
+/// go on slangc's include path. A build script writes them under `OUT_DIR`;
+/// a process that compiles at run time calls [`rendered_dir`] instead.
+pub fn write_rendered(dir: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    for (name, text) in rendered() {
+        std::fs::write(dir.join(name), text)?;
+    }
+    Ok(())
+}
+
+/// Whether `dir` already holds the two, byte for byte.
+fn is_rendered(dir: &Path) -> bool {
+    rendered().iter().all(|(name, text)| {
+        std::fs::read(dir.join(name)).is_ok_and(|on_disk| on_disk == text.as_bytes())
+    })
+}
+
+/// A directory holding the two rendered modules, for a process that compiles
+/// the caustic at run time: pass it to slangc as an include path.
+///
+/// It is `$XDG_CACHE_HOME/caustics/rendered/<ABI_HASH>/` (`~/.cache` when
+/// that is unset), the hash as sixteen hex digits, so each contract has its
+/// own; the system temporary directory stands in when the cache is not
+/// writable. Written once, atomically (into a sibling, then renamed), and
+/// checked rather than rewritten when already there. Resolved once per
+/// process, so a caller can hash or compare it.
+///
+/// When no directory can be written the last one tried comes back as it is,
+/// and the compile that uses it reports the missing module, with the reason
+/// on stderr here.
+pub fn rendered_dir() -> &'static Path {
+    static DIR: OnceLock<PathBuf> = OnceLock::new();
+    DIR.get_or_init(|| {
+        let name = format!("{ABI_HASH:016x}");
+        let cache = std::env::var_os("XDG_CACHE_HOME")
+            .map(PathBuf::from)
+            .filter(|dir| dir.is_absolute())
+            .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")));
+        let roots = cache.into_iter().chain([std::env::temp_dir()]);
+        let mut last = PathBuf::from(&name);
+        for root in roots {
+            let dir = root.join("caustics").join("rendered").join(&name);
+            if is_rendered(&dir) {
+                return dir;
+            }
+            match materialise(&dir) {
+                Ok(()) => return dir,
+                Err(err) => eprintln!("caustics-bar-abi: cannot write {}: {err}", dir.display()),
+            }
+            last = dir;
+        }
+        last
+    })
+}
+
+/// Writes the modules into a sibling of `dir` and renames it into place, so
+/// no reader ever sees a half-written directory. Two processes doing this at
+/// once both succeed: the rename that loses finds the winner's copy in place.
+///
+/// A directory already there whose files differ (a renderer change that left
+/// the hash alone, or a damaged copy) is replaced, once.
+fn materialise(dir: &Path) -> io::Result<()> {
+    let parent = dir
+        .parent()
+        .expect("a directory under a cache root has a parent");
+    let leaf = dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("rendered");
+    let staging = parent.join(format!("{leaf}.tmp-{}", std::process::id()));
+    write_rendered(&staging)?;
+    let mut result = std::fs::rename(&staging, dir);
+    if result.is_err() && dir.is_dir() && !is_rendered(dir) {
+        let stale = parent.join(format!("{leaf}.stale-{}", std::process::id()));
+        if std::fs::rename(dir, &stale).is_ok() {
+            let _ = std::fs::remove_dir_all(&stale);
+        }
+        result = std::fs::rename(&staging, dir);
+    }
+    match result {
+        Ok(()) => Ok(()),
+        Err(err) => {
+            let _ = std::fs::remove_dir_all(&staging);
+            if is_rendered(dir) { Ok(()) } else { Err(err) }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests;
 
 // `pub const ENTRIES`, in its own file so `build.rs` can hash it as source, one
-// of the five files the ABI hash covers.
+// of the four inputs the ABI hash covers.
 include!("entries.rs");
 
 /// The buffer's names, unqualified: the bar's call sites keep reading

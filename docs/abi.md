@@ -19,8 +19,9 @@ three channels: **actions** (operands the process forwards without
 resolving), **witnesses** (format literals the process prints), and **one
 word** the process polls (`wants_redraw`). No ids cross the buffer. No table
 is mirrored. The Rust crate `caustics-bar-abi` is the one declaration, and both
-Slang twins (`caustics/bar_abi.slang` for the buffer, `caustics/bar_wire.slang`
-for the frames the caustic reads whole) are generated from it and checked in.
+Slang twins (`bar_abi.slang` for the buffer, `bar_wire.slang` for the frames
+the caustic reads whole) are rendered from it wherever a compile needs them;
+neither is in the tree.
 
 ## The two contracts
 
@@ -30,8 +31,8 @@ for the frames the caustic reads whole) are generated from it and checked in.
 | built | together, from one tree; the caustic from source at build and on reload | separately, by anyone, at any time |
 | stability | none needed across builds; both halves change in one commit | byte-stable framing; a reader that skips what it does not know |
 | version | `BAR_ABI_VERSION` (u32), a courtesy for buffer dumps | `WIRE_MAGIC` in every frame header, and one `ABI_HASH` per child (*The ABI hash*) |
-| declared | once, in Rust (`caustics_bar_abi::buffer`); `caustics/bar_abi.slang` is generated from it | once, in Rust (`caustics_bar_abi::wire`); the frames the caustic reads are generated into `caustics/bar_wire.slang` |
-| enforced by | the layout test (every struct's `offset_of!` against slangc's reflection, both ways) and the generated-file test (disk equals rendering) | the reader: magic, kind, length, bounds, or the frame is skipped with one witness |
+| declared | once, in Rust (`caustics_bar_abi::buffer`); `bar_abi.slang` is rendered from it | once, in Rust (`caustics_bar_abi::wire`); the frames the caustic reads are rendered into `bar_wire.slang` |
+| enforced by | the layout test (every struct's `offset_of!` against slangc's reflection, both ways) | the reader: magic, kind, length, bounds, or the frame is skipped with one witness |
 | what crosses | CPU facts and sidecar bytes in; actions, witnesses and one word out | whole-state frames |
 
 The **tunables module** (`caustics/bar_tunables.slang`) is a third thing: a
@@ -304,7 +305,7 @@ every string is a range into `strings`, and nothing is hashed on this side.
 ### The arenas
 
 Three buffers hold frames as they crossed the wire. The caustic reads them
-through `bar_wire.slang`, generated from `caustics_bar_abi::wire`'s Rust structs
+through `bar_wire.slang`, rendered from `caustics_bar_abi::wire`'s Rust structs
 and constants: `Samples`/`ChartRow`/`CHART_*`, `RowsHeader`/`Row`/`ROW_*`/
 `RFLAG_*`/`APPLET_*`/`MAX_ROWS`, `GlyphBody`/`GLYPH_*`, `AppBody`/`APP_*`,
 `REQ_*`, and the wire's `ACTION_*` kinds. **The wire is declared once for
@@ -605,14 +606,15 @@ abi_consts! {
 
 Each expands to the Rust item **and** an entry in a `Decl` table: the
 struct's name, its fields with their Slang type names and its `///` text, or
-the constant's name, value and text. `slang_source()` renders the table into
-`caustics/bar_abi.slang` and `caustics/bar_wire.slang`, doc comments
-forwarded, under a header that says it is generated. Both files are
-**checked in** (`caustics-reload` and the reflection test run slangc against the
-checked-out `caustics/`, and slangc prefers the importing file's directory),
-written by `cargo run -p caustics-bar-abi --bin gen-slang`, and a unit test in the
-crate asserts the file on disk equals the rendering, naming that command
-when it does not. The macros and the renderer are the text engine's
+the constant's name, value and text. `rendered()` renders the tables into
+`bar_abi.slang` and `bar_wire.slang`, doc comments forwarded, under a header
+that says where they came from. Neither file is **in the tree**: every compile
+gets them the way it gets the text engine's modules. `bar/build.rs` writes
+them (`write_rendered`) into the directory under `OUT_DIR` it puts on the
+include path, and `caustics-reload`, the oracle and the reflection tests take
+`rendered_dir()`, written once per contract into
+`$XDG_CACHE_HOME/caustics/rendered/<ABI_HASH>/`. So there is no second copy to
+fall out of step, and nothing to regenerate by hand. The macros and the renderer are the text engine's
 (`punchcutter_core::decl`), which declares the OpenType arena's header the same
 way and checks in its own rendering, `shape_abi.slang`
 (punchcutter/docs/arena.md, *Declared once*).
@@ -634,7 +636,7 @@ No functions live in the ABI, and the process mints no hash at all.
 
 The process **frames** a sidecar's stdout (*Framing*'s reader) and **routes**
 bodies; it interprets only what it must to route. Four kinds go to the GPU
-verbatim and are read there through `caustics/bar_wire.slang`: `Samples`
+verbatim and are read there through `bar_wire.slang`: `Samples`
 (*Samples*), `Rows` (*Rows*, into the sidecar's region of the rows arena), `Glyph`
 (*Glyph*) and `App` (*App*, both into the answers arena). `Bytes` (*Bytes*) goes to
 a named buffer untouched. `Pixmap` (*Pixmap*) is pixels for a texture, `Font`
@@ -936,7 +938,8 @@ caustics_bar_abi::wire     // *The wire*: WireHeader, Samples, ChartRow, Rows/Ro
                        //     Frame, read(&mut impl Read) -> io::Result<Option<Frame>>,
                        //     write(&mut impl Write, &Frame) -> io::Result<()>, RowsBuilder, greet()
 pub use buffer::*;
-slang_source()         // *Declared once*: renders caustics/bar_abi.slang and caustics/bar_wire.slang
+rendered()             // *Declared once*: renders bar_abi.slang and bar_wire.slang, named by RENDERED
+write_rendered(dir)    //     writes them into dir; rendered_dir() writes them once into a cache directory
 ```
 
 `Frame` is `Samples | Rows | Action | … | Hello | Skipped(Skipped)`. A skipped
@@ -951,7 +954,8 @@ declare-once macros, and on nothing else. `SAMPLES_SIZE` (8336) is the `Samples`
 reader checks a frame's `len` against. The crate has its own tests for the
 wire (round trips, every reader rule above with a crafted stream, the
 builder); the buffer's layout and compile tests stay in `bar/src/abi/tests.rs`
-because they need slangc; the generated-file test is this crate's.
+because they need slangc; the test that the rendered modules on disk are the
+rendering is this crate's.
 
 **Writing a sidecar** is: depend on `caustics-bar-abi`; greet (*Hello*); build a
 `Frame` and `wire::write(&mut stdout, &frame)` whenever the picture changes;
@@ -1296,25 +1300,25 @@ read a table directory out of a sorted list of `(codepoint, gid)` pairs, took
 stopped.
 
 So there is **one number for the whole contract**: `ABI_HASH`
-(`caustics-bar-abi`), hashed at build time over the five files that *are* the
-contract:
+(`caustics-bar-abi`), hashed at build time over the four inputs that *are*
+the contract:
 
-1. `caustics/bar_abi.slang`, the buffer contract rendered;
-2. `caustics/bar_wire.slang`, the wire as the GPU reads it, rendered;
+1. `bar/abi/src/buffer.rs`, the buffer contract's declaration, which
+   `bar_abi.slang` is rendered from;
+2. `bar/abi/src/wire.rs`, the wire's declaration: the part the GPU reads,
+   rendered into `bar_wire.slang`, and the framing, the kinds, the caps and
+   the `BUF_*` numbers, which have no Slang half;
 3. `shape_abi.slang`, the OpenType arena's header, rendered by the text
    engine from the same kind of tables and taken as the copy compiled into
    the engine (`punchcutter_core::modules::SHAPE_ABI`, a build-dependency of
    `caustics-bar-abi`), so a dependency bump that changes the arena is a new
    set;
-4. `bar/abi/src/wire.rs`, the framing, the kinds, the caps and the `BUF_*`
-   numbers, none of which has a Slang half to be rendered into;
-5. `bar/abi/src/entries.rs`, the entry list a `Module` frame is named by.
+4. `bar/abi/src/entries.rs`, the entry list a `Module` frame is named by.
 
-The first three are generated and checked in, and each one's generated-file
-test (the third's is the engine's) fails when a rendering differs from the
-file, so hashing the file is hashing the declaration. The last two are hashed as source, comments and all: coarse
-in the safe direction, since a comment edit makes a new set, and a set is
-installed whole (`bar/install.sh`).
+The bar's own files are hashed as source, comments and all, which is a
+superset of hashing what they render: coarse in the safe direction, since a
+comment edit makes a new set, and a set is installed whole
+(`bar/install.sh`).
 
 What is left permanently stable is exactly two things, `WireHeader` and
 *Hello*'s body, because they are what a bar reads *before* it knows whether

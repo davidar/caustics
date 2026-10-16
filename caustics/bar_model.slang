@@ -2,7 +2,7 @@
 // builds it out of. Hand-written, hot-reloadable, and **not a contract** — no
 // Rust reads this file (docs/abi.md, *The private buffer*).
 //
-// `bar_abi.slang` and `bar_wire.slang` are generated from the one declaration
+// `bar_abi.slang` and `bar_wire.slang` are rendered from the one declaration
 // in `bar/abi/`, and they describe the two contracts: what the embassy writes
 // into the buffers, and what a separately built sidecar writes over a pipe.
 // This file describes neither. It holds the whole of the

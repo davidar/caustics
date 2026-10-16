@@ -56,12 +56,13 @@ wgpu = "30.0.0"
 # pipe; the bar copies the bytes and the caustic multiplies them by their own
 # alpha.
 # build.rs bakes the caustic through the same driver the reload loop uses, with
-# the engine's modules (`slang_dir()`) on the include path. Featureless:
+# the engine's modules (`modules::write_to`) on the include path. Featureless:
 # nothing in a build script needs wgpu.
 [build-dependencies]
 punchcutter-core.workspace = true
 # `ENTRIES` and `DstFormat`: which entry points to bake, and for which
-# swapchain formats, from the same crate `caustics-reload` reads them from.
+# swapchain formats, from the same crate `caustics-reload` reads them from; and
+# `write_rendered`, the bar's two rendered modules, on the include path too.
 caustics-bar-abi = { path = "abi" }
 
 [dev-dependencies]

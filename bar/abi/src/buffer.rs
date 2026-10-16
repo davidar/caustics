@@ -8,13 +8,12 @@
 //! **Declared once** (docs/abi.md, *Declared once*): every struct and constant below
 //! is written through [`abi_struct!`](crate::abi_struct) and
 //! [`abi_consts!`](crate::abi_consts), which emit the Rust item and a table
-//! beside it, and `caustics/bar_abi.slang` is that table rendered by
-//! `cargo run -p caustics-bar-abi --bin gen-slang`. So the Slang half is not a
-//! second copy to keep in step: a test in this crate fails when the checked-in
-//! file differs from the rendering, and the generic layout test in
-//! `bar/src/abi.rs` still compares slangc's own per-field offsets against
-//! `offset_of!` — by walking the same table, rather than a hand-written list
-//! of it.
+//! beside it, and `bar_abi.slang` is that table rendered by
+//! [`crate::rendered`], wherever a compile needs it and never in the tree. So
+//! the Slang half is not a second copy to keep in step, and the generic layout
+//! test in `bar/src/abi.rs` still compares slangc's own per-field offsets
+//! against `offset_of!` — by walking the same table, rather than a
+//! hand-written list of it.
 //!
 //! The other contract is [`crate::wire`], and it is a different kind of
 //! promise: a sidecar built last month and a bar built today must agree byte
@@ -65,11 +64,11 @@
 //! this file does not lay out because the *wire* does (docs/abi.md, *The arenas*): `samples`, the
 //! `rows` arena of [`MAX_SLOTS`] × [`ROWS_ARENA_BYTES`], and the `answers`
 //! arena of [`ANSWERS_BYTES`]. The caustic reads those through
-//! `caustics/bar_wire.slang` and joins them to the facts by name.
+//! `bar_wire.slang` and joins them to the facts by name.
 //!
 //! Nothing on this side hashes anything at all (docs/abi.md, *The private buffer*).
 
-// The ABI is complete by contract, not by current use: `caustics/bar_abi.slang`
+// The ABI is complete by contract, not by current use: `bar_abi.slang`
 // is rendered from the tables below, so a constant the embassy never reads is
 // still a constant the caustic can. Deleting one because this side does not
 // name it would take it out of the caustic's vocabulary too.
@@ -417,7 +416,7 @@ abi_consts! {
     pub const CMD_AXIS: u32 = 9;
 }
 
-/// Every constant group of the buffer, in the order `caustics/bar_abi.slang`
+/// Every constant group of the buffer, in the order `bar_abi.slang`
 /// renders them.
 pub(crate) const CONST_GROUPS: &[ConstGroup] = &[
     CAPACITIES,
@@ -1152,7 +1151,7 @@ unsafe impl Plain for SlotFact {}
 unsafe impl Plain for Facts {}
 
 // ---------------------------------------------------------------------------
-// The table (docs/abi.md, *Declared once*): what `caustics/bar_abi.slang` is rendered
+// The table (docs/abi.md, *Declared once*): what `bar_abi.slang` is rendered
 // from, in the order it renders them.
 // ---------------------------------------------------------------------------
 
@@ -1225,7 +1224,7 @@ pub const STRUCTS: &[AbiStruct] = &[
     },
 ];
 
-/// The generated module's own header comment: kept beside the declarations it is about.
+/// The rendered module's own header comment: kept beside the declarations it is about.
 const MODULE_DOC: &[&str] = &[
     "The buffer (docs/abi.md, *The buffer*): the layout of the GPU buffers the bar's",
     "embassy and its caustic share. Deliberately inert — no bindings, no entry",
@@ -1246,10 +1245,10 @@ const MODULE_DOC: &[&str] = &[
     "3-vector to 16 B and slangc's reflection duly put one at the wrong offset.",
 ];
 
-/// `caustics/bar_abi.slang`, rendered from the tables above.
+/// `bar_abi.slang`, rendered from the tables above.
 pub fn slang_module() -> String {
     crate::decl::render(
-        crate::GEN_COMMAND,
+        crate::RENDERER,
         crate::NORMATIVE,
         "bar_abi",
         "bar/abi/src/buffer.rs",

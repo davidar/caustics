@@ -94,7 +94,7 @@ shapers, colour fonts) is on punchcutter's roadmap.
 
 Two contracts, both in docs/abi.md. **The buffer** is between the bar process
 and the shader: built together, changed together, declared once in Rust in
-`bar/abi/` with the Slang side generated from it, and a test that checks every
+`bar/abi/` with the Slang side rendered from it at build time, and a test that checks every
 struct's layout against the compiler's reflection. **The wire** is between the
 bar and its sidecars: framed, versioned as a whole, and readable by anything
 that can write little-endian words. A third-party widget is a program that

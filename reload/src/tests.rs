@@ -55,7 +55,11 @@ fn the_shipped_module_is_compiled_in_place() {
     assert_eq!(source.entry_file, dir.join("bar.slang"));
     assert_eq!(
         source.includes,
-        vec![dir.clone(), punchcutter_core::slang_dir().to_path_buf()]
+        vec![
+            dir.clone(),
+            caustics_bar_abi::rendered_dir().to_path_buf(),
+            punchcutter_core::slang_dir().to_path_buf(),
+        ]
     );
     let watched = watch(&dir);
     assert!(
@@ -491,12 +495,14 @@ fn the_bound_evicts_the_oldest() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Every module the caustic `import`s is one this sidecar watches or one of
-/// the engine's, and a file `bar/bar-test.sh` copies to a remote target.
+/// Every module the caustic `import`s is one this sidecar watches, one of the
+/// bar's rendered contract or one of the engine's; and every watched one is a
+/// file `bar/bar-test.sh` copies to a remote target.
 ///
-/// A module that is not copied leaves a remote target running its baked
-/// SPIR-V, and every reload there fails with `cannot open file`; this test
-/// keeps the lists in step.
+/// A watched module that is not copied leaves a remote target running its
+/// baked SPIR-V, and every reload there fails with `cannot open file`; this
+/// test keeps the lists in step. The rendered and the engine's modules are not
+/// copied: the target's own binaries write them from their compiled-in copies.
 ///
 /// The lists are one fact — *which files the caustic is made of* — kept in
 /// several places because one of them is a shell script. The Rust ones are
@@ -516,11 +522,19 @@ fn every_imported_module_is_watched_and_copied() {
     let script = std::fs::read_to_string(&harness)
         .unwrap_or_else(|err| panic!("{} is not readable: {err}", harness.display()));
 
-    let files = WATCHED.iter().map(|name| (*name, dir.join(name))).chain(
-        ENGINE
-            .iter()
-            .map(|name| (*name, punchcutter_core::slang_dir().join(name))),
-    );
+    let files = WATCHED
+        .iter()
+        .map(|name| (*name, dir.join(name)))
+        .chain(
+            RENDERED
+                .iter()
+                .map(|name| (*name, caustics_bar_abi::rendered_dir().join(name))),
+        )
+        .chain(
+            ENGINE
+                .iter()
+                .map(|name| (*name, punchcutter_core::slang_dir().join(name))),
+        );
     for (name, path) in files {
         assert!(path.is_file(), "{name} is not at {}", path.display());
         let text = std::fs::read_to_string(&path).expect("a readable module");
@@ -537,18 +551,17 @@ fn every_imported_module_is_watched_and_copied() {
             let module = rest.trim_end_matches(';').trim();
             let file = format!("{module}.slang");
             assert!(
-                WATCHED.contains(&file.as_str()) || ENGINE.contains(&file.as_str()),
-                "{name} imports `{module}` and `{file}` is in neither WATCHED nor ENGINE"
+                WATCHED.contains(&file.as_str())
+                    || RENDERED.contains(&file.as_str())
+                    || ENGINE.contains(&file.as_str()),
+                "{name} imports `{module}` and `{file}` is in none of WATCHED, RENDERED and ENGINE"
             );
         }
-        let copied = if WATCHED.contains(&name) {
-            script.contains(&format!("caustics/{name}"))
-        } else {
-            script.contains(name)
-        };
-        assert!(
-            copied,
-            "{name} is part of the caustic and `bar/bar-test.sh` does not copy it into the guest"
-        );
+        if WATCHED.contains(&name) {
+            assert!(
+                script.contains(&format!("caustics/{name}")),
+                "{name} is part of the caustic and `bar/bar-test.sh` does not copy it into the guest"
+            );
+        }
     }
 }

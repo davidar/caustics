@@ -245,9 +245,9 @@ There are two contracts, both in docs/abi.md, byte for byte:
 
 - **The buffer**, between the bar process and the caustic. Built together
   from one tree and changed in one commit; declared once in Rust
-  (`caustics-bar-abi`), with the Slang side (`caustics/bar_abi.slang`,
-  `caustics/bar_wire.slang`) generated from the declaration and checked in. A
-  test compares every struct's Rust offsets with slangc's reflection of the
+  (`caustics-bar-abi`), with the Slang side (`bar_abi.slang`,
+  `bar_wire.slang`) rendered from the declaration wherever a compile needs it,
+  never kept in the tree. A test compares every struct's Rust offsets with slangc's reflection of the
   Slang, both ways.
 - **The wire**, between the bar and any sidecar, which may be built
   separately. Byte-stable framing, and a reader that skips what it does not

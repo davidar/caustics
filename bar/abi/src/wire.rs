@@ -430,7 +430,7 @@ impl ChartRow {
 
 abi_struct! {
     /// The chart strip's history: the one wire body the GPU reads, so it is also
-    /// declared in `caustics/bar_abi.slang` and uploaded to binding 10 as-is.
+    /// rendered into `bar_wire.slang` and uploaded to binding 10 as-is.
     /// Fixed size, 8336 B.
     ///
     /// Chart `c`'s series `k` (0 or 1) is `samples[(2c + k) * CHART_SAMPLES + i]`,
@@ -1983,7 +1983,7 @@ pub fn write<W: Write>(out: &mut W, frame: &Frame) -> io::Result<()> {
 }
 
 // ---------------------------------------------------------------------------
-// The table (docs/abi.md, *The two contracts*): what `caustics/bar_wire.slang` is
+// The table (docs/abi.md, *The two contracts*): what `bar_wire.slang` is
 // rendered from — the part of this contract the **GPU** reads, and nothing
 // else. The framing, the decoded owned types, the reader and the writer are
 // the embassy's and have no Slang half.
@@ -2038,7 +2038,7 @@ pub const STRUCTS: &[AbiStruct] = &[
     },
 ];
 
-/// The generated module's own header comment.
+/// The rendered module's own header comment.
 const MODULE_DOC: &[&str] = &[
     "The wire (docs/abi.md, *The wire*), as far as the GPU reads it: what a",
     "*separately built* sidecar wrote after its frame header, byte for byte.",
@@ -2059,10 +2059,10 @@ const MODULE_DOC: &[&str] = &[
     "stands, and the applet and action words are the item table's vocabulary.",
 ];
 
-/// `caustics/bar_wire.slang`, rendered from the tables above.
+/// `bar_wire.slang`, rendered from the tables above.
 pub fn slang_module() -> String {
     crate::decl::render(
-        crate::GEN_COMMAND,
+        crate::RENDERER,
         crate::NORMATIVE,
         "bar_wire",
         "bar/abi/src/wire.rs",

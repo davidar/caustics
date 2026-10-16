@@ -375,9 +375,13 @@ fn bar_slang() -> PathBuf {
 }
 
 /// The include path every compile of the caustic takes: its own directory,
-/// then the text engine's modules.
-fn includes() -> [PathBuf; 2] {
-    [caustics_dir(), punchcutter_core::slang_dir().to_path_buf()]
+/// then the bar's rendered contract, then the text engine's modules.
+fn includes() -> [PathBuf; 3] {
+    [
+        caustics_dir(),
+        caustics_bar_abi::rendered_dir().to_path_buf(),
+        punchcutter_core::slang_dir().to_path_buf(),
+    ]
 }
 
 /// slangc's reflection of `bar.slang` for one entry point, from a compile
@@ -413,7 +417,7 @@ fn is_missing_toolchain(err: &SlangError) -> Option<String> {
 /// from a hand-written copy of them (docs/abi.md, *The two contracts*).
 ///
 /// `caustics_bar_abi::buffer::STRUCTS` and `wire::STRUCTS` are what
-/// `caustics/bar_abi.slang` and `caustics/bar_wire.slang` were generated from,
+/// `bar_abi.slang` and `bar_wire.slang` are rendered from,
 /// and each entry carries the offsets `offset_of!` gives its fields. So this
 /// walks both tables and compares each struct against the reflection **both
 /// ways**: a field on one side only fails. A table written out again here would leave a struct added to the ABI untested until someone remembered this file.

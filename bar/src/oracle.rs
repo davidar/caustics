@@ -105,7 +105,7 @@ impl Oracle {
         let (define, extra) = gpu.dst_format_args();
         // The same slangc the bar's build script and `caustics-reload` use, with
         // one define more and the same include path: the caustic's directory,
-        // then the text engine's modules. Every other entry point comes out identical to the
+        // then the bar's rendered contract, then the text engine's modules. Every other entry point comes out identical to the
         // baked one — `bar_check` is a file appended under an `#ifdef` — so
         // only this one is loaded, beside the seven already there.
         let compiled = punchcutter_core::slang::compile_capturing(
@@ -114,7 +114,11 @@ impl Oracle {
             "bar_check",
             &[define, "CAUSTICS_BAR_CHECK"],
             extra,
-            &[dir.as_path(), punchcutter_core::slang_dir()],
+            &[
+                dir.as_path(),
+                caustics_bar_abi::rendered_dir(),
+                punchcutter_core::slang_dir(),
+            ],
         )
         .with_context(|| format!("bar_check does not compile from {}", source.display()))?;
         let mut strings = Strings::baked();

@@ -6,13 +6,6 @@ description = "The bar's ABI as a crate: the byte-exact buffer layouts the embas
 license.workspace = true
 rust-version.workspace = true
 
-# The generator (docs/abi.md, *The two contracts*): `cargo run -p caustics-bar-abi --bin
-# gen-slang` writes `caustics/bar_abi.slang` and `caustics/bar_wire.slang` from
-# the declarations. Spelled out because the hyphen is the command's.
-[[bin]]
-name = "gen-slang"
-path = "src/bin/gen_slang.rs"
-
 [dependencies]
 # `Plain`, the byte views and the declare-once macros, and nothing else:
 # featureless `punchcutter-core` is std-only, which is what lets a sidecar with
@@ -21,5 +14,5 @@ punchcutter-core.workspace = true
 
 [build-dependencies]
 # `modules::SHAPE_ABI`: the engine's `shape_abi.slang` as compiled into the
-# engine, one of the five inputs the ABI hash covers.
+# engine, one of the four inputs the ABI hash covers.
 punchcutter-core.workspace = true

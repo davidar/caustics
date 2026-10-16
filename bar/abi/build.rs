@@ -8,8 +8,11 @@
 //!
 //! **What is hashed**, in this order:
 //!
-//! 1. `caustics/bar_abi.slang` — the buffer contract, rendered (docs/abi.md, *The two contracts*);
-//! 2. `caustics/bar_wire.slang` — the wire as the GPU reads it, rendered;
+//! 1. `bar/abi/src/buffer.rs` — the buffer contract's declaration, from which
+//!    `bar_abi.slang` is rendered (docs/abi.md, *The two contracts*);
+//! 2. `bar/abi/src/wire.rs` — the wire's declaration: the part the GPU reads,
+//!    rendered into `bar_wire.slang`, and the framing, the kinds, the caps and
+//!    the `BUF_*` numbers, which have no Slang half;
 //! 3. `shape_abi.slang` — the OpenType arena's header, rendered by the text
 //!    engine (`punchcutter-shape`) from the same declaration tables
 //!    (`punchcutter_core::decl`) and taken as the copy compiled into
@@ -17,24 +20,22 @@
 //!    build-dependency). It is a wire contract too: `caustics-glyphs` fills
 //!    that arena with a `Bytes` frame, so an engine whose arena changed is a
 //!    new set.
-//! 4. `bar/abi/src/wire.rs` — the framing, the kinds, the caps and the
-//!    `BUF_*` numbers, none of which has a Slang half to be rendered into;
-//! 5. `bar/abi/src/entries.rs` — the entry list a `Module` frame is named by.
+//! 4. `bar/abi/src/entries.rs` — the entry list a `Module` frame is named by.
 //!
-//! The first three are generated from the Rust and checked in, and a test in
-//! this crate fails when either of the bar's two differs from the rendering
-//! (punchcutter's own test does the same for the third) — so hashing the file
-//! is hashing the declaration. The last two are
-//! hashed as *source*, comments and all, which is coarse in the safe
-//! direction: a comment edit makes a new set, and a set is installed whole.
+//! The bar's two rendered modules are not in the tree and this script cannot
+//! call the crate it is building, so their declarations are hashed instead.
+//! Every source file is hashed as *source*, comments and all: a superset of
+//! hashing its rendering, and coarse in the safe direction — a comment edit
+//! makes a new set, and a set is installed whole. The rendered modules are a
+//! function of these inputs, which is why `rendered_dir()` can be named by
+//! the hash.
 
 use std::path::{Path, PathBuf};
 
 fn main() {
     let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let files = [
-        repo.join("caustics/bar_abi.slang"),
-        repo.join("caustics/bar_wire.slang"),
+        repo.join("bar/abi/src/buffer.rs"),
         repo.join("bar/abi/src/wire.rs"),
         repo.join("bar/abi/src/entries.rs"),
     ];
@@ -49,7 +50,6 @@ fn main() {
         read(&files[1]),
         punchcutter_core::modules::SHAPE_ABI.as_bytes().to_vec(),
         read(&files[2]),
-        read(&files[3]),
     ];
 
     // FNV-1a, 64-bit: no dependency, no ordering surprise, and a value a

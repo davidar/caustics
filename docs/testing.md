@@ -9,7 +9,7 @@ is the third tier, **the nested gate**.
 
 | tier | command | proves | needs | takes |
 |---|---|---|---|---|
-| unit tests | `cargo test --workspace` | every crate's logic: the wire's reader rules, each sidecar's frames against recorded bus bodies, the ABI layouts against slangc's reflection, the generated Slang files against their Rust declaration | Rust, slangc; fontconfig for the text tests (they skip without it) | a minute or two |
+| unit tests | `cargo test --workspace` | every crate's logic: the wire's reader rules, each sidecar's frames against recorded bus bodies, the ABI layouts against slangc's reflection, the rendered Slang modules on disk against their Rust declaration | Rust, slangc; fontconfig for the text tests (they skip without it) | a minute or two |
 | the oracle | `CAUSTICS_BAR_ORACLE=1 cargo test -p caustics-bar oracle -- --nocapture` | the caustic's own passes (`bar_build`, `bar_compose`, `bar_shape`) on a real GPU with a real font: the tables they build obey `caustics/bar_check.slang`'s invariants, every block is the size its tunable says, every built item can be named, no glyph is a notdef | a Vulkan adapter (Mesa's lavapipe will do) | about a minute, most of it slangc |
 | the nested gate | `bar/nested-run.sh` | the bar as a process in a session: the layer surface and its configure, popups and their grabs, the dock against real windows, every sidecar on a real (private) session bus, clicks, hot reload, the install set's refusals, the watchdog, restarts | the list under *What the gate needs* | eight to ten minutes |
 

@@ -18,8 +18,6 @@ struct's layout against the compiler's.
 | `bar.slang` | the bar caustic: the seven entry points (`bar_build`, `bar_compose`, `bar_shape`, `bar_apply`, `bar_visibility`, `bar_sample`, `bar_draw`), every binding, the layout, the springs, the popups, the witnesses | hand |
 | `bar_tunables.slang` | **the bar's configuration**: every knob as a `public static const` | hand; edit it to configure the bar |
 | `bar_model.slang` | the caustic's private vocabulary: item, block and element kinds and flags, the `Id` type, the dock-menu verbs, the item accessors. Not a contract: no Rust reads it | hand |
-| `bar_abi.slang` | the buffer contract between the bar process and the caustic (docs/abi.md, *The buffer*) | **generated** from `bar/abi/src/buffer.rs` |
-| `bar_wire.slang` | the frames a sidecar writes that the caustic reads in place (docs/abi.md, *The wire*) | **generated** from `bar/abi/src/wire.rs` |
 | `bar_check.slang` | the oracle's invariants, a test-only eighth entry point (docs/testing.md) | hand |
 
 **The text engine's modules are imported, not kept here.** `text` (glyph and
@@ -31,11 +29,16 @@ written from those copies on the include path after this one: `bar/build.rs`
 writes it under `OUT_DIR`, and `caustics-reload`, the oracle and the layout
 tests take `punchcutter_core::slang_dir()`, a cache directory written once.
 
-**The generated files are checked in**, because `caustics-reload` and the
-reflection tests compile against the checked-out directory. Edit the Rust
-declaration and regenerate (`cargo run -p caustics-bar-abi --bin gen-slang`).
-A unit test fails, naming the command, when a file on disk differs from its
-rendering.
+**The bar's two contracts are rendered, not kept here.** `bar_abi` (the
+buffer contract between the bar process and the caustic, docs/abi.md, *The
+buffer*) and `bar_wire` (the frames a sidecar writes that the caustic reads in
+place, *The wire*) are rendered from the Rust declarations in
+`bar/abi/src/buffer.rs` and `bar/abi/src/wire.rs` by
+`caustics_bar_abi::rendered()`. They go on the include path the same way as
+the engine's: `bar/build.rs` writes them into the same directory under
+`OUT_DIR`, and the processes that compile at run time take
+`caustics_bar_abi::rendered_dir()`. To read them after a build, look in
+`~/.cache/caustics/rendered/<abi-hash>/`. To change them, edit the Rust.
 
 ## The import graph
 

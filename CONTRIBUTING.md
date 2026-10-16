@@ -41,11 +41,10 @@ bar's.
 - **Slang, not WGSL**, for every shader. Shaders are compiled to SPIR-V by
   slangc and loaded through wgpu's passthrough.
 - **Shared layouts are declared once, in Rust**, in `bar/abi/` for the bar's
-  two contracts. The Slang side is generated
-  (`cargo run -p caustics-bar-abi --bin gen-slang`) and checked in. Never edit
-  `bar_abi.slang` or `bar_wire.slang` by hand. A test fails when the files on
-  disk differ from the rendering, and another compares every struct's offsets
-  with slangc's reflection.
+  two contracts. The Slang side, `bar_abi.slang` and `bar_wire.slang`, is
+  rendered from it wherever a compile needs it and is not in the tree; edit
+  the Rust and build. A test compares every struct's offsets with slangc's
+  reflection.
 - **The text engine is a dependency.** Shaping, glyph coverage and the
   OpenType arena's layout are punchcutter's; a change to them is a change
   there and a dependency bump here, never a copy in this tree.
