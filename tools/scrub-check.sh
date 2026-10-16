@@ -40,6 +40,14 @@
 #
 #   CAUSTICS_SCRUB_WORDS=~/private/scrub-words tools/scrub-check.sh
 #
+# **The commits about to be pushed** are checked too: every commit from the
+# branch's upstream (or `origin/main`) to `HEAD` has its message and its
+# added lines read with the same checks, so that a placeholder a builder put
+# in an intermediate commit is caught even when the tip no longer has it.
+# `$CAUSTICS_SCRUB_BASE` names a different base (a rewritten history, say):
+#
+#   CAUSTICS_SCRUB_BASE=origin/main~5 tools/scrub-check.sh
+#
 # What it cannot see: a value stored as raw bytes rather than text (an IPv6
 # address or a MAC inside a D-Bus `ay`, a DUID or any other long hex run, which
 # has no shape to tell it from a hash). Fixtures are written from invented data
@@ -53,11 +61,19 @@ cd "$root"
 
 words=${CAUSTICS_SCRUB_WORDS:-$HOME/.config/caustics/scrub-words}
 
+# The base of the range of commits to scan: the override, else the upstream,
+# else origin/main, else nothing (a tree with no remote has nothing pending).
+base=${CAUSTICS_SCRUB_BASE:-}
+if [[ -z $base ]]; then
+    base=$(git rev-parse -q --verify '@{upstream}' 2>/dev/null ||
+        git rev-parse -q --verify origin/main 2>/dev/null || true)
+fi
+
 git ls-files -z -- "$@" | perl -0777 -e '
 use strict;
 use warnings;
 
-my ($words_file) = @ARGV;
+my ($words_file, $base) = @ARGV;
 local $/ = "\0";
 my @files = split /\0/, do { local $/; <STDIN> // "" };
 
@@ -191,6 +207,29 @@ for my $file (@files) {
     }
 }
 
-printf STDERR "scrub-check: %d file(s) scanned, %d hit(s)\n", $scanned, $hits;
+# The commits not yet on the remote: the message, and the lines each adds.
+my $commits = 0;
+if (defined $base && length $base) {
+    local $/ = "\n";
+    chomp(my @pending = `git rev-list --reverse $base..HEAD 2>/dev/null`);
+    for my $sha (@pending) {
+        $commits++;
+        my $short = substr $sha, 0, 7;
+        my $message = `git log -1 --format=%B $sha`;
+        my $n = 0;
+        for my $line (split /\n/, $message) {
+            $n++;
+            check("commit $short message:$n", $line);
+        }
+        my $file = "?";
+        for my $line (split /\n/, `git show --format= --no-color -p $sha`) {
+            if ($line =~ /^\+\+\+ (?:b\/)?(.*)$/) { $file = $1; next }
+            next unless $line =~ /^\+/ && $line !~ /^\+\+\+ /;
+            check("commit $short $file:+", substr $line, 1);
+        }
+    }
+}
+
+printf STDERR "scrub-check: %d file(s) and %d pending commit(s) scanned, %d hit(s)\n", $scanned, $commits, $hits;
 exit($hits ? 1 : 0);
-' "$words"
+' "$words" "$base"
