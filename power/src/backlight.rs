@@ -10,8 +10,9 @@
 //! **Reading** is two files under `/sys/class/backlight/<name>/`:
 //! `brightness` over `max_brightness`. sysfs does not inotify,
 //! and the brightness keys change it behind the menu, so the loop reads once
-//! when the battery's menu opens and once a second while it stays open — never
-//! while it is closed ([`crate::serve`]).
+//! when the battery's menu opens and once a second while it stays open, and
+//! otherwise only when the kernel's uevent says the device changed
+//! (`crate::uevent`), which is also what raises the on-screen display.
 //!
 //! **Setting** is `org.freedesktop.login1.Session.SetBrightness("backlight",
 //! <name>, value)` on `/org/freedesktop/login1/session/auto` over the system

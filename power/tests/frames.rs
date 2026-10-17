@@ -75,6 +75,7 @@ fn everything() -> Picture {
             ],
             active: "balanced".into(),
         }),
+        osd: false,
     }
 }
 

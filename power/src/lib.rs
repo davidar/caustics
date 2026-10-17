@@ -9,7 +9,9 @@
 //!
 //! Why a separate process is the bar's membership test (docs/architecture.md,
 //! *Sidecars*): this owns no Wayland object and none of the bar's fds — it
-//! owns system-bus proxies, two sysfs files and a menu — so the bar process knows only Wayland, the compositor's IPC socket, and pipes.
+//! owns system-bus proxies, two sysfs files, the kernel's uevent socket and a
+//! menu — so the bar process knows only Wayland, the compositor's IPC socket,
+//! and pipes.
 //!
 //! The split into a library and a two-line `main.rs` is so `power/tests/` can
 //! drive the frame and the dispatch with fakes; no real power action is ever
@@ -20,19 +22,24 @@ pub mod backlight;
 pub mod lamp;
 pub mod logind;
 pub mod niri;
+pub mod osd;
 pub mod profiles;
 pub mod rows;
+pub mod uevent;
 pub mod upower;
 
 use std::time::{Duration, Instant};
 
+use caustics_bar_abi::buffer::ACTION_MENU_OPEN;
+use caustics_bar_abi::wire::ACTION_TOAST_SHOWN;
 use caustics_bar_abi::wire::{self, ActionBody, Frame};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use zbus::Connection;
 
 use actions::Op;
 use lamp::Lamp;
-use rows::Picture;
+use osd::Osd;
+use rows::{Picture, ROW_BATTERY};
 
 /// The usage text, on stderr — stdout carries frames and nothing else. The
 /// bar spawns a sidecar with no arguments (docs/abi.md, *Lifecycle*), so this is
@@ -60,6 +67,15 @@ pub const BRIGHTNESS_POLL: Duration = Duration::from_secs(1);
 /// writes the file a round trip after the tick, and a read in between would
 /// pull the slider back under the pointer for a frame.
 pub const TICK_HOLD: Duration = Duration::from_millis(1500);
+
+/// How long to let a burst of backlight uevents finish before reading: a
+/// brightness key held down is a write every few tens of milliseconds, and
+/// each is one uevent.
+pub const UEVENT_DEBOUNCE: Duration = Duration::from_millis(50);
+
+/// How long the brightness on-screen display stays up after the last change
+/// that raised it (`osd`), extended by each further one.
+pub const OSD_HOLD: Duration = Duration::from_millis(1500);
 
 /// The whole program. Returns the process's exit status.
 pub fn run<I: IntoIterator<Item = String>>(argv: I) -> i32 {
@@ -132,7 +148,8 @@ async fn serve() -> i32 {
     let setter = conn.clone().map(backlight::spawn_setter);
 
     // The backlight is looked for once now, so the first frame has its slider
-    // (or does not), and then only while the battery's menu is open.
+    // (or does not), and then while the battery's menu is open and on each
+    // burst of the kernel's backlight uevents.
     let mut lamp = Lamp::new(backlight::SYSFS_BACKLIGHT);
 
     let mut state = Picture {
@@ -149,11 +166,30 @@ async fn serve() -> i32 {
     let mut poll = tokio::time::interval(BRIGHTNESS_POLL);
     poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
+    // The kernel's backlight uevents, the brightness on-screen display's
+    // trigger. Without the socket there is no brightness toast and nothing
+    // else changes.
+    let (uevent_tx, mut uevents) = unbounded_channel();
+    match uevent::open() {
+        Ok(fd) => {
+            tokio::spawn(uevent::watch(fd, uevent_tx));
+        }
+        Err(e) => {
+            witness("absent: uevent");
+            witness(&format!("uevent: {e}"));
+        }
+    }
+    let mut osd = Osd::default();
+
     loop {
         // What this turn changed, and whether to say so on stderr: a slider
         // drag is a hundred frames a second and is not worth a line each.
         let mut next = state.clone();
         let mut loud = true;
+        let deadline = osd.deadline();
+        let ends = tokio::time::sleep_until(tokio::time::Instant::from_std(
+            deadline.unwrap_or_else(Instant::now),
+        ));
         tokio::select! {
             // `Some(..)`: a watcher's end closing simply disables its arm.
             Some(battery) = batteries.recv() => next.battery = battery,
@@ -163,14 +199,46 @@ async fn serve() -> i32 {
                 next.brightness = lamp.brightness();
                 loud = false;
             }
+            Some(()) = uevents.recv() => {
+                // A held key is a uevent per step; let the burst land.
+                tokio::time::sleep(UEVENT_DEBOUNCE).await;
+                while uevents.try_recv().is_ok() {}
+                let now = Instant::now();
+                let decision = lamp.uevent(now);
+                if let Some(line) = osd.change(decision, lamp.polling(), now) {
+                    witness(&line);
+                }
+                next.brightness = lamp.brightness();
+                loud = false;
+            }
+            // The on-screen display's time is up: the same picture without
+            // its bits, which is what ends the toast.
+            _ = ends, if deadline.is_some() => {
+                if osd.expire(Instant::now()) {
+                    witness("osd: ended (timeout)");
+                }
+                loud = false;
+            }
             action = incoming.recv() => {
                 let Some(action) = action else {
                     witness("stdin closed; exiting");
                     return 0;
                 };
-                if actions::is_menu_notice(action.kind) {
+                if action.kind == ACTION_TOAST_SHOWN {
+                    // The toast that showed the slider ended (by a click, a
+                    // menu, the compositor): the burst is over.
+                    if osd.end() {
+                        witness("osd: ended (shown)");
+                    }
+                    loud = false;
+                } else if actions::is_menu_notice(action.kind) {
                     if lamp.notice(action.row, action.kind) {
                         poll.reset();
+                    }
+                    // The battery's menu opening replaces the toast, or one
+                    // still waiting: either way the burst is over.
+                    if action.row == ROW_BATTERY && action.kind == ACTION_MENU_OPEN && osd.end() {
+                        witness("osd: ended (menu)");
                     }
                     next.brightness = lamp.brightness();
                 } else {
@@ -208,6 +276,7 @@ async fn serve() -> i32 {
                 }
             }
         }
+        next.osd = osd.on();
         if next == state {
             continue;
         }

@@ -2,9 +2,10 @@
 //! reading, when the slider last moved, and whether the battery's menu is open
 //! (the loop's own logic, tested in `tests/lamp.rs`).
 //!
-//! The rule it keeps: sysfs is read **once when the battery's menu opens and
-//! once a [`crate::BRIGHTNESS_POLL`] while it stays open, never while it is
-//! closed**, and a poll within [`crate::TICK_HOLD`] of the last slider tick
+//! The rule it keeps: sysfs is read **once when the battery's menu opens,
+//! once a [`crate::BRIGHTNESS_POLL`] while it stays open, and once for each
+//! burst of the kernel's backlight uevents ([`Lamp::uevent`]), never on a
+//! clock while the menu is closed**, and a poll within [`crate::TICK_HOLD`] of the last slider tick
 //! does not move the slider (logind writes the file a round trip after the
 //! tick, and a read in between would pull the slider back under the pointer
 //! for a frame). Time is a parameter, so `power/tests/lamp.rs` drives the hold
@@ -16,6 +17,7 @@ use std::time::Instant;
 use caustics_bar_abi::buffer::ACTION_MENU_OPEN;
 
 use crate::backlight::{self, Backlight, Brightness};
+use crate::osd::{self, Decision};
 use crate::rows::ROW_BATTERY;
 use crate::{TICK_HOLD, witness};
 
@@ -92,14 +94,37 @@ impl Lamp {
         true
     }
 
+    /// The kernel said the backlight changed (`crate::uevent`), at `now`:
+    /// read it whether or not the menu is open, take it under the same hold
+    /// as a poll, and say what it means for the on-screen display
+    /// ([`osd::decide`], against the reading before this one and the last
+    /// slider tick).
+    pub fn uevent(&mut self, now: Instant) -> Decision {
+        let seen = backlight::sample(&self.root);
+        let decision = osd::decide(
+            self.brightness,
+            seen.as_ref().map(|(_, b)| *b),
+            self.last_tick,
+            now,
+        );
+        self.take(seen, Some(now));
+        decision
+    }
+
     /// Look again. A device that appeared or vanished is always taken (and
     /// witnessed); a changed value on the same device is taken unless `now`
     /// is within [`TICK_HOLD`] of the last slider tick.
     fn sample(&mut self, now: Option<Instant>) {
         let seen = backlight::sample(&self.root);
+        self.take(seen, now);
+    }
+
+    /// [`Lamp::sample`]'s rule, over a reading already made.
+    fn take(&mut self, seen: Option<(Backlight, Brightness)>, now: Option<Instant>) {
         let same_device =
             self.backlight.as_ref().map(|b| &b.name) == seen.as_ref().map(|(b, _)| &b.name);
-        if !same_device || !std::mem::replace(&mut self.looked, true) {
+        let first = !std::mem::replace(&mut self.looked, true);
+        if !same_device || first {
             match &seen {
                 Some((b, v)) => witness(&format!(
                     "backlight: {} {}/{} ({:?})",

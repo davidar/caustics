@@ -17,7 +17,8 @@
 
 use caustics_bar_abi::buffer::APPLET_POWER;
 use caustics_bar_abi::wire::{
-    Frame, RFLAG_CHECKED, RFLAG_DISABLED, RFLAG_HAS_MENU, RFLAG_RADIO, RowsBuilder,
+    Frame, RFLAG_ATTENTION, RFLAG_CHECKED, RFLAG_DISABLED, RFLAG_HAS_MENU, RFLAG_RADIO, RFLAG_SHOW,
+    RowsBuilder,
 };
 
 use crate::backlight::Brightness;
@@ -75,12 +76,15 @@ const SEPARATOR_AFTER: usize = 2;
 /// Everything the frame is made of. `battery` is `None` when there is no
 /// battery (`IsPresent = false`) or no UPower at all — in both cases the frame
 /// has no battery row and so no battery menu. `brightness` is `None` without a
-/// backlight, `profiles` without a power-profiles daemon.
+/// backlight, `profiles` without a power-profiles daemon. `osd` is the
+/// brightness on-screen display (`crate::osd`): part of the picture, so a
+/// flag changing alone is a frame.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Picture {
     pub battery: Option<Battery>,
     pub brightness: Option<Brightness>,
     pub profiles: Option<Profiles>,
+    pub osd: bool,
 }
 
 /// The whole frame. `settings` says whether a settings program can be named
@@ -99,6 +103,11 @@ pub fn picture(revision: u32, picture: &Picture, settings: bool) -> Frame {
     let Some(battery) = picture.battery.as_ref() else {
         return rows.frame();
     };
+    // The brightness on-screen display: the battery chip asks for a toast and
+    // the slider is its row. The slider hangs off the battery chip, so a
+    // machine with no battery has no brightness toast; such a machine (a
+    // desktop) has no backlight either.
+    let osd = picture.osd && picture.brightness.is_some();
     // The percentage as the label and the fraction as the level on the icon;
     // the icon name is UPower's own, which already encodes charging.
     let chip = rows.item(
@@ -106,7 +115,7 @@ pub fn picture(revision: u32, picture: &Picture, settings: bool) -> Frame {
         Some(&format!("{:.0}%", battery.percent)),
         Some(&battery.icon),
         battery.percent / 100.0,
-        RFLAG_HAS_MENU,
+        RFLAG_HAS_MENU | if osd { RFLAG_SHOW } else { 0 },
     );
     rows.menu(
         chip,
@@ -125,7 +134,7 @@ pub fn picture(revision: u32, picture: &Picture, settings: bool) -> Frame {
             brightness.value as f32,
             0.0,
             brightness.max as f32,
-            0,
+            if osd { RFLAG_ATTENTION } else { 0 },
         );
     }
     if let Some(modes) = picture.profiles.as_ref() {

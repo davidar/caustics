@@ -22,6 +22,10 @@ tokio = { version = "1.53.1", default-features = false, features = [
     "time",
     "macros",
 ] }
+# The kernel's uevent socket, opened by hand (`src/uevent.rs`): one netlink
+# socket is three calls, and a netlink crate or libudev would be more to carry
+# than the socket itself.
+libc = "0.2.189"
 # UPower and logind on the system bus. `tokio` instead of the default
 # `async-io`, so the process carries one executor rather than two.
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
