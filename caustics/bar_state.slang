@@ -211,6 +211,14 @@ public struct NotifyScratch
     public uint toast_said_held;
 };
 
+/// What the clock keeps (`clock.slang`): nothing between dispatches, and
+/// inside one build the clock's item index, which the calendar's cells hang
+/// off.
+public struct ClockScratch
+{
+    public uint build_item;
+};
+
 /// What the charts keep between dispatches (`sysmon.slang`): the strip's
 /// shape, what was last witnessed of it, and the chart numbers' popup.
 public struct SysmonScratch
@@ -328,6 +336,8 @@ public struct Private
     public SysmonScratch sysmon;
     /// The toasts' (`notify.slang`).
     public NotifyScratch notify;
+    /// The clock's (`clock.slang`).
+    public ClockScratch clock;
 
     // -- the anchor, likewise ----------------------------------------------
     /// The `(EDGE, BAR_HEIGHT)` pair last pushed as an `ACT_ANCHOR`. Zero

@@ -144,12 +144,17 @@ import bar_paint;
 import bar_table;
 import sysmon;
 import notify;
+import clock;
 
 export static const uint SYSMON_CHART = ITEM_CHART;
 export static const uint SYSMON_LINE = ITEM_CHART_LINE;
 export static const uint SYSMON_CHART_TAG = ID_CHART;
 export static const uint SYSMON_LINE_TAG = ID_NUMBERS;
 export static const uint NOTIFY_ROW_TAG = ID_APPLET;
+export static const uint CLOCK_ITEM = ITEM_CLOCK;
+export static const uint CLOCK_CELL = ITEM_CAL_CELL;
+export static const uint CLOCK_TAG = ID_CLOCK;
+export static const uint CLOCK_CELL_TAG = ID_CALENDAR;
 
 // ===========================================================================
 // Sliders. One definition of where the track is, read by the layout, by the
@@ -229,7 +234,7 @@ NameRef item_name(uint item)
     switch (tag)
     {
     case ID_OVERVIEW: return name_plain(NAME_OVERVIEW);
-    case ID_CLOCK:    return name_plain(NAME_CLOCK);
+    case ID_CLOCK:    return clock_name(it);
     case ID_CAFFEINE: return name_plain(NAME_CAFFEINE);
     // The app id's own bytes, which are the operand words an `ACT_SPAWN`
     // carries too — one range, read twice.
@@ -257,25 +262,7 @@ NameRef item_name(uint item)
             ? name_of(NAME_APPLET, sc.name_off, sc.name_len, 0u, 2u)
             : name_of(NAME_APPLET_N, sc.name_off, sc.name_len, row, 3u);
     }
-    case ID_CALENDAR:
-    {
-        uint payload = id_payload(it.id);
-        switch (id_aux(it.id))
-        {
-        case CAL_TITLE:
-        {
-            uint month = payload & 0xffu;
-            return (month >= 1u && month <= 12u)
-                ? name_of(NAME_CAL_TITLE, MONTHS[month - 1u], payload >> 8, 0u, 2u)
-                : name_plain(NAME_ITEM);
-        }
-        case CAL_WEEKDAY:
-            return payload < 7u ? name_of(NAME_CAL_WEEKDAY, WEEKDAYS[payload], 0u, 0u, 1u)
-                                : name_plain(NAME_ITEM);
-        default:
-            return name_of(NAME_CAL_DAY, payload, 0u, 0u, 1u);
-        }
-    }
+    case ID_CALENDAR: return calendar_cell_name(it);
     case ID_NUMBERS:  return sysmon_line_name(it);
     default: return name_plain(NAME_ITEM);
     }
@@ -545,76 +532,6 @@ Id pick_window(uint entry, Id fallback)
     return private[0].items[pick].id;
 }
 
-// ---------------------------------------------------------------------------
-// The calendar: the clock's click opens this month as a
-// menu-kind popup — a title, the weekday initials, the days in a grid, today
-// marked. Its level is the clock's own id, so the popup's whole life (the
-// grab, a click elsewhere, a second click on the clock) is a menu's.
-//
-// Everything below is arithmetic on two words the embassy publishes:
-// `inputs.clock_date` (today, and the month) and `inputs.clock_month` (the
-// year, the 1st's weekday and the month's length). The cells are built in
-// `bar_build` (`build_calendar`) and placed in `layout_calendar`.
-// ---------------------------------------------------------------------------
-
-/// The column weekday `weekday` (0 = Sunday) sits in.
-uint calendar_column(uint weekday)
-{
-    uint start = CAL_WEEK_STARTS_MONDAY ? 1u : 0u;
-    return (weekday + 7u - start) % 7u;
-}
-
-/// How many days this month has; 0 when the embassy has no local time.
-uint calendar_days()
-{
-    return min(inputs.clock_month & 0xffu, 31u);
-}
-
-/// The grid position of day `day` (1-based), counted row-major from the first
-/// week's first column.
-uint calendar_cell(uint day)
-{
-    uint first = min((inputs.clock_month >> 8) & 0xffu, 6u);
-    return calendar_column(first) + max(day, 1u) - 1u;
-}
-
-/// How many weeks this month spans: four to six.
-uint calendar_rows()
-{
-    uint days = calendar_days();
-    return days == 0u ? 0u : calendar_cell(days) / 7u + 1u;
-}
-
-/// The calendar popup's size: the grid, or the title if that is wider, inside
-/// the popup's pad; a title row, the weekday row and the weeks. Known from the
-/// facts alone, so the click asks for the right size before a cell is built.
-float2 calendar_want(float ppad, float title_w)
-{
-    float s = scale_px();
-    float cell = CAL_CELL_PX * s;
-    float gap = CAL_GAP * s;
-    uint rows = calendar_rows();
-    float grid_w = 7.0 * cell + 6.0 * gap;
-    float grid_h = float(rows + 1u) * cell + float(rows) * gap;
-    return float2(max(grid_w, title_w) + 2.0 * ppad, 2.0 * ppad + MENU_ROW_H * s + grid_h);
-}
-
-/// One `calendar: open` line, when the click asks for the popup: what the
-/// facts say the grid is, which is what a wrong grid would be checked against.
-void witness_calendar()
-{
-    uint month = (inputs.clock_date >> 8) & 0xffu;
-    uint first = min((inputs.clock_month >> 8) & 0xffu, 6u);
-    Args a = args_new();
-    arg(a, (month >= 1u && month <= 12u) ? MONTHS[month - 1u] : getStringHash("?"));
-    arg(a, inputs.clock_month >> 16);
-    arg(a, calendar_days());
-    arg(a, WEEKDAYS[first]);
-    arg(a, calendar_rows());
-    witness(WITNESS_INFO,
-            getStringHash("calendar: open {0:s} {1} ({2} days, the 1st a {3:s}, {4} weeks)"), a);
-}
-
 /// A click landed on `elem` with `button` at `pos`: the bar's entire policy,
 /// one function per kind. Everything it decides leaves as an **action** with its own
 /// operands (docs/abi.md, *The action ring*) — a window's id, an app id's bytes, a slot
@@ -650,7 +567,7 @@ void dispatch_click(uint kind, uint ii, Item it, uint elem, uint button, float2 
         click_overview(button);
         break;
     case ITEM_CLOCK:
-        click_clock(ii, it, elem, button);
+        clock_click(ii, it, elem, button);
         break;
     case ITEM_CHART:
         sysmon_click(ii, button);
@@ -753,30 +670,6 @@ void click_overview(uint button)
         return;
     }
     act(ACT_TOGGLE_OVERVIEW);
-}
-
-/// The clock: the calendar, a menu whose level is the clock.
-/// Clicking the clock while it is up closes it, as an applet's chip does.
-/// The middle and the right button do nothing.
-void click_clock(uint ii, Item it, uint elem, uint button)
-{
-    if (button == BTN_MIDDLE || button == BTN_RIGHT || !CLOCK_SHOW_CALENDAR)
-    {
-        return;
-    }
-    Id own = it.id;
-    if (popup_live() && private[0].popup_kind == POPUP_MENU
-        && private[0].popup_id.eq(own))
-    {
-        close_popup();
-        return;
-    }
-    // A dock preview still in its grace period when the click lands.
-    end_preview_for_menu();
-    set_menu_level(ii);
-    request_popup(POPUP_MENU, private[0].elements[elem].rect, own,
-                  calendar_want(POPUP_PAD * scale_px(), 0.0));
-    witness_calendar();
 }
 
 /// The caffeine chip, the one chip that is not a sidecar's at all: its
@@ -1078,12 +971,7 @@ void step_menu()
     {
         close_popup();
     }
-    // A reload that turned the calendar off while it was up.
-    if (popup_live() && private[0].popup_kind == POPUP_MENU && !CLOCK_SHOW_CALENDAR
-        && id_tag(menu_level_id()) == ID_CLOCK)
-    {
-        close_popup();
-    }
+    clock_step_menu();
 }
 
 // ---------------------------------------------------------------------------
@@ -1137,79 +1025,6 @@ bool level_row(Item it, uint level)
     return menu_row_kind(it.kind) && it.parent == level;
 }
 
-/// The calendar's cells, measured and placed. Returns the
-/// next free element index.
-///
-/// The title spans the popup under its pad; the grid is centred under it,
-/// seven columns of CAL_CELL_PX with CAL_GAP between, the weekday initials in
-/// its first row and the days from the 1st's column on. Where a cell goes is
-/// read off its id — a weekday's index, a day's number — against this frame's
-/// facts, so the cells need no position of their own. A calendar is never
-/// taller than a title and seven rows, so it has no scroll and no clip.
-uint layout_calendar(uint next, bool open, float2 popup, float ppad)
-{
-    float s = scale_px();
-    uint n = live_items();
-    uint level = menu_level();
-    float cell = CAL_CELL_PX * s;
-    float gap = CAL_GAP * s;
-    float title_h = MENU_ROW_H * s;
-
-    float title_w = 0.0;
-    for (uint i = 0u; i < n; ++i)
-    {
-        Item it = private[0].items[i];
-        if (it.kind == ITEM_CAL_CELL && it.parent == level && id_aux(it.id) == CAL_TITLE)
-        {
-            title_w = max(title_w, item_content_w(it) + 2.0 * CHIP_PAD * s);
-        }
-    }
-    float2 want = calendar_want(ppad, title_w);
-    private[0].popup_want = want;
-    private[0].menu_scroll = 0.0;
-    private[0].menu_scroll_max = 0.0;
-    private[0].menu_clip = float2(0.0, 0.0);
-
-    float2 size = open ? popup : want;
-    float inner_w = max(size.x - 2.0 * ppad, 1.0);
-    float grid_w = 7.0 * cell + 6.0 * gap;
-    float x0 = ppad + floor((inner_w - grid_w) * 0.5);
-    float y0 = ppad + title_h;
-    float step = cell + gap;
-
-    place(ELEM_BACK, TARGET_POPUP, float4(0.0, 0.0, 0.0, 0.0), 0.0, NO_INDEX, NO_INDEX, false);
-    for (uint i = 0u; i < n && next < MAX_ELEMENTS; ++i)
-    {
-        Item it = private[0].items[i];
-        if (it.kind != ITEM_CAL_CELL || it.parent != level)
-        {
-            continue;
-        }
-        uint which = id_payload(it.id);
-        float4 rect;
-        switch (id_aux(it.id))
-        {
-        case CAL_TITLE:
-            rect = float4(ppad, ppad, inner_w, title_h);
-            break;
-        case CAL_WEEKDAY:
-            rect = float4(x0 + float(calendar_column(which % 7u)) * step, y0, cell, cell);
-            break;
-        default:
-        {
-            uint at = calendar_cell(which);
-            rect = float4(x0 + float(at % 7u) * step, y0 + float(at / 7u + 1u) * step, cell, cell);
-            break;
-        }
-        }
-        place(next, TARGET_POPUP, rect, MENU_RADIUS * s, it.block, i, open);
-        next += 1u;
-    }
-    place(ELEM_PREVIEW, TARGET_POPUP, float4(0.0, 0.0, 0.0, 0.0), 0.0,
-          NO_INDEX, NO_INDEX, false);
-    return next;
-}
-
 /// The menu rows of the current level, measured and placed. Returns the next
 /// free element index.
 ///
@@ -1221,12 +1036,6 @@ uint layout_menu(uint next, bool open, float2 popup, float ppad)
     uint n = live_items();
     uint level = menu_level();
     float gutter = MENU_GUTTER * s;
-
-    // The clock's menu is its calendar: a grid, not rows.
-    if (level < n && private[0].items[level].kind == ITEM_CLOCK)
-    {
-        return layout_calendar(next, open, popup, ppad);
-    }
 
     // A back row exists exactly when the level is itself a row — i.e. the bar has
     // descended into a submenu. At the root the level is the item whose menu
@@ -1427,6 +1236,11 @@ void layout()
     else if (kind == POPUP_TOAST)
     {
         next = layout_toast(next, open, popup, ppad);
+    }
+    else if (kind == POPUP_MENU && item_of(menu_level()).kind == ITEM_CLOCK)
+    {
+        // The clock's menu is its calendar: a grid, not rows.
+        next = layout_calendar(next, open, popup, ppad);
     }
     else if (kind == POPUP_MENU)
     {
@@ -1803,67 +1617,6 @@ float4 wake_light(float2 p, float4 col)
 // buffer and no neighbour's bytes are ever in one of them.
 // ===========================================================================
 
-/// `HH:MM` from `hour * 60 + minute`.
-Composed compose_clock_time(uint minutes)
-{
-    Composed c = compose_new();
-    compose_number(c, (minutes / 60u) % 24u, 2u);
-    compose_byte(c, 0x3au); // ':'
-    compose_number(c, minutes % 60u, 2u);
-    return c;
-}
-
-/// The date, in CLOCK_DATE_ORDER's order and in the tunables' own words.
-///
-/// The separator is one space *between parts that said something*: a token
-/// this file has no arm for, or a weekday the pool has no literal for, leaves
-/// no gap behind it rather than a double space.
-Composed compose_clock_date(uint packed)
-{
-    uint weekday = (packed >> 16) & 0xffu;
-    uint month = (packed >> 8) & 0xffu;
-    uint day = packed & 0xffu;
-
-    Composed c = compose_new();
-    for (uint k = 0u; k < uint(CLOCK_DATE_ORDER.getCount()); ++k)
-    {
-        uint before = c.len;
-        if (before > 0u)
-        {
-            compose_byte(c, 0x20u); // ' '
-        }
-        uint after_space = c.len;
-        switch (CLOCK_DATE_ORDER[k])
-        {
-        case DATE_WEEKDAY:
-            if (weekday < 7u)
-            {
-                compose_literal(c, WEEKDAYS[weekday]);
-            }
-            break;
-        case DATE_DAY:
-            if (day >= 1u && day <= 31u)
-            {
-                compose_number(c, day, 1u);
-            }
-            break;
-        case DATE_MONTH:
-            if (month >= 1u && month <= 12u)
-            {
-                compose_literal(c, MONTHS[month - 1u]);
-            }
-            break;
-        default:
-            break;
-        }
-        if (c.len == after_space)
-        {
-            c.len = before; // the part said nothing; take the space back
-        }
-    }
-    return c;
-}
-
 // ===========================================================================
 // bar_build — the item table, built here (docs/abi.md, *The private buffer*).
 //
@@ -1904,106 +1657,6 @@ void build_overview(inout Build b, uint icon_px_u)
     it.icon_block = icon;
     it.id = id_tagged(ID_OVERVIEW, 0u, 0u);
     build_push(b, it);
-}
-
-/// The clock: two reservations `bar_compose` fills, both always taken so that
-/// CLOCK_SHOW_DATE stays a width-and-paint decision needing no rebuild.
-/// Returns its index, which the calendar's cells hang off.
-uint build_clock(inout Build b, uint px)
-{
-    uint block = build_composed(b, px, COMPOSE_CLOCK_TIME);
-    uint aux = build_composed(b, px, COMPOSE_CLOCK_DATE);
-    Item it = item_none();
-    it.kind = ITEM_CLOCK;
-    it.block = block;
-    it.aux_block = aux;
-    it.id = id_tagged(ID_CLOCK, 0u, 0u);
-    return build_push(b, it);
-}
-
-/// One calendar cell under the clock.
-void build_cal_cell(inout Build b, uint parent, uint block, uint part, uint payload, uint flags)
-{
-    Item it = item_none();
-    it.kind = ITEM_CAL_CELL;
-    it.parent = parent;
-    it.block = block;
-    it.id = id_tagged(ID_CALENDAR, part, payload);
-    it.flags = flags;
-    build_push(b, it);
-}
-
-/// The calendar's cells, while the clock is the menu level: the title, seven
-/// weekday initials, one cell per day.
-///
-/// **Composed here and not in `bar_compose`**, as a tray chip's letter is:
-/// the cells exist only on a build for the clock's level, and a minute tick
-/// runs this pass too, so a day that turns over under an open calendar moves
-/// the mark with it. Two reservations for all of it: the title (the `MONTHS`
-/// word and the year), and every day's digits end to end in one run
-/// (`12345678910...31`, 53 bytes of the 96), each day's block a range of it. A
-/// weekday initial is the first character of its `WEEKDAYS` literal, read
-/// straight out of the pool: no bytes to write at all.
-///
-/// The weekday row is IFLAG_DISABLED: it is drawn at DISABLED_ALPHA, which is
-/// what a column header is, and it takes no click (no cell does). Today's day
-/// carries IFLAG_ATTENTION, the wash an attention row wears.
-void build_calendar(inout Build b, uint parent, uint px)
-{
-    uint month = (inputs.clock_date >> 8) & 0xffu;
-    uint today = inputs.clock_date & 0xffu;
-    uint year = inputs.clock_month >> 16;
-
-    // The title.
-    Composed title = compose_new();
-    if (month >= 1u && month <= 12u)
-    {
-        compose_literal(title, MONTHS[month - 1u]);
-        compose_byte(title, 0x20u); // ' '
-    }
-    compose_number(title, year, 1u);
-    uint at = build_reserve(b);
-    if (at != NO_INDEX)
-    {
-        uint wrote = compose_store(at, title);
-        build_cal_cell(b, parent, build_text(b, SRC_STRINGS, at, wrote, px, LABEL_INK, 0u),
-                       CAL_TITLE, (year << 8) | month, 0u);
-    }
-
-    // The weekday initials, in column order.
-    uint start = CAL_WEEK_STARTS_MONDAY ? 1u : 0u;
-    for (uint c = 0u; c < 7u; ++c)
-    {
-        uint weekday = (c + start) % 7u;
-        Literal lit = literal(WEEKDAYS[weekday]);
-        uint len = lit.len == 0u ? 0u : min(utf8_char_len(utf8_byte(lit.off)), lit.len);
-        build_cal_cell(b, parent, build_text(b, SRC_STRINGS, lit.off, len, px, LABEL_INK, 0u),
-                       CAL_WEEKDAY, weekday, IFLAG_DISABLED);
-    }
-
-    // The days: one run of digits, a range each.
-    uint days = calendar_days();
-    Composed digits = compose_new();
-    for (uint d = 1u; d <= days; ++d)
-    {
-        compose_number(digits, d, 1u);
-    }
-    uint run = build_reserve(b);
-    if (run == NO_INDEX)
-    {
-        return;
-    }
-    uint wrote = compose_store(run, digits);
-    for (uint d = 1u; d <= days; ++d)
-    {
-        // Days 1 to 9 are one byte each from the run's start; 10 on are two.
-        uint off = d < 10u ? d - 1u : 9u + (d - 10u) * 2u;
-        uint len = d < 10u ? 1u : 2u;
-        uint block = off + len <= wrote
-            ? build_text(b, SRC_STRINGS, run + off, len, px, LABEL_INK, 0u)
-            : NO_INDEX;
-        build_cal_cell(b, parent, block, CAL_DAY, d, d == today ? IFLAG_ATTENTION : 0u);
-    }
 }
 
 /// The caffeine chip, or nothing at all: a state whose icons no theme has
@@ -2364,7 +2017,7 @@ void bar_build(uint3 gid: SV_DispatchThreadID)
         entry_item[a] = build_entry(b, a, place, text_px[ITEM_DOCK], icon_px_u);
     }
 
-    uint clock_item = build_clock(b, text_px[ITEM_CLOCK]);
+    clock_build(b, text_px[ITEM_CLOCK]);
 
     // Caffeine first among the applets and before every sidecar's, so its
     // index cannot move: it is bound once at startup where a sidecar's chips
@@ -2567,9 +2220,9 @@ void bar_build(uint3 gid: SV_DispatchThreadID)
             }
         }
     }
-    else if (tag == ID_CLOCK && CLOCK_SHOW_CALENDAR && clock_item != NO_INDEX)
+    else if (tag == ID_CLOCK)
     {
-        build_calendar(b, clock_item, text_px[ITEM_CAL_CELL]);
+        clock_build_calendar(b, text_px[ITEM_CAL_CELL]);
     }
     else if (tag == ID_CHART)
     {
@@ -2735,10 +2388,10 @@ void bar_compose(uint3 gid: SV_DispatchThreadID)
         switch (blk.hash)
         {
         case COMPOSE_CLOCK_TIME:
-            len = compose_store(blk.a, compose_clock_time(inputs.clock_time));
+            len = clock_compose_time(blk.a);
             break;
         case COMPOSE_CLOCK_DATE:
-            len = compose_store(blk.a, compose_clock_date(inputs.clock_date));
+            len = clock_compose_date(blk.a);
             break;
         default:
             break;
