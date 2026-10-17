@@ -7,9 +7,6 @@ fn every_variant_has_its_own_suffix_and_define() {
     // The BGRA half of the pair is the one that is easy to get wrong: the
     // define alone compiles, and the module is then rejected (or worse,
     // accepted) by the driver.
-    assert_eq!(
-        DstFormat::Bgra8.args(),
-        ("DST_FORMAT_BGRA8", &["-default-image-format-unknown"][..])
-    );
-    assert!(DstFormat::Rgba8.extra_args().is_empty());
+    assert_eq!(DstFormat::Bgra8.args(), ("DST_FORMAT_BGRA8", true));
+    assert_eq!(DstFormat::Rgba8.args(), ("DST_FORMAT_RGBA8", false));
 }

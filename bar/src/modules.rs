@@ -1,7 +1,7 @@
 //! The caustic arriving as bytes: one generation of `Module` frames collected
 //! until it is whole (docs/abi.md, *Module*).
 //!
-//! The bar does not run slangc. Watching the files, compiling every entry
+//! The bar does not compile. Watching the files, compiling every entry
 //! point and reporting the diagnostics is compiler driving, which does not
 //! belong in a process whose job is to hold a Wayland surface; it is
 //! `caustics-reload`'s.
@@ -25,7 +25,7 @@
 //! compiler only ever abandons a generation by being killed mid-write or by
 //! recompiling on a newer save, and in both cases the older one is stale.
 
-use std::collections::BTreeMap;
+use punchcutter_slang::Reflection;
 
 use crate::abi::ENTRIES;
 use crate::abi::wire::{Module, ModuleAssembly, ModuleChunk};
@@ -62,36 +62,28 @@ impl Ready {
             .expect("a ready generation is one module per entry point")
     }
 
-    /// The reflection the bindings are checked against. Any of the modules'
-    /// would do — the *parameters* in slangc's reflection are the program's,
-    /// not an entry point's — so the first one is taken and the rest are read
-    /// only for their literals.
-    pub fn reflection(&self) -> &str {
-        &self.modules[0].reflection
-    }
-
-    /// Every `getStringHash` literal the new caustic names, merged.
+    /// The new caustic's reflection: the bindings `Gpu::reload_all` checks
+    /// and every `getStringHash` literal the caustic names.
     ///
-    /// Reflection reports only what an entry point *reaches*, so the caustic's
-    /// table is the union over all of them. An unreadable reflection fails the
-    /// whole generation:
-    /// a hash in the mirror is only meaningful against the caustic that
-    /// produced it, and half a table would answer for strings nobody asked
-    /// about.
-    pub fn strings(&self) -> Result<BTreeMap<u32, String>, String> {
-        let mut table = BTreeMap::new();
+    /// The compiler links every entry point at once and reflects the whole
+    /// program, so every module carries the same reflection; each is read
+    /// all the same and their literals merged, which costs nothing when they
+    /// agree and keeps a generation from a writer that compiled entry points
+    /// apart whole. The bindings are the first module's. An unreadable
+    /// reflection anywhere fails the whole generation: a hash in the mirror
+    /// is only meaningful against the caustic that produced it, and half a
+    /// table would answer for strings nobody asked about.
+    pub fn reflection(&self) -> Result<Reflection, String> {
+        let mut merged: Option<Reflection> = None;
         for module in &self.modules {
-            match punchcutter_core::slang::hashed_strings(&module.reflection) {
-                Ok(strings) => table.extend(strings),
-                Err(err) => {
-                    return Err(format!(
-                        "{}'s reflection cannot be read ({err})",
-                        module.name
-                    ));
-                }
+            let reflection = Reflection::from_json(&module.reflection)
+                .map_err(|err| format!("{}'s reflection cannot be read ({err})", module.name))?;
+            match merged.as_mut() {
+                Some(first) => first.strings.extend(reflection.strings),
+                None => merged = Some(reflection),
             }
         }
-        Ok(table)
+        Ok(merged.unwrap_or_default())
     }
 
     /// SPIR-V and reflection together, for the witness line.

@@ -1,9 +1,9 @@
 //! The strings the caustic owns, recovered from the caustic.
 //!
 //! A caustic that wants a label writes `getStringHash("Close")` and puts the
-//! hash in the mirror; slangc records the literal behind every such call in its
-//! reflection, and [`punchcutter_core::slang`] hands that table back on the same
-//! compile that produced the SPIR-V. So the text of the bar's chrome lives in
+//! hash in the mirror; Slang records the literal behind every such call in its
+//! reflection, and `punchcutter_slang` hands that table back
+//! ([`Reflection::strings`]) from the same compile that produced the SPIR-V. So the text of the bar's chrome lives in
 //! exactly one place — the Slang source, beside the decision to show it — and
 //! the embassy, which has to shape it, looks it up by hash. No list of strings
 //! on the CPU, no ABI field per label, nothing to keep in agreement (the rule
@@ -18,8 +18,8 @@
 //! # It starts full
 //!
 //! A bar's first table is the **baked** one: `bar/build.rs` writes
-//! slangc's reflection beside the SPIR-V it compiled the program from, and
-//! [`Strings::baked`] parses `hashedStrings` out of it at startup. The SPIR-V
+//! the program's reflection beside the SPIR-V it compiled, and
+//! [`Strings::baked`] reads the literals out of it at startup. The SPIR-V
 //! running on the first frame and the literals answering on the first frame
 //! therefore come from the same compile, which is the property that matters —
 //! and the dock's menu has its words before the first right click rather than
@@ -36,6 +36,8 @@
 
 use std::collections::BTreeMap;
 
+use punchcutter_slang::Reflection;
+
 /// Every literal the running caustic names, by `getStringHash` value.
 #[derive(Debug, Default)]
 pub struct Strings {
@@ -51,19 +53,21 @@ impl Strings {
 
     /// The table the *baked* SPIR-V was compiled with.
     ///
-    /// `bar/build.rs` writes slangc's `-reflection-json` output into `OUT_DIR`
-    /// from the first compile of the program, so this is the literal table of
-    /// the very modules the first frame runs — no slangc at startup, and no
-    /// window in which the bar knows a hash but not its text.
+    /// `bar/build.rs` writes the program's reflection into `OUT_DIR` from the
+    /// same compile as the SPIR-V, so this is the literal table of the very
+    /// modules the first frame runs — no compile at startup, and no window in
+    /// which the bar knows a hash but not its text.
     ///
     /// Reflection that cannot be parsed is one witness and an empty table. A
     /// bar whose dock menu has no rows in it is a poor bar; a bar that refuses
     /// to start is not a bar at all.
     pub fn baked() -> Strings {
         const REFLECTION: &str = include_str!(concat!(env!("OUT_DIR"), "/bar.reflection.json"));
-        match punchcutter_core::slang::hashed_strings(REFLECTION) {
-            Ok(table) => {
-                let strings = Strings { table };
+        match Reflection::from_json(REFLECTION) {
+            Ok(reflection) => {
+                let strings = Strings {
+                    table: reflection.strings,
+                };
                 tracing::info!("strings: {} literals (baked)", strings.len());
                 strings
             }

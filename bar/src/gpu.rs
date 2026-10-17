@@ -28,8 +28,8 @@
 //! the strings buffer; that module declares no bindings at all, so the numbers
 //! there are `bar_state.slang`'s choice and `shape_tables()` in it is the gather.
 //!
-//! **The layouts are built from slangc's reflection**, not from a list here
-//! ([`BAKED_REFLECTION`]), so there is no second copy of every binding here to
+//! **The layouts are built from the compiler's reflection**, not from a list here
+//! ([`baked_reflection`]), so there is no second copy of every binding here to
 //! keep dense, in order, and in agreement with the `[[vk::binding(n, g)]]`
 //! literals in the caustics. The caustics are the one declaration; what is
 //! left here is the two things a reflection cannot
@@ -51,7 +51,7 @@ use std::ptr::NonNull;
 
 use anyhow::{Context, Result, anyhow, bail};
 use punchcutter_core::gpu::{passthrough_pipeline, storage_buffer};
-use punchcutter_core::slang::{self, Binding, BindingKind};
+use punchcutter_slang::{Binding, BindingKind, Reflection};
 use raw_window_handle::{
     RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
 };
@@ -979,9 +979,9 @@ impl Gpu {
         })
     }
 
-    /// The slangc defines and extra flags matching the live swapchain format,
-    /// for a reload compile. Mirrors build.rs, which compiles one set per `DstFormat::ALL` with `format.args()`.
-    pub fn dst_format_args(&self) -> (&'static str, &'static [&'static str]) {
+    /// The define and the format-unknown switch matching the live swapchain
+    /// format, for a compile on this device (the oracle's). Mirrors build.rs, which compiles one set per `DstFormat::ALL` with `format.args()`.
+    pub fn dst_format_args(&self) -> (&'static str, bool) {
         surface::dst_format(self.format)
             .unwrap_or_else(|| {
                 unreachable!(
@@ -1449,7 +1449,7 @@ impl Gpu {
     /// nothing. The state buffer is never touched, so the bar keeps its popup,
     /// its menu level and its animations across a reload.
     ///
-    /// `reflection` is that same compile's reflection JSON. The three bind
+    /// `reflection` is that same compile's reflection. The three bind
     /// group layouts were built at startup from the *baked* one and cannot be
     /// rebuilt without rebuilding the pipeline layout and every bind group
     /// hanging off it, so a caustic that moved, added or retyped a binding is
@@ -1460,7 +1460,7 @@ impl Gpu {
     #[allow(clippy::too_many_arguments)]
     pub fn reload_all(
         &mut self,
-        reflection: &str,
+        reflection: &Reflection,
         build: &[u8],
         compose: &[u8],
         shape: &[u8],
@@ -1469,10 +1469,7 @@ impl Gpu {
         sample: &[u8],
         draw: &[u8],
     ) -> Result<()> {
-        let fresh = slang::bindings(reflection).map_err(|err| {
-            anyhow!("reload refused: its reflection cannot be read ({err}); restart the bar")
-        })?;
-        if let Some(witness) = first_difference(&self.bindings, &fresh) {
+        if let Some(witness) = first_difference(&self.bindings, &reflection.bindings) {
             bail!("reload refused: bindings changed ({witness}); restart the bar");
         }
         let pipelines = build_pipelines(
@@ -1932,7 +1929,7 @@ impl Gpu {
     pub fn reload_baked(&mut self) -> Result<()> {
         let spv = baked_spv(self.format);
         self.reload_all(
-            BAKED_REFLECTION,
+            baked_reflection(),
             spv.build,
             spv.compose,
             spv.shape,
@@ -2532,15 +2529,32 @@ fn create_preview(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
     (texture, view)
 }
 
-/// slangc's reflection of the baked program, verbatim — `bar/build.rs` writes
-/// it beside the SPIR-V out of the first compile, and every entry point and
-/// both [`DstFormat`](caustics_bar_abi::DstFormat) variants reflect the same parameters.
+/// The compiler's reflection of the baked program, as JSON — `bar/build.rs`
+/// writes it beside the SPIR-V out of the first format's compile, and every
+/// entry point and both [`DstFormat`](caustics_bar_abi::DstFormat) variants
+/// reflect the same parameters. Read through [`baked_reflection`].
 ///
 /// This is the *only* declaration of the bar's bindings on the CPU side. The
 /// `[[vk::binding(n, g)]]` literals in the caustics are the source of truth;
 /// they are read here rather than transcribed into hand-written layout
 /// entries that tests would have to keep in agreement.
 const BAKED_REFLECTION: &str = include_str!(concat!(env!("OUT_DIR"), "/bar.reflection.json"));
+
+/// [`BAKED_REFLECTION`], read once.
+///
+/// Panics rather than returns: a reflection the bar cannot read means it
+/// does not know what descriptors its own caustic wants, and there is no frame
+/// worth drawing after that. It is baked at build time by the same crate
+/// that reads it here, so this can only fail on a build whose two halves
+/// disagree — which is a build to fix, not a session to limp through.
+fn baked_reflection() -> &'static Reflection {
+    static BAKED: std::sync::OnceLock<Reflection> = std::sync::OnceLock::new();
+    BAKED.get_or_init(|| {
+        Reflection::from_json(BAKED_REFLECTION).unwrap_or_else(|err| {
+            panic!("the reflection baked beside the bar's SPIR-V cannot be read: {err}")
+        })
+    })
+}
 
 /// The bar's own bind group: the state buffer, the rings, the target's images, the facts, the arenas and the samples frame.
 const SET_BAR: u32 = 0;
@@ -2594,7 +2608,8 @@ pub(crate) fn private_field_offset(field: &str) -> usize {
 /// Test-only, like the above.
 #[cfg(test)]
 pub(crate) fn reflected_offset(structure: &str, field: &str) -> usize {
-    *slang::struct_offsets(BAKED_REFLECTION)
+    *baked_reflection()
+        .structs
         .get(structure)
         .unwrap_or_else(|| panic!("the reflection has no `{structure}` struct"))
         .get(field)
@@ -2602,16 +2617,8 @@ pub(crate) fn reflected_offset(structure: &str, field: &str) -> usize {
 }
 
 /// Every binding the baked program declares, sorted by `(set, index)`.
-///
-/// Panics rather than returns: a reflection the bar cannot classify means it
-/// does not know what descriptors its own caustic wants, and there is no frame
-/// worth drawing after that. It is baked at build time, so this can only fail
-/// on a slangc whose output format moved — which is a build to fix, not a
-/// session to limp through.
 fn baked_bindings() -> Vec<Binding> {
-    slang::bindings(BAKED_REFLECTION).unwrap_or_else(|err| {
-        panic!("the reflection baked beside the bar's SPIR-V cannot be read: {err}")
-    })
+    baked_reflection().bindings.clone()
 }
 
 /// One descriptor set's layout entries, in binding order, from the reflection.

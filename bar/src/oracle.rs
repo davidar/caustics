@@ -7,7 +7,7 @@
 //!
 //! The tables it checks live in the caustic's own buffer, which the embassy
 //! allocates and never reads (docs/abi.md, *The private buffer*) — so the walk runs where the tables are. `caustics/bar_check.slang` is a test-only eighth entry point,
-//! `#include`d into `bar.slang` under `-DCAUSTICS_BAR_CHECK` and compiled by this
+//! `#include`d into `bar.slang` under the define `CAUSTICS_BAR_CHECK` and compiled by this
 //! harness alone; it pushes `check:` witnesses into the ring the embassy
 //! already drains, and what is left on this side is:
 //!
@@ -28,7 +28,7 @@
 //! the one test it holds returns early unless `CAUSTICS_BAR_ORACLE=1` is set.
 //!
 //! The gate is what makes it safe beside the rest of the suite: `cargo test
-//! --workspace` never creates a Vulkan instance, never runs slangc, and never
+//! --workspace` never creates a Vulkan instance, never compiles the oracle's entry point, and never
 //! puts a blocking device poll beside `feeders::pipe::tests`, which time
 //! child processes and fail when something parallel eats their slack. A
 //! machine with only an
@@ -102,28 +102,26 @@ impl Oracle {
         let mut gpu = Gpu::headless(640, 32).context("no headless device for the oracle")?;
         let dir = caustics_dir();
         let source = dir.join("bar.slang");
-        let (define, extra) = gpu.dst_format_args();
-        // The same slangc the bar's build script and `caustics-reload` use, with
-        // one define more and the same include path: the caustic's directory,
-        // then the bar's rendered contract, then the text engine's modules. Every other entry point comes out identical to the
-        // baked one — `bar_check` is a file appended under an `#ifdef` — so
-        // only this one is loaded, beside the seven already there.
-        let compiled = punchcutter_core::slang::compile_capturing(
-            &punchcutter_core::slang::slangc_program(),
+        let (define, image_format_unknown) = gpu.dst_format_args();
+        // The same compiler the bar's build script and `caustics-reload` use,
+        // with one define more and the same search path: the caustic's
+        // directory, then the bar's rendered contract, then the text engine's
+        // modules (always on the path). Every other entry point comes out
+        // identical to the baked one — `bar_check` is a file appended under an
+        // `#ifdef` — so only this one is loaded, beside the seven already there.
+        let program = punchcutter_slang::compile_program(
             &source,
-            "bar_check",
-            &[define, "CAUSTICS_BAR_CHECK"],
-            extra,
-            &[
-                dir.as_path(),
-                caustics_bar_abi::rendered_dir(),
-                punchcutter_core::slang_dir(),
-            ],
+            &["bar_check"],
+            &punchcutter_slang::Options {
+                defines: &[define, "CAUSTICS_BAR_CHECK"],
+                includes: &[dir.as_path(), caustics_bar_abi::rendered_dir()],
+                image_format_unknown,
+            },
         )
         .with_context(|| format!("bar_check does not compile from {}", source.display()))?;
         let mut strings = Strings::baked();
-        strings.replace(compiled.strings.clone());
-        gpu.set_check(&compiled.spirv)?;
+        strings.replace(program.reflection.strings);
+        gpu.set_check(&program.entries[0].spirv)?;
         Ok(Oracle { gpu, strings })
     }
 

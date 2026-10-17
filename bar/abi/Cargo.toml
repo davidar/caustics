@@ -14,5 +14,6 @@ punchcutter-core.workspace = true
 
 [build-dependencies]
 # `modules::SHAPE_ABI`: the engine's `shape_abi.slang` as compiled into the
-# engine, one of the four inputs the ABI hash covers.
-punchcutter-core.workspace = true
+# engine, one of the four inputs the ABI hash covers. Without the compiler:
+# the modules are strings, and hashing them needs no Slang.
+punchcutter-slang = { workspace = true, default-features = false }

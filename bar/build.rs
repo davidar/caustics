@@ -1,11 +1,12 @@
 //! Bakes `caustics/bar.slang` into SPIR-V, once per swapchain format.
 //!
-//! The slangc driver is `punchcutter_core::slang`, the same one `caustics-reload` calls
-//! at run time, so a baked caustic and a hot-reloaded one are compiled alike.
-//! Its `compile_capturing` takes `(program, source, entry, defines, extra_args, includes)`;
-//! the search path is the source's own directory, `caustics/`, then one
-//! directory under `OUT_DIR` holding the modules that are not in the tree: the
-//! bar's two rendered from `bar/abi/` and the text engine's.
+//! The compiler is `punchcutter_slang`, Slang in process, the same one
+//! `caustics-reload` calls at run time, so a baked caustic and a hot-reloaded
+//! one are compiled alike: one `compile_program` per format, linking every
+//! entry point at once. The search path is the source's own directory,
+//! `caustics/`, then one directory under `OUT_DIR` holding the bar's two
+//! modules rendered from `bar/abi/`; the text engine's modules come last, on
+//! every compile's path by themselves.
 //!
 //! Every entry point × each [`DstFormat`] variant is one module in `OUT_DIR`,
 //! named `<entry>.<suffix>.spv`; `bar/src/gpu.rs` picks the set matching the
@@ -17,7 +18,7 @@ use std::path::{Path, PathBuf};
 // The entry points and the swapchain formats, from the one place each is
 // named: the compiler sidecar reads the same two from the same crate.
 use caustics_bar_abi::{DstFormat, ENTRIES};
-use punchcutter_core::slang;
+use punchcutter_slang::Options;
 
 fn main() {
     let caustics = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../caustics");
@@ -45,14 +46,13 @@ fn main() {
         println!("cargo:rerun-if-changed={}", module.display());
     }
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-env-changed=SLANGC");
 
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("cargo sets OUT_DIR"));
     // The modules the caustic imports that are not in `caustics/`, which the
     // baked SPIR-V contains as much as the bar's own: the bar's two rendered
-    // contracts, from the build-dependency `caustics-bar-abi`, and the
-    // engine's, the copies compiled into `punchcutter-core`. A change to
-    // either is a change to a build-dependency, which reruns this script.
+    // contracts, from the build-dependency `caustics-bar-abi`. A change to it
+    // is a change to a build-dependency, which reruns this script; so is a
+    // change to the engine's modules, which travel inside `punchcutter-slang`.
     let rendered = out_dir.join("slang");
     caustics_bar_abi::write_rendered(&rendered).unwrap_or_else(|err| {
         panic!(
@@ -60,40 +60,38 @@ fn main() {
             rendered.display()
         )
     });
-    punchcutter_core::modules::write_to(&rendered).unwrap_or_else(|err| {
-        panic!(
-            "could not write the engine's modules to {}: {err}",
-            rendered.display()
-        )
-    });
-    let slangc = slang::slangc_program();
     let includes: [&Path; 2] = [&caustics, &rendered];
     let mut reflected = false;
 
     for format in DstFormat::ALL {
-        let (define, extra_args) = format.args();
-        for entry in ENTRIES {
-            let compiled =
-                slang::compile_capturing(&slangc, &source, entry, &[define], extra_args, &includes)
-                    .unwrap_or_else(|err| panic!("{err}"));
-            // Nothing subscribes to `tracing` in a build script, so slangc's
-            // success-path warnings are surfaced by hand.
-            for line in compiled.warnings.lines() {
-                println!("cargo:warning=slangc: {line}");
-            }
-            let output = out_dir.join(format!("{entry}.{}.spv", format.suffix()));
-            write(&output, &compiled.spirv);
-            // One reflection serves every entry point and both formats: the
-            // parameters (bindings, sets, access) and the `getStringHash`
-            // literals are the program's, not an entry point's. Baked once so
-            // the bar knows both at startup without slangc.
-            if !reflected {
-                write(
-                    &out_dir.join("bar.reflection.json"),
-                    compiled.reflection.as_bytes(),
-                );
-                reflected = true;
-            }
+        let (define, image_format_unknown) = format.args();
+        let options = Options {
+            defines: &[define],
+            includes: &includes,
+            image_format_unknown,
+        };
+        let program = punchcutter_slang::compile_program(&source, &ENTRIES, &options)
+            .unwrap_or_else(|err| panic!("{err}"));
+        // Nothing subscribes to `tracing` in a build script, so Slang's
+        // success-path warnings are surfaced by hand.
+        for line in program.warnings.lines() {
+            println!("cargo:warning=slang: {line}");
+        }
+        for entry in &program.entries {
+            let output = out_dir.join(format!("{}.{}.spv", entry.name, format.suffix()));
+            write(&output, &entry.spirv);
+        }
+        // One reflection serves every entry point and both formats: the
+        // parameters (bindings, sets, access), the struct layouts and the
+        // `getStringHash` literals are the program's, and the program is the
+        // same source either way. Baked once so the bar knows all three at
+        // startup without compiling.
+        if !reflected {
+            write(
+                &out_dir.join("bar.reflection.json"),
+                program.reflection.to_json().as_bytes(),
+            );
+            reflected = true;
         }
     }
 }

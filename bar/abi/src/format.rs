@@ -18,11 +18,11 @@ pub enum DstFormat {
     /// `Rgba8Unorm`: the storage format SPIR-V can name directly.
     Rgba8,
     /// `Bgra8Unorm`: SPIR-V has no BGRA storage-image format, so the image is
-    /// declared format-unknown instead — which needs
-    /// `-default-image-format-unknown` at compile time and the
+    /// declared format-unknown instead — which needs the compiler's
+    /// default-image-format-unknown option at compile time and the
     /// `BGRA8UNORM_STORAGE` feature at run time. Images that *are* read (the
     /// R32Uint visibility buffer) carry an explicit `[format(...)]`, which
-    /// survives the flag.
+    /// survives the option.
     Bgra8,
 }
 
@@ -47,17 +47,20 @@ impl DstFormat {
         }
     }
 
-    /// Extra slangc flags the variant needs beyond its define.
-    pub fn extra_args(self) -> &'static [&'static str] {
+    /// Whether the variant compiles with storage images left format-unknown
+    /// (`image_format_unknown` in the compiler's options): the BGRA one,
+    /// because SPIR-V cannot name its format.
+    pub fn image_format_unknown(self) -> bool {
         match self {
-            DstFormat::Rgba8 => &[],
-            DstFormat::Bgra8 => &["-default-image-format-unknown"],
+            DstFormat::Rgba8 => false,
+            DstFormat::Bgra8 => true,
         }
     }
 
-    /// The define and the extra flags together — the shape a reload wants, since it passes one to `defines` and the other to `extra_args`.
-    pub fn args(self) -> (&'static str, &'static [&'static str]) {
-        (self.define(), self.extra_args())
+    /// The define and the format-unknown switch together: the two things a
+    /// compile for this variant needs beyond the source.
+    pub fn args(self) -> (&'static str, bool) {
+        (self.define(), self.image_format_unknown())
     }
 }
 

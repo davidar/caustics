@@ -352,7 +352,7 @@ pub struct Bar {
     /// *Module*).
     ///
     /// **The bar runs no compiler.** `caustics-reload` watches the `.slang` files
-    /// and runs slangc; one frame of SPIR-V and reflection per entry point ([`ENTRIES`]) arrives here and
+    /// and compiles them; one frame of SPIR-V and reflection per entry point ([`ENTRIES`]) arrives here and
     /// `Gpu::reload_all` swaps them in, all or nothing.
     modules: Modules,
     /// Everything that is pixels: [`abi::MAX_IMAGE_SLOTS`] slots, LRU by
@@ -816,8 +816,8 @@ impl Bar {
             Collected::Ready(ready) => ready,
         };
         let generation = ready.generation;
-        let table = match ready.strings() {
-            Ok(table) => table,
+        let reflection = match ready.reflection() {
+            Ok(reflection) => reflection,
             Err(err) => {
                 tracing::error!(
                     "sidecar {sidecar}: generation {generation} refused: {err}; \
@@ -836,7 +836,7 @@ impl Bar {
         let started = Instant::now();
         let [build, compose, shape, apply, visibility, sample, draw] = ready.spirv();
         match gpu.reload_all(
-            ready.reflection(),
+            &reflection,
             build,
             compose,
             shape,
@@ -848,7 +848,7 @@ impl Bar {
             Ok(()) => {
                 // The modules are live, so the table that came with them is
                 // the one the mirror's hashes belong to.
-                self.strings.replace(table);
+                self.strings.replace(reflection.strings);
                 // ...and the witness printer's complaints are about a program
                 // that is no longer running (docs/abi.md, *The witness ring*).
                 self.printer.reset();

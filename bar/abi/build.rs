@@ -16,7 +16,7 @@
 //! 3. `shape_abi.slang` — the OpenType arena's header, rendered by the text
 //!    engine (`punchcutter-shape`) from the same declaration tables
 //!    (`punchcutter_core::decl`) and taken as the copy compiled into
-//!    `punchcutter-core` (`punchcutter_core::modules::SHAPE_ABI`, a
+//!    `punchcutter-slang` (`punchcutter_slang::modules::SHAPE_ABI`, a
 //!    build-dependency). It is a wire contract too: `caustics-glyphs` fills
 //!    that arena with a `Bytes` frame, so an engine whose arena changed is a
 //!    new set.
@@ -48,7 +48,7 @@ fn main() {
     let inputs = [
         read(&files[0]),
         read(&files[1]),
-        punchcutter_core::modules::SHAPE_ABI.as_bytes().to_vec(),
+        punchcutter_slang::modules::SHAPE_ABI.as_bytes().to_vec(),
         read(&files[2]),
     ];
 

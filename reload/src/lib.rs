@@ -5,14 +5,14 @@
 //! caustic*). A few times a second this process asks whether `bar.slang` or any
 //! module it imports, `bar_tunables.slang` among them, has moved in the
 //! `caustics/` directory the bar was built from ([`caustics_dir`]); on a change
-//! it compiles every entry point and writes the SPIR-V and the reflection to
-//! the bar as `Module` frames (docs/abi.md, *Module*). The bar collects a
+//! it compiles every entry point, with Slang in this process, and writes the
+//! SPIR-V and the reflection to the bar as `Module` frames (docs/abi.md, *Module*). The bar collects a
 //! generation and swaps it in with `Gpu::reload_all`, which is all-or-nothing
 //! and never touches the state buffer: the bar keeps its popup, its menu level
 //! and its animations across the swap.
 //!
 //! The reload loop lives outside the bar's address space on purpose: the poll,
-//! one compile per entry point and the invariant that a failed compile sends
+//! the compiler and its memory, and the invariant that a failed compile sends
 //! *nothing* are all here, and the bar links no compiler, reads no `.slang`
 //! file and watches no mtime. A caustic is computation that arrives as bytes,
 //! the same pattern as the font: a sidecar writes frames, the bar copies bytes
@@ -20,7 +20,7 @@
 //!
 //! # Diagnostics go to stderr, verbatim
 //!
-//! A sidecar's stderr is inherited (docs/abi.md, *Lifecycle*), so slangc's text
+//! A sidecar's stderr is inherited (docs/abi.md, *Lifecycle*), so Slang's text
 //! lands in the journal under the bar's own unit, naming the files in
 //! `caustics/` it found wrong. That text is the whole feedback loop for
 //! whoever is editing the caustic, and it is never reformatted.
@@ -29,15 +29,14 @@
 //!
 //! SPIR-V bakes the storage-image format in, so a module is only meaningful
 //! for the swapchain format the session actually landed on. The bar sends that
-//! format once, as a `REQ_PROGRAM` request naming slangc's define (docs/abi.md,
+//! format once, as a `REQ_PROGRAM` request naming the format's define (docs/abi.md,
 //! *Request*); the pipe remembers it and replays it to every child, so a
 //! restarted compiler learns it again with no bar code for it. Before it
 //! arrives this process watches and compiles nothing.
 //!
 //! And when it arrives this process **compiles nothing either**. The bar's
-//! baked SPIR-V is this directory as `build.rs` saw it, and a run of slangc
-//! over every entry point is seconds of CPU beside a bar that has just
-//! started. What it does instead is ask the cache: a generation already
+//! baked SPIR-V is this directory as `build.rs` saw it, and a compile of
+//! every entry point is seconds of CPU beside a bar that has just started. What it does instead is ask the cache: a generation already
 //! compiled from the directory's present bytes is sent at once, which is what
 //! makes a restart after a live edit show the edited look within a second. A
 //! miss is witnessed and left alone; the next save compiles.
@@ -45,19 +44,28 @@
 //! # The cache: the same bytes are never compiled twice
 //!
 //! Every generation is written to `$XDG_CACHE_HOME/caustics/reload/`, keyed on
-//! the **content** of what reaches slangc (the `.slang` files [`watched`],
-//! [`RENDERED`] and [`ENGINE`] name), the format define and slangc's own version string; a lookup whose
+//! the **content** of what reaches the compiler (the `.slang` files [`watched`],
+//! [`RENDERED`] and [`ENGINE`] name), the format define and the compiler's
+//! version ([`punchcutter_slang::version`]); a lookup whose
 //! inputs hash to an entry already there reads it and compiles nothing.
 //! Content, not mtimes: an editor that rewrites a file with the same bytes has
 //! to hit, and a `git checkout` that restores older bytes with an older mtime
 //! has to miss. The text engine's font cache has the same shape: one file per
 //! key, written to a temp name and renamed, and every way of being wrong is a
 //! miss and a witness, never a frame.
+//!
+//! # The compile runs on a thread of its own
+//!
+//! Slang's global session is made per thread and lives as long as the
+//! thread: a hundred-odd milliseconds to create, and the core module it loads
+//! stays resident with it. A compile here is rare (a save) and the process
+//! is otherwise idle for hours, so each generation is compiled on a thread
+//! that ends with it ([`compile_apart`]), and the session and everything it
+//! allocated go with the thread. A save pays the session's creation again;
+//! an idle bar does not pay for a compiler it is not running.
 
-use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::SystemTime;
 
@@ -66,7 +74,7 @@ use caustics_bar_abi::ENTRIES;
 use caustics_bar_abi::wire::{
     self, Frame, MAX_MODULES, Module, REQ_PROGRAM, WIRE_MAX_BODY, format_code,
 };
-use punchcutter_core::slang;
+use punchcutter_slang::{Options, SlangError};
 
 use crate::watch::{MtimeWatch, POLL_INTERVAL};
 
@@ -84,7 +92,7 @@ pub const ENTRY: &str = "bar.slang";
 /// to the tunables does. The directory is **listed when this is called**,
 /// which for the watch is once, at start: a module added to `caustics/` later
 /// is compiled (an edit to an existing module has to import it, and the
-/// compile reads the directory as slangc finds it) but is not itself watched
+/// compile reads the directory as it finds it) but is not itself watched
 /// until the sidecar restarts. [`ENTRY`] is always listed, present or not, so
 /// a tree without it has no cache key.
 pub fn watched(dir: &Path) -> Vec<String> {
@@ -118,18 +126,19 @@ pub use caustics_bar_abi::RENDERED;
 
 /// The text engine's modules the caustic imports, directly (`text`, `shape`)
 /// or through them (`ot`, `shape_abi`): punchcutter's, compiled into it and
-/// written out by [`punchcutter_core::slang_dir`].
+/// written out by [`punchcutter_slang::slang_dir`], which every compile
+/// searches last.
 ///
 /// The second kind of input that is **not watched**, beside [`RENDERED`]:
 /// inputs to every compile and to its cache key, but an engine change is a
 /// dependency bump and a rebuild, never a live edit.
 pub const ENGINE: &[&str] = &["text.slang", "shape.slang", "ot.slang", "shape_abi.slang"];
 
-/// Where slangc finds an unwatched module ([`RENDERED`] or [`ENGINE`]) for a
+/// Where the compiler finds an unwatched module ([`RENDERED`] or [`ENGINE`]) for a
 /// compile of `dir`: the directory itself when a copy sits there (the search
 /// order puts the source's own directory first, so a copy beside the caustic
 /// wins), else the directory its compiled-in copy is written to —
-/// [`caustics_bar_abi::rendered_dir`] for the bar's, [`punchcutter_core::slang_dir`]
+/// [`caustics_bar_abi::rendered_dir`] for the bar's, [`punchcutter_slang::slang_dir`]
 /// for the engine's.
 pub fn unwatched_file(dir: &Path, name: &str) -> PathBuf {
     let beside = dir.join(name);
@@ -138,7 +147,7 @@ pub fn unwatched_file(dir: &Path, name: &str) -> PathBuf {
     } else if RENDERED.contains(&name) {
         caustics_bar_abi::rendered_dir().join(name)
     } else {
-        punchcutter_core::slang_dir().join(name)
+        punchcutter_slang::slang_dir().join(name)
     }
 }
 
@@ -155,7 +164,7 @@ pub fn witness(line: &str) {
     WITNESS.line(line)
 }
 
-/// slangc's own text, unframed and unprefixed: it is often several lines with
+/// Slang's own text, unframed and unprefixed: it is often several lines with
 /// carets under them, and a prefix per line would ruin it.
 fn diagnostics(text: &str) {
     let _ = io::stderr().write_all(text.as_bytes());
@@ -200,10 +209,10 @@ pub fn watch(dir: &Path) -> MtimeWatch {
     MtimeWatch::new(watched(dir).iter().map(|name| dir.join(name)).collect())
 }
 
-/// The `bar.slang` to hand slangc and the module search path: the directory
-/// itself, compiled in place, so slangc's diagnostics name the files a person
-/// edits, then the bar's rendered contract ([`RENDERED`]), then the text
-/// engine's modules ([`ENGINE`]).
+/// The `bar.slang` to hand the compiler and the module search path: the
+/// directory itself, compiled in place, so Slang's diagnostics name the files
+/// a person edits, then the bar's rendered contract ([`RENDERED`]). The text
+/// engine's modules ([`ENGINE`]) follow these on every compile by themselves.
 pub struct Source {
     pub entry_file: PathBuf,
     pub includes: Vec<PathBuf>,
@@ -216,7 +225,6 @@ pub fn source(dir: &Path) -> Source {
         includes: vec![
             dir.to_path_buf(),
             caustics_bar_abi::rendered_dir().to_path_buf(),
-            punchcutter_core::slang_dir().to_path_buf(),
         ],
     }
 }
@@ -227,11 +235,15 @@ pub fn source(dir: &Path) -> Source {
 
 /// The first eight bytes of a cache entry: the magic and this layout's version
 /// in one, so a sidecar that writes a different file never reads an older one.
-const CACHE_MAGIC: [u8; 8] = *b"cstcrld1";
+///
+/// `2`: the reflection an entry carries is `punchcutter_slang`'s JSON
+/// ([`punchcutter_slang::Reflection::to_json`]), the whole program's, where
+/// `1` held a reflection in another format, one per entry point.
+const CACHE_MAGIC: [u8; 8] = *b"cstcrld2";
 
 /// Entries kept under [`cache_dir`]; the newest survive an eviction.
 ///
-/// Eight, because an entry is one whole generation (a module and its reflection per entry point, a few MiB) and the useful history is small: the two
+/// Eight, because an entry is one whole generation (a module and the program's reflection per entry point, a few MiB) and the useful history is small: the two
 /// swapchain formats a session can land on, times the last few shapes of a
 /// tunables file somebody is editing. Twelve megabytes is the bound that buys,
 /// and it holds however long the editing goes on.
@@ -277,20 +289,21 @@ impl Fnv {
     }
 }
 
+/// How a [`Toolchain`] compiles: [`punchcutter_slang::compile_program`]'s
+/// shape, so the tests can put a recording compiler where the real one goes.
+pub type Compiler = fn(&Path, &[&str], &Options) -> Result<punchcutter_slang::Program, SlangError>;
+
 /// The compiler this process drives, and where it keeps what it has compiled.
 ///
-/// Built once, at startup, for two reasons. The version probe is a process
-/// spawn (slangc answers `-v` on **stderr**) and asking it per reload would
-/// put that spawn in front of every swap; done here it overlaps the bar's own
-/// bring-up, which is dead time this side of the pipe anyway. And a compiler
-/// swapped under a running sidecar is not a case worth serving: the supervisor
-/// restarts this process for far less.
+/// Built once, at startup: a compiler swapped under a running sidecar is not a
+/// case worth serving, and the supervisor restarts this process for far less.
 pub struct Toolchain {
-    /// slangc, as [`slang::slangc_program`] resolves it — or, in the tests, a
-    /// wrapper that records every invocation.
-    pub program: OsString,
-    /// What that program says it is. Part of every key: a toolchain upgrade
-    /// changes the SPIR-V it emits from bytes that did not move.
+    /// The compile itself: [`compile_apart`], or in the tests a wrapper that
+    /// records every call.
+    pub compiler: Compiler,
+    /// What compiles: [`punchcutter_slang::version`], which names the Slang
+    /// release and the engine's modules. Part of every key: a toolchain
+    /// upgrade changes the SPIR-V it emits from bytes that did not move.
     pub version: String,
     /// Where entries live, or `None` for a process that must not cache (the
     /// tests, which get a directory of their own instead).
@@ -298,19 +311,18 @@ pub struct Toolchain {
 }
 
 impl Toolchain {
-    /// The real one: slangc from `$SLANGC` or `PATH`, caching under
+    /// The real one: Slang in process, a thread per compile, caching under
     /// [`cache_dir`].
     pub fn new() -> Toolchain {
-        Toolchain::with(slang::slangc_program(), Some(cache_dir()))
+        Toolchain::with(compile_apart, Some(cache_dir()))
     }
 
-    /// A named compiler and a named cache directory — what the tests use to
-    /// prove a warm start spawns nothing.
-    pub fn with(program: OsString, cache: Option<PathBuf>) -> Toolchain {
-        let version = slangc_version(&program);
+    /// A given compiler and a given cache directory — what the tests use to
+    /// prove a warm start compiles nothing.
+    pub fn with(compiler: Compiler, cache: Option<PathBuf>) -> Toolchain {
         Toolchain {
-            program,
-            version,
+            compiler,
+            version: punchcutter_slang::version(),
             cache,
         }
     }
@@ -347,28 +359,36 @@ impl Toolchain {
     }
 }
 
-/// slangc's version, as the binary reports it to `-v` — which it writes to
-/// **stderr**, so both streams are read.
+/// [`punchcutter_slang::compile_program`] on a thread that ends with it.
 ///
-/// A probe that cannot run is `"unknown"` rather than a failure: a missing
-/// compiler is the compile's problem to report, and a key that says "unknown"
-/// is still a key that is stable for as long as that stays true.
-fn slangc_version(program: &OsStr) -> String {
-    let Ok(output) = Command::new(program).arg("-v").output() else {
-        return "unknown".to_owned();
-    };
-    let mut text = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-    if text.is_empty() {
-        text = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    }
-    if text.is_empty() {
-        "unknown".to_owned()
-    } else {
-        text
-    }
+/// Slang's global session belongs to the thread that made it, so the thread
+/// ending is what frees it, and with it the compiler's whole working set: a
+/// sidecar that compiled once an hour ago holds none of it now (the module
+/// docs, *The compile runs on a thread of its own*). The stack is the main
+/// thread's usual eight mebibytes rather than a spawned thread's two,
+/// because Slang's front end recurses with the source.
+pub fn compile_apart(
+    source: &Path,
+    entries: &[&str],
+    options: &Options,
+) -> Result<punchcutter_slang::Program, SlangError> {
+    std::thread::scope(|scope| {
+        let compile = std::thread::Builder::new()
+            .name("slang".to_owned())
+            .stack_size(8 << 20)
+            .spawn_scoped(scope, || {
+                punchcutter_slang::compile_program(source, entries, options)
+            })
+            .map_err(|err| SlangError::Toolchain {
+                detail: format!("no thread to compile on: {err}"),
+            })?;
+        compile
+            .join()
+            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    })
 }
 
-/// The files whose bytes reach slangc, in a fixed order: [`watched`], in
+/// The files whose bytes reach the compiler, in a fixed order: [`watched`], in
 /// `dir`, then [`RENDERED`] and [`ENGINE`], wherever [`unwatched_file`] finds
 /// each.
 fn inputs(dir: &Path) -> Vec<PathBuf> {
@@ -412,6 +432,11 @@ pub fn cache_key(tools: &Toolchain, dir: &Path, define: &str, entries: &[&str]) 
 
 /// One entry point as the cache holds it, which is what a [`Module`] carries
 /// beyond the generation it belongs to.
+///
+/// `reflection` is the whole program's ([`punchcutter_slang::Reflection`] as
+/// JSON), the same in every entry point of a generation: one link compiles
+/// them all and reflects the program once. Each module carries its copy
+/// anyway, so the wire and this layout stay one record per entry point.
 pub struct Cached {
     pub name: String,
     pub spirv: Vec<u8>,
@@ -583,7 +608,7 @@ pub struct Program {
     pub modules: Vec<Module>,
     pub bytes: usize,
     pub millis: u128,
-    /// Whether the modules came out of the cache rather than out of slangc.
+    /// Whether the modules came out of the cache rather than out of the compiler.
     pub warm: bool,
     /// This program's cache key and the file it belongs in, or `None` for a
     /// process that is not caching or a tree that could not be read.
@@ -643,7 +668,7 @@ fn lookup(
 /// with nothing compiled.
 ///
 /// The bar starts on SPIR-V its own `build.rs` baked from this directory, so a
-/// compile here would be seconds of slangc to arrive, most of the time, where
+/// compile here would be seconds of compiling to arrive, most of the time, where
 /// the bar already is — and a slow first second on a small machine. A hit
 /// costs milliseconds and is what puts an edit made since the build back on
 /// screen after a restart.
@@ -693,48 +718,46 @@ pub fn compile_entries(
     if file.is_some() {
         witness("cache: miss; compiling");
     }
-    let extra_args = DstFormat::ALL
+    let image_format_unknown = DstFormat::ALL
         .into_iter()
         .find(|format| format.define() == define)
-        .map(DstFormat::extra_args)
-        .unwrap_or(&[]);
+        .is_some_and(DstFormat::image_format_unknown);
     let source = source(dir);
     let includes: Vec<&Path> = source.includes.iter().map(PathBuf::as_path).collect();
-    let program = &tools.program;
+    let options = Options {
+        defines: &[define],
+        includes: &includes,
+        image_format_unknown,
+    };
 
-    let mut compiled_entries = Vec::with_capacity(entries.len());
-    for &entry in entries {
-        // `compile_capturing` rather than `compile_with`: the reflection
-        // carries the caustic's `getStringHash` literals to the bar, and the
-        // warnings go to the journal as slangc wrote them.
-        let compiled = match slang::compile_capturing(
-            program,
-            &source.entry_file,
-            entry,
-            &[define],
-            extra_args,
-            &includes,
-        ) {
-            Ok(compiled) => compiled,
-            Err(err) => {
-                witness(&format!("failed ({entry}); keeping the old bar"));
-                match err.diagnostics() {
-                    Some(text) => diagnostics(text),
-                    None => witness(&format!("{err}")),
-                }
-                return None;
+    // One link of every entry point: the reflection carries the caustic's
+    // `getStringHash` literals to the bar, and the warnings go to the journal
+    // as Slang wrote them.
+    let program = match (tools.compiler)(&source.entry_file, entries, &options) {
+        Ok(program) => program,
+        Err(err) => {
+            witness("failed; keeping the old bar");
+            match err.diagnostics() {
+                Some(text) => diagnostics(text),
+                None => witness(&format!("{err}")),
             }
-        };
-        if !compiled.warnings.is_empty() {
-            witness(&format!("slangc ({entry}):"));
-            diagnostics(&compiled.warnings);
+            return None;
         }
-        compiled_entries.push(Cached {
-            name: entry.to_owned(),
-            spirv: compiled.spirv,
-            reflection: compiled.reflection,
-        });
+    };
+    if !program.warnings.is_empty() {
+        witness("slang warnings:");
+        diagnostics(&program.warnings);
     }
+    let reflection = program.reflection.to_json();
+    let compiled_entries: Vec<Cached> = program
+        .entries
+        .into_iter()
+        .map(|entry| Cached {
+            name: entry.name,
+            spirv: entry.spirv,
+            reflection: reflection.clone(),
+        })
+        .collect();
 
     let (modules, bytes) = assemble(compiled_entries, define, generation, entries)?;
     let millis = started.elapsed().as_millis();
@@ -791,7 +814,7 @@ fn assemble(
 /// What the stdin thread hands the main loop. Everything else on that stream
 /// is witnessed there and never reaches here.
 enum Input {
-    /// The bar's swapchain format, as slangc's define (`REQ_PROGRAM`).
+    /// The bar's swapchain format, as the format's define (`REQ_PROGRAM`).
     Program(String),
     /// The bar is gone.
     Eof,
@@ -900,17 +923,10 @@ pub fn run() -> i32 {
         return 1;
     }
 
-    // After the listener and before the first compile: asking the compiler its
-    // version is a process spawn, and asking it per reload would put that
-    // spawn in front of every swap. Here it runs while the bar is still
-    // bringing its device up — stdin is already being read, so a `REQ_PROGRAM`
-    // that arrives during the probe is waiting when it ends — and the frames
-    // the cache answers with are never behind it.
     let tools = Toolchain::new();
     witness(&format!(
-        "slangc {} at {}; cache {}",
+        "{}; cache {}",
         tools.version,
-        tools.program.to_string_lossy(),
         tools
             .cache
             .as_ref()

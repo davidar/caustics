@@ -11,9 +11,14 @@ anyhow = "1.0.104"
 # The clock's local-time offset (tzset/localtime_r). Already in Cargo.lock via
 # wgpu's tree, so this costs no new crate and no registry fetch.
 libc = "0.2.189"
-# The slangc driver and its reflection, the `Plain` byte views and the wgpu
-# helpers (`gpu`: the device with the shader clock, pipelines, buffers).
+# The `Plain` byte views and the wgpu helpers (`gpu`: the device with the
+# shader clock, pipelines, buffers).
 punchcutter-core = { workspace = true, features = ["gpu"] }
+# The reflection's types and their JSON form, and nothing else: the bar reads
+# the reflection baked beside its SPIR-V and the one each reload carries, and
+# never compiles. Without the default `compiler` feature the binary links no
+# Slang (the oracle and the tests take it, below).
+punchcutter-slang = { workspace = true, default-features = false }
 # The ABI as a crate (docs/abi.md, *Writing a sidecar*), so a sidecar can import the
 # declarations without any of the above.
 caustics-bar-abi = { path = "abi" }
@@ -55,11 +60,11 @@ wgpu = "30.0.0"
 # `caustics-apps`'s. A colour icon arrives as one slot of straight RGBA8 over a
 # pipe; the bar copies the bytes and the caustic multiplies them by their own
 # alpha.
-# build.rs bakes the caustic through the same driver the reload loop uses, with
-# the engine's modules (`modules::write_to`) on the include path. Featureless:
-# nothing in a build script needs wgpu.
+# build.rs bakes the caustic through the same in-process compiler the reload
+# loop uses; the engine's modules are on its search path by itself. Nothing in
+# a build script needs wgpu.
 [build-dependencies]
-punchcutter-core.workspace = true
+punchcutter-slang.workspace = true
 # `ENTRIES` and `DstFormat`: which entry points to bake, and for which
 # swapchain formats, from the same crate `caustics-reload` reads them from; and
 # `write_rendered`, the bar's two rendered modules, on the include path too.
@@ -73,6 +78,9 @@ caustics-bar-abi = { path = "abi" }
 caustics-glyphs = { path = "../glyphs" }
 punchcutter-fonts.workspace = true
 # For one test: `bar/src/abi/tests.rs` checks `punchcutter_text::Glyph`'s field
-# offsets against the reflection of the bar's own compile, which is where
-# slangc and the baked reflection are. The bar's *binary* links none of this.
+# offsets against the reflection of the bar's own compile. The bar's *binary*
+# links none of this.
 punchcutter-text.workspace = true
+# The compiler, for the tests and the oracle, which compile the caustic in
+# process (the oracle's `bar_check` entry point is in no baked module).
+punchcutter-slang.workspace = true

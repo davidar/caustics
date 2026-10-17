@@ -1,3 +1,5 @@
+use std::cell::Cell;
+
 use super::*;
 
 /// A directory of this test's own, named after the test: the suite runs its
@@ -9,15 +11,45 @@ fn temp_dir(name: &str) -> PathBuf {
     dir
 }
 
-/// A [`Toolchain`] with no compiler behind it and a cache directory of its
-/// own: everything about a key and an entry can be tested without slangc.
+/// A [`Toolchain`] whose compiler must never be called and a cache directory
+/// of its own: everything about a key and an entry can be tested without
+/// compiling.
 fn offline(cache: &Path) -> Toolchain {
-    let (program, version) = (OsString::from("slangc"), "test".to_owned());
     Toolchain {
-        program,
-        version,
+        compiler: never,
+        version: "test".to_owned(),
         cache: Some(cache.to_path_buf()),
     }
+}
+
+/// A compiler that fails the test if it is called at all.
+fn never(source: &Path, _: &[&str], _: &Options) -> Result<punchcutter_slang::Program, SlangError> {
+    panic!("compiled {} where nothing should be", source.display())
+}
+
+thread_local! {
+    /// How many times [`recording`] has run on this test's thread. Per
+    /// thread because the suite runs its cases on threads of one process, and
+    /// [`recording`] compiles on the caller's thread, so each test counts
+    /// only its own.
+    static COMPILES: Cell<usize> = const { Cell::new(0) };
+}
+
+/// The real compiler, counted: the only honest way to assert "compiled
+/// nothing". A witness line says what the process believes, and this says
+/// what it did.
+fn recording(
+    source: &Path,
+    entries: &[&str],
+    options: &Options,
+) -> Result<punchcutter_slang::Program, SlangError> {
+    COMPILES.with(|count| count.set(count.get() + 1));
+    punchcutter_slang::compile_program(source, entries, options)
+}
+
+/// How many times [`recording`] has run on this thread.
+fn compiles() -> usize {
+    COMPILES.with(Cell::get)
 }
 
 /// A tree with every file [`watched`] lists in the shipped `caustics/`, so a
@@ -41,12 +73,12 @@ fn fake_modules(entries: &[&str], fill: u8) -> Vec<Module> {
             format: format_code(DstFormat::Bgra8.define()),
             name: (*entry).to_owned(),
             spirv: vec![fill; 64 + index],
-            reflection: format!("{{\"parameters\":[],\"entry\":\"{entry}\"}}"),
+            reflection: format!("{{\"bindings\":[],\"entry\":\"{entry}\"}}"),
         })
         .collect()
 }
 
-/// The tree is compiled where it stands: slangc is handed the directory's own
+/// The tree is compiled where it stands: the compiler is handed the directory's own
 /// `bar.slang` with the directory on the include path, so the files its
 /// diagnostics name are the files a person edits.
 #[test]
@@ -56,11 +88,7 @@ fn the_shipped_module_is_compiled_in_place() {
     assert_eq!(source.entry_file, dir.join("bar.slang"));
     assert_eq!(
         source.includes,
-        vec![
-            dir.clone(),
-            caustics_bar_abi::rendered_dir().to_path_buf(),
-            punchcutter_core::slang_dir().to_path_buf(),
-        ]
+        vec![dir.clone(), caustics_bar_abi::rendered_dir().to_path_buf(),]
     );
     let watched = watch(&dir);
     assert!(
@@ -69,33 +97,27 @@ fn the_shipped_module_is_compiled_in_place() {
     );
 }
 
-/// The startup rule, against a compiler that records every run: the format
-/// arriving over a tree the cache has never seen compiles nothing and sends
-/// nothing, and the same format over a tree whose bytes the cache holds sends
-/// that generation without running slangc for anything but its version.
+/// The startup rule, against a compiler that fails the test if it is ever
+/// called: the format arriving over a tree the cache has never seen compiles
+/// nothing and sends nothing, and the same format over a tree whose bytes the
+/// cache holds sends that generation without compiling.
 #[test]
 fn a_start_sends_the_cached_program_and_never_compiles() {
     let dir = temp_dir("start");
     let tree = dir.join("caustics");
     std::fs::create_dir_all(&tree).expect("writable");
     watched_tree(&tree, "const int WIDTH = 3;\n");
-    let log = dir.join("spawns");
-    let wrapper = recording_slangc(&dir, &log);
     let cache = dir.join("cache");
     let entries = &ENTRIES[..2];
     let define = DstFormat::Bgra8.define();
 
-    let tools = Toolchain::with(wrapper.into_os_string(), Some(cache.clone()));
-    let probed = spawns(&log);
-    assert_eq!(
-        probed, 1,
-        "the version probe is the one spawn a toolchain makes"
-    );
+    // `never` panics on a call, so every step below that returns at all
+    // compiled nothing.
+    let tools = Toolchain::with(never, Some(cache.clone()));
 
     // A miss: no generation, and no compile either.
     assert!(warm_start(&tools, &tree, define, 1, entries).is_none());
-    assert_eq!(spawns(&log), probed, "a start that misses runs nothing");
-    assert!(!cache.is_dir(), "and writes nothing");
+    assert!(!cache.is_dir(), "a start that misses writes nothing");
 
     // The generation a save would have compiled, stored as `run` stores it.
     let key = cache_key(&tools, &tree, define, entries).expect("the tree reads");
@@ -104,11 +126,6 @@ fn a_start_sends_the_cached_program_and_never_compiles() {
 
     let program = warm_start(&tools, &tree, define, 7, entries).expect("a hit");
     assert!(program.warm);
-    assert_eq!(
-        spawns(&log),
-        probed,
-        "a start that hits runs nothing either"
-    );
     assert_eq!(program.modules.len(), entries.len());
     for (index, module) in program.modules.iter().enumerate() {
         assert_eq!(module.generation, 7);
@@ -121,7 +138,6 @@ fn a_start_sends_the_cached_program_and_never_compiles() {
     // bar on what it was built from, and the save compiles it.
     std::fs::write(tree.join(TUNABLES), "const int WIDTH = 4;\n").expect("writable");
     assert!(warm_start(&tools, &tree, define, 8, entries).is_none());
-    assert_eq!(spawns(&log), probed);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -131,19 +147,20 @@ fn a_start_sends_the_cached_program_and_never_compiles() {
 /// match the define, a body over the wire's cap, and a compile whose
 /// reflection never reached the frame.
 ///
-/// **Two entry points, not all of them.** The loop is the same call each time, and that every entry point compiles — for both swapchain formats — is
-/// `bar/src/abi.rs`'s test and `bar/build.rs`'s every build. What this one
-/// buys beyond those is the framing, and two entries buy the ordering with
-/// it. Six would be the slowest thing in the workspace's suite and would run
-/// beside the bar's own, whose pipe tests time child processes: that made
-/// them flake, which is the whole reason `compile_entries` takes a list.
+/// **Two entry points, not all of them.** That every entry point compiles —
+/// for both swapchain formats — is `bar/src/abi.rs`'s test and
+/// `bar/build.rs`'s every build. What this one buys beyond those is the
+/// framing, and two entries buy the ordering with it. All of them would be
+/// the slowest thing in the workspace's suite and would run beside the bar's
+/// own, whose pipe tests time child processes: that made them flake, which
+/// is the whole reason `compile_entries` takes a list.
 ///
 /// It is also the **cache**'s end-to-end test, for the same budget: the cold
 /// pass above is a miss that writes an entry, and the second pass through the
 /// same two entry points is the warm start the sidecar exists to make fast.
-/// The compiler both passes are given is a recording wrapper around the real
-/// slangc, so "compiled nothing" is not a witness line taken on trust but a
-/// count of the times the compiler was executed at all.
+/// The compiler both passes are given is a counting wrapper around the real
+/// one, so "compiled nothing" is not a witness line taken on trust but a
+/// count of the times the compiler was called at all.
 #[test]
 fn a_generation_is_its_entry_points_in_order_for_the_asked_format() {
     let dir = caustics_dir();
@@ -154,11 +171,10 @@ fn a_generation_is_its_entry_points_in_order_for_the_asked_format() {
     let define = DstFormat::Bgra8.define();
     let entries = &ENTRIES[..2];
     let scratch = temp_dir("generation");
-    let log = scratch.join("spawns");
-    let wrapper = recording_slangc(&scratch, &log);
     let cache = scratch.join("cache");
 
-    let cold = Toolchain::with(wrapper.clone().into_os_string(), Some(cache.clone()));
+    let before = compiles();
+    let cold = Toolchain::with(recording, Some(cache.clone()));
     let program =
         compile_entries(&cold, &dir, define, 3, entries).expect("the shipped caustic compiles");
     assert_eq!(program.modules.len(), entries.len());
@@ -203,12 +219,13 @@ fn a_generation_is_its_entry_points_in_order_for_the_asked_format() {
             "{}",
             back.spirv.len()
         );
-        // The reflection is what carries the caustic's literals to the bar;
-        // an entry point that reaches none still produces the parameter list.
-        assert!(
-            back.reflection.contains("parameters"),
-            "{entry} has no reflection"
-        );
+        // The reflection is what carries the caustic's literals and its
+        // bindings to the bar, and it is the whole program's: every entry
+        // point of a generation carries the same one.
+        let reflection = punchcutter_slang::Reflection::from_json(&back.reflection)
+            .unwrap_or_else(|err| panic!("{entry}'s reflection does not read back: {err}"));
+        assert!(!reflection.bindings.is_empty(), "{entry} has no bindings");
+        assert_eq!(back.reflection, program.modules[0].reflection);
     }
     assert!(
         wire::read(&mut cursor).expect("reads").is_none(),
@@ -228,31 +245,21 @@ fn a_generation_is_its_entry_points_in_order_for_the_asked_format() {
     // uses: the bar waits for a compile and never for a megabyte of disk.
     assert!(!cache.is_dir(), "a program is not cached before it is sent");
     cold.store(&program);
-    let spawns_cold = spawns(&log);
     assert_eq!(
-        spawns_cold,
-        1 + entries.len(),
-        "one version probe and one slangc run per entry"
+        compiles() - before,
+        1,
+        "one compile for the generation: every entry point in one link"
     );
 
-    // A second process over the same tree: a new `Toolchain`, so the version
-    // is probed again, and nothing else runs at all.
-    let warm_tools = Toolchain::with(wrapper.into_os_string(), Some(cache.clone()));
+    // A second process over the same tree: a new `Toolchain`, and nothing
+    // compiles at all.
+    let warm_tools = Toolchain::with(recording, Some(cache.clone()));
     let warm = compile_entries(&warm_tools, &dir, define, 4, entries).expect("the cache answers");
     assert!(warm.warm, "the same bytes must not be compiled twice");
     assert_eq!(
-        spawns(&log),
-        spawns_cold + 1,
-        "a warm start runs slangc for nothing but -v"
-    );
-    assert!(
-        std::fs::read_to_string(&log)
-            .expect("the log")
-            .lines()
-            .last()
-            .unwrap()
-            .contains("-v"),
-        "the one spawn a warm start makes is the version probe"
+        compiles() - before,
+        1,
+        "a warm start calls the compiler not at all"
     );
 
     // Byte for byte what the cold compile would have sent, with this
@@ -277,35 +284,6 @@ fn a_generation_is_its_entry_points_in_order_for_the_asked_format() {
     eprintln!("cold {} ms, warm {} ms", program.millis, warm.millis);
 
     let _ = std::fs::remove_dir_all(&scratch);
-}
-
-/// A wrapper that records every invocation and then becomes the real slangc.
-///
-/// The only honest way to assert "compiled nothing": a witness line says what
-/// the process believes, and this says what it did.
-fn recording_slangc(dir: &Path, log: &Path) -> PathBuf {
-    let real = slang::slangc_program();
-    let path = dir.join("slangc-recording");
-    std::fs::write(
-        &path,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {log}\nexec {real} \"$@\"\n",
-            log = log.display(),
-            real = real.to_string_lossy()
-        ),
-    )
-    .expect("writable");
-    let mut mode = std::fs::metadata(&path).expect("there").permissions();
-    std::os::unix::fs::PermissionsExt::set_mode(&mut mode, 0o755);
-    std::fs::set_permissions(&path, mode).expect("executable");
-    path
-}
-
-/// How many times the recording compiler has been run.
-fn spawns(log: &Path) -> usize {
-    std::fs::read_to_string(log)
-        .map(|text| text.lines().count())
-        .unwrap_or(0)
 }
 
 /// The key is the inputs' **bytes**, and nothing else about them: an editor
@@ -366,7 +344,7 @@ fn the_key_is_content_and_not_mtime() {
 
     // A tree a compile would fail on has no key, so it writes no entry and
     // finds none: an unreadable input is never cached over.
-    // An engine module is read where slangc will find it: a copy beside the
+    // An engine module is read where the compiler will find it: a copy beside the
     // caustic comes first on the search path, so it is what the key hashes.
     std::fs::write(dir.join("text.slang"), "// a copy\n").expect("writable");
     assert_ne!(cache_key(&tools, &dir, define, entries), Some(key));
@@ -542,11 +520,12 @@ fn every_imported_module_is_watched_and_copied() {
                 caustics_bar_abi::rendered_dir().join(name),
             )
         }))
-        .chain(
-            ENGINE
-                .iter()
-                .map(|name| ((*name).to_owned(), punchcutter_core::slang_dir().join(name))),
-        );
+        .chain(ENGINE.iter().map(|name| {
+            (
+                (*name).to_owned(),
+                punchcutter_slang::slang_dir().join(name),
+            )
+        }));
     for (name, path) in files {
         assert!(path.is_file(), "{name} is not at {}", path.display());
         let text = std::fs::read_to_string(&path).expect("a readable module");

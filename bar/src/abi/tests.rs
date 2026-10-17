@@ -352,18 +352,19 @@ fn byte_views_round_trip() {
 }
 
 // -----------------------------------------------------------------------
-// The caustic. Everything below runs slangc over `caustics/bar.slang` — the
-// two halves of the ABI cannot drift silently, and the entry points cannot rot in either swapchain format, without one of these two tests
-// going red. Modelled on `punchcutter_core::slang`'s own compile tests.
+// The caustic. Everything below compiles `caustics/bar.slang` with Slang, in
+// process — the two halves of the ABI cannot drift silently, and the entry
+// points cannot rot in either swapchain format, without one of these tests
+// going red.
 //
-// The slangc invocation *is* `punchcutter_core::slang`'s, not a copy of it: the
-// same flags in the same order the build script baked with and
-// the reload loop recompiles with, so what is tested and what runs cannot drift.
+// The compile *is* `punchcutter_slang`'s, not a copy of it: the same settings
+// the build script baked with and the reload loop recompiles with, so what is
+// tested and what runs cannot drift.
 // -----------------------------------------------------------------------
 
 use std::path::{Path, PathBuf};
 
-use punchcutter_core::slang::{self, SlangError};
+use punchcutter_slang::{BindingKind, Options, Reflection};
 
 /// The repository's `caustics/` directory, resolved against this crate so
 /// the tests do not care about the harness's working directory.
@@ -375,42 +376,32 @@ fn bar_slang() -> PathBuf {
     caustics_dir().join("bar.slang")
 }
 
-/// The include path every compile of the caustic takes: its own directory,
-/// then the bar's rendered contract, then the text engine's modules.
-fn includes() -> [PathBuf; 3] {
+/// The search path every compile of the caustic takes beyond the source's
+/// own directory: the caustic's directory, then the bar's rendered contract.
+/// The text engine's modules come after these on every compile by themselves.
+fn includes() -> [&'static Path; 2] {
+    static DIR: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
     [
-        caustics_dir(),
-        caustics_bar_abi::rendered_dir().to_path_buf(),
-        punchcutter_core::slang_dir().to_path_buf(),
+        DIR.get_or_init(caustics_dir).as_path(),
+        caustics_bar_abi::rendered_dir(),
     ]
 }
 
-/// slangc's reflection of `bar.slang` for one entry point, from a compile
-/// with the caustic's include path ([`includes`]): the JSON
-/// `slang::struct_offsets` and `slang::bindings` read.
-fn reflect_bar(entry: &str, defines: &[&str]) -> Result<String, SlangError> {
+/// The reflection of `bar.slang`'s program for one entry point, with the
+/// caustic's search path ([`includes`]) and no code generated: the bindings,
+/// the struct offsets and the literals the tests below read.
+fn reflect_bar(entry: &str, defines: &[&str]) -> Reflection {
     let includes = includes();
-    let includes: Vec<&Path> = includes.iter().map(PathBuf::as_path).collect();
-    slang::compile_capturing(
-        &slang::slangc_program(),
+    punchcutter_slang::reflect(
         &bar_slang(),
         entry,
-        defines,
-        &[],
-        &includes,
+        &Options {
+            defines,
+            includes: &includes,
+            image_format_unknown: false,
+        },
     )
-    .map(|compiled| compiled.reflection)
-}
-
-/// Whether a failure means "slangc is not installed", in which case every
-/// caller skips rather than fails — the same posture `punchcutter_core::slang`
-/// takes for `spirv-val`, and what lets a checkout without the Slang
-/// toolchain still `cargo test` green.
-fn is_missing_toolchain(err: &SlangError) -> Option<String> {
-    match err {
-        SlangError::Spawn { program, source } => Some(format!("{program}: {source}")),
-        _ => None,
-    }
+    .unwrap_or_else(|err| panic!("reflection failed:\n{err}"))
 }
 
 /// slangc's own per-field byte offsets for every struct in the bar ABI,
@@ -434,18 +425,9 @@ fn is_missing_toolchain(err: &SlangError) -> Option<String> {
 fn the_slang_layout_matches_this_one() {
     use std::collections::BTreeMap;
 
-    let json = match reflect_bar("bar_apply", &["DST_FORMAT_RGBA8"]) {
-        Ok(json) => json,
-        Err(err) => match is_missing_toolchain(&err) {
-            Some(why) => {
-                eprintln!("skipping the Slang layout check: slangc is not runnable ({why})");
-                return;
-            }
-            None => panic!("reflection failed:\n{err}"),
-        },
-    };
+    let reflection = reflect_bar("bar_apply", &["DST_FORMAT_RGBA8"]);
 
-    let reflected = slang::struct_offsets(&json);
+    let reflected = reflection.structs;
 
     // The two declaration tables, and the structs that belong to the other
     // crates' contracts. Every line of the second list is a struct `bar.slang`
@@ -606,53 +588,53 @@ fn the_samples_body_is_8336_bytes_in_the_documented_layout() {
 #[test]
 fn the_caustic_compiles_for_every_variant() {
     let source = bar_slang();
-    let slangc = slang::slangc_program();
     let includes = includes();
-    let includes: Vec<&Path> = includes.iter().map(PathBuf::as_path).collect();
 
-    for entry in ENTRIES {
-        for format in caustics_bar_abi::DstFormat::ALL {
-            let (define, extra) = format.args();
-            // `compile_capturing` runs `spirv-val` over the module itself
-            // where SPIRV-Tools is installed, so a rejected module is an
-            // `Err` here rather than something to re-check by hand.
-            let compiled = match slang::compile_capturing(
-                &slangc,
-                &source,
-                entry,
-                &[define],
-                extra,
-                &includes,
-            ) {
-                Ok(compiled) => compiled,
-                Err(err) => match is_missing_toolchain(&err) {
-                    Some(why) => {
-                        eprintln!(
-                            "skipping the caustic compile check: slangc is not runnable ({why})"
-                        );
-                        return;
-                    }
-                    None => panic!("{define}: {err}"),
-                },
-            };
+    for format in caustics_bar_abi::DstFormat::ALL {
+        let (define, image_format_unknown) = format.args();
+        // One link of every entry point, as `bar/build.rs` and the reload
+        // loop compile them. `compile_program` runs `spirv-val` over each
+        // module itself where SPIRV-Tools is installed, so a rejected module
+        // is an `Err` here rather than something to re-check by hand.
+        let program = punchcutter_slang::compile_program(
+            &source,
+            &ENTRIES,
+            &Options {
+                defines: &[define],
+                includes: &includes,
+                image_format_unknown,
+            },
+        )
+        .unwrap_or_else(|err| panic!("{define}: {err}"));
 
-            // The gate is zero warnings, not merely a zero exit code.
-            assert!(
-                compiled.warnings.is_empty(),
-                "slangc warned on {entry}/{define} (the gate is zero warnings):\n{}",
-                compiled.warnings
-            );
+        // The gate is zero warnings, not merely a module.
+        assert!(
+            program.warnings.is_empty(),
+            "Slang warned on {define} (the gate is zero warnings):\n{}",
+            program.warnings
+        );
 
+        let names: Vec<&str> = program
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        assert_eq!(
+            names, ENTRIES,
+            "{define}: one module per entry point, in order"
+        );
+        for entry in &program.entries {
             // The SPIR-V magic number, little-endian on every target.
-            let module = &compiled.spirv;
+            let module = &entry.spirv;
+            let name = &entry.name;
             assert!(
                 module.len() > 20,
-                "{entry}/{define}: suspiciously short module"
+                "{name}/{define}: suspiciously short module"
             );
             assert_eq!(
                 &module[..4],
                 &[0x03, 0x02, 0x23, 0x07],
-                "{entry}/{define}: output does not start with the SPIR-V magic number"
+                "{name}/{define}: output does not start with the SPIR-V magic number"
             );
         }
     }
@@ -731,17 +713,8 @@ fn the_dock_menu_is_four_tunable_rows_whose_words_slangc_knows() {
 
     // ...and every one of those labels reaches the embassy the only way it
     // can: through the reflection of the program `bar_apply` is compiled from.
-    let json = match reflect_bar("bar_apply", &["DST_FORMAT_RGBA8"]) {
-        Ok(json) => json,
-        Err(err) => match is_missing_toolchain(&err) {
-            Some(why) => {
-                eprintln!("skipping the string table check: slangc is not runnable ({why})");
-                return;
-            }
-            None => panic!("reflection failed:\n{err}"),
-        },
-    };
-    let table = slang::hashed_strings(&json).expect("slangc's hashedStrings");
+    let reflection = reflect_bar("bar_apply", &["DST_FORMAT_RGBA8"]);
+    let table = reflection.strings;
     for row in &rows {
         assert!(
             table.values().any(|literal| *literal == row.label),
@@ -1230,17 +1203,8 @@ fn the_clock_composes_what_strftime_would() {
 
     // Every one of those words reaches the GPU the only way it can: through the
     // literal pool, whose bytes are the reflection's `hashedStrings`.
-    let json = match reflect_bar("bar_compose", &["DST_FORMAT_RGBA8"]) {
-        Ok(json) => json,
-        Err(err) => match is_missing_toolchain(&err) {
-            Some(why) => {
-                eprintln!("skipping the clock's string table check: slangc ({why})");
-                return;
-            }
-            None => panic!("reflection failed:\n{err}"),
-        },
-    };
-    let table = slang::hashed_strings(&json).expect("slangc's hashedStrings");
+    let reflection = reflect_bar("bar_compose", &["DST_FORMAT_RGBA8"]);
+    let table = reflection.strings;
     let (weekdays, months, _) = clock_tunables();
     for word in weekdays.iter().chain(months.iter()) {
         assert!(
@@ -1279,17 +1243,8 @@ fn the_overview_and_caffeine_icons_are_the_tunables_own_lists() {
         "and they are told apart by the icon and nothing else"
     );
 
-    let json = match reflect_bar("bar_build", &["DST_FORMAT_RGBA8"]) {
-        Ok(json) => json,
-        Err(err) => match is_missing_toolchain(&err) {
-            Some(why) => {
-                eprintln!("skipping the icon lists' string table check: slangc ({why})");
-                return;
-            }
-            None => panic!("reflection failed:\n{err}"),
-        },
-    };
-    let table = slang::hashed_strings(&json).expect("slangc's hashedStrings");
+    let reflection = reflect_bar("bar_build", &["DST_FORMAT_RGBA8"]);
+    let table = reflection.strings;
     for name in overview.iter().chain(on.iter()).chain(off.iter()) {
         assert!(
             table.values().any(|literal| literal == name),
@@ -1388,17 +1343,8 @@ fn a_label_is_its_first_line() {
 /// startup.
 #[test]
 fn the_bars_caustic_reflects_its_bindings() {
-    let json = match reflect_bar("bar_shape", &["DST_FORMAT_RGBA8"]) {
-        Ok(json) => json,
-        Err(err) => match is_missing_toolchain(&err) {
-            Some(why) => {
-                eprintln!("skipping the binding check: slangc is not runnable ({why})");
-                return;
-            }
-            None => panic!("the bar's caustic should reflect:\n{err}"),
-        },
-    };
-    let bindings = slang::bindings(&json).expect("the bar's own reflection classifies");
+    let reflection = reflect_bar("bar_shape", &["DST_FORMAT_RGBA8"]);
+    let bindings = reflection.bindings;
 
     // 23: set 2 holds the font as one arena of verbatim OpenType bytes, and the rows and answers arenas sit
     // in set 0 (docs/abi.md, *The arenas*). A change here is an ABI change.
@@ -1433,27 +1379,21 @@ fn the_bars_caustic_reflects_its_bindings() {
     // reflection cannot carry on the Bgra8 variant.
     assert_eq!(
         named("ids").kind,
-        slang::BindingKind::StorageTexture { write_only: false }
+        BindingKind::StorageTexture { write_only: false }
     );
     assert_eq!(
         named("dst").kind,
-        slang::BindingKind::StorageTexture { write_only: true }
+        BindingKind::StorageTexture { write_only: true }
     );
     // The fixed-slot image array, and the one plain 2D preview.
-    assert_eq!(
-        named("images").kind,
-        slang::BindingKind::Texture { array: true }
-    );
-    assert_eq!(
-        named("preview").kind,
-        slang::BindingKind::Texture { array: false }
-    );
+    assert_eq!(named("images").kind, BindingKind::Texture { array: true });
+    assert_eq!(named("preview").kind, BindingKind::Texture { array: false });
     // `State` is one element, so its stride is the whole state buffer. The
     // exact size is `caustics-bar`'s to pin (its ABI test compares slangc's layout
     // against `size_of::<State>()` on every build) and it moves with every ABI
     // bump, so here it is only "read-write, and reflected at all".
     match named("state").kind {
-        slang::BindingKind::Storage {
+        BindingKind::Storage {
             read_only: false,
             stride: Some(stride),
         } => {

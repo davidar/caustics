@@ -23,7 +23,7 @@ fn module(generation: u32, index: usize, format: u32) -> Module {
         // Four bytes of nothing: this file never looks inside, and the device
         // is the only thing that can say whether SPIR-V is SPIR-V.
         spirv: vec![0, 0, 0, 0],
-        reflection: "{\"parameters\":[],\"hashedStrings\":{}}".to_owned(),
+        reflection: Reflection::default().to_json(),
     }
 }
 
@@ -61,7 +61,13 @@ fn a_generation_is_ready_only_when_every_entry_point_has_arrived() {
     assert_eq!(ready.generation, 4);
     assert_eq!(ready.len(), ENTRIES.len());
     assert_eq!(ready.spirv().len(), ENTRIES.len());
-    assert!(ready.strings().expect("a readable reflection").is_empty());
+    assert!(
+        ready
+            .reflection()
+            .expect("a readable reflection")
+            .strings
+            .is_empty()
+    );
 }
 
 /// Out of order is ordinary — the wire says nothing about arrival order — and
@@ -209,13 +215,20 @@ fn the_literals_are_merged_across_the_entry_points() {
     let mut ready = None;
     for index in 0..ENTRIES.len() {
         let mut frame = module(1, index, format);
-        frame.reflection =
-            format!("{{\"parameters\":[],\"hashedStrings\":{{\"word{index}\":{index}}}}}");
+        frame.reflection = Reflection {
+            strings: [(index as u32, format!("word{index}"))].into(),
+            ..Reflection::default()
+        }
+        .to_json();
         if let Collected::Ready(whole) = modules.collect(one(frame)) {
             ready = Some(whole);
         }
     }
-    let table = ready.expect("complete").strings().expect("readable");
+    let table = ready
+        .expect("complete")
+        .reflection()
+        .expect("readable")
+        .strings;
     assert_eq!(table.len(), ENTRIES.len());
     assert_eq!(table.get(&3).map(String::as_str), Some("word3"));
 
@@ -231,7 +244,7 @@ fn the_literals_are_merged_across_the_entry_points() {
         }
     }
     assert!(
-        ready.expect("complete").strings().is_err(),
+        ready.expect("complete").reflection().is_err(),
         "half a table is not a table"
     );
 }
