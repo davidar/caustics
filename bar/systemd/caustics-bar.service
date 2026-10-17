@@ -30,12 +30,13 @@ RestartSec=1
 # core, and the stall witness in the journal is what catches a busy loop
 # (bar/src/health.rs).
 #
-# 1 GB rather than less: `caustics-reload` runs slangc inside this unit's cgroup,
-# and one entry point of the caustic peaks at 350–424 MB (`bar_shape` 351 MB,
-# `bar_apply` 424 MB, measured with slangc 2026.14.1). Under a 256 MB cap
-# every hot reload that missed slangc's cache was an OOM kill of the whole
-# unit. The compile is sequential, one slangc at a time, so the peak is one
-# compile plus the set; a leak is still caught long before a gigabyte.
+# 1 GB rather than less: `caustics-reload` compiles the caustic with Slang in
+# its own process, inside this unit's cgroup, and one compile of every entry
+# point peaks at about 400 MB (measured with Slang 2026.14.1); between
+# compiles the sidecar gives that back and sits near 60 MB. Under a 256 MB
+# cap every hot reload that missed the compile cache was an OOM kill of the
+# whole unit. One compile runs at a time, so the peak is one compile plus the
+# set; a leak is still caught long before a gigabyte.
 MemoryMax=1G
 # Exit 2 is the bar refusing to run at all — an adapter it refuses (only a discrete NVIDIA GPU available), an argument
 # it does not understand, or another caustics-bar already holding this edge. Exit 3

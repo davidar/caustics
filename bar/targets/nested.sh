@@ -91,11 +91,10 @@ if [[ ! -d "$RUN/caustics" ]]; then
     cp -a "$REPO/caustics" "$RUN/caustics"
 fi
 # The bar's PATH, the unit's shape: the run's bin (rows_demo by bare name, as
-# an installed applet would resolve, and slangc), then the system's. Not
+# an installed applet would resolve), then the system's. Not
 # `~/.local/bin`, which may hold an installed set: a sidecar missing from
 # `target/debug` must be absent here, never the installed one.
 ln -sfn "$REPO/target/debug/examples/rows_demo" "$RUN/bin/rows_demo"
-ln -sfn "$(command -v slangc || echo "$HOME/.local/bin/slangc")" "$RUN/bin/slangc"
 BAR_PATH="$RUN/bin:/usr/local/bin:/usr/bin:/bin"
 
 BAR_LOG="$RUN/bar.log"
@@ -116,8 +115,8 @@ nested_prelude() {
     printf 'T_HOME=%q; T_CONFIG=%q; T_STATE=%q; T_CACHE=%q; T_BIN=%q; T_CAUSTICS=%q; ' \
         "$RUN/home" "$RUN/xdg/config" "$RUN/xdg/state" "$RUN/xdg/cache" \
         "$REPO/target/debug" "$RUN/caustics"
-    printf 'T_SLANGC=%q; T_ORACLE=%q; T_FAKE_UPOWER=%q; ' \
-        "$RUN/bin/slangc" "${ORACLE_BIN:-}" "${FAKE_UPOWER_BIN:-}"
+    printf 'T_ORACLE=%q; T_FAKE_UPOWER=%q; ' \
+        "${ORACLE_BIN:-}" "${FAKE_UPOWER_BIN:-}"
     printf 'export WAYLAND_DISPLAY=%q XDG_RUNTIME_DIR=%q NIRI_SOCKET=%q ' \
         "$NESTED_WAYLAND" "$NESTED_RT" "$NESTED_NIRI_SOCKET"
     printf 'XDG_CONFIG_HOME=%q XDG_STATE_HOME=%q XDG_CACHE_HOME=%q CAUSTICS_DIR=%q ' \

@@ -36,8 +36,8 @@ APPS_SIDECAR="$REPO/target/debug/caustics-apps"
 # The font, the OpenType arena and the symbolic icons: the bar loads no font
 # itself, so **without this one there is no text on the bar at all**.
 GLYPHS_SIDECAR="$REPO/target/debug/caustics-glyphs"
-# The compiler: watches `caustics/`, the tunables among it, runs slangc and
-# writes the caustic to the bar as `Module` frames (every step that edits the
+# The compiler: watches `caustics/`, the tunables among it, compiles it with
+# Slang in process and writes the caustic to the bar as `Module` frames (every step that edits the
 # tunables waits on one of its swaps).
 RELOAD_SIDECAR="$REPO/target/debug/caustics-reload"
 # The rows-frame worked example (docs/abi.md, *Writing a sidecar*), an extra sidecar.
@@ -412,10 +412,11 @@ fi
 
 # --- step 2: copy into the target -------------------------------------------
 
-say "2. the set and the toolchain are on the target"
+say "2. the set and lavapipe are on the target"
 # The whole of this step is the VM's: a nested run's set is `target/debug/`
-# where cargo left it, and its slangc is this host's.
-if vm_only "the set upload, the unit, slangc and lavapipe are the guest image's (nested: the set is target/debug, slangc the host's)"; then
+# where cargo left it. Nothing compiles the caustic but the set itself:
+# `caustics-reload` carries Slang inside its binary.
+if vm_only "the set upload, the unit and lavapipe are the guest image's (nested: the set is target/debug)"; then
 if ! gssh 20 true; then
     fail "the VM is not reachable over ssh on port $SSH_PORT — start it with tests/run.sh start"
     exit 1
@@ -472,36 +473,21 @@ gscp "$REPO"/caustics/*.slang \
 gscp "$REPO"/bar/systemd/caustics-bar.service \
     tester@127.0.0.1:.config/systemd/user/caustics-bar.service && pass "unit" || fail "unit"
 
-# A guest image may ship the toolchain itself and record its version line in
-# /usr/lib/caustics-vm/VERSION. When that line is this host's, the guest's copy is
-# linked to; any other line means a copy, so a stale image costs only time.
+# A guest image may ship lavapipe itself and record its version line in
+# /usr/lib/caustics-vm/VERSION. When that line's lavapipe is this host's, the
+# guest's copy is used; anything else means a copy, so a stale image costs
+# only time. An image's line may still name a Slang release before the
+# lavapipe hash (images built when the guest needed a compiler of its own):
+# only the last field, the lavapipe one, is compared.
 GUEST_LVP_DIR='$HOME'
 host_toolchain=$(vm_toolchain_version)
 image_toolchain=$(gssh 20 'cat /usr/lib/caustics-vm/VERSION 2>/dev/null')
-if [[ -n "$image_toolchain" && "$image_toolchain" == "$host_toolchain" ]]; then
-    gssh 20 'ln -sf /usr/lib/caustics-vm/slang/bin/slangc ~/.local/bin/slangc' &&
-        pass "the image carries this host's toolchain ($host_toolchain); nothing to copy"
+if [[ -n "$image_toolchain" && "${image_toolchain##*; }" == "$host_toolchain" ]]; then
+    pass "the image carries this host's lavapipe ($host_toolchain); nothing to copy"
     GUEST_LVP_DIR=/usr/lib/caustics-vm
 else
     [[ -n "$image_toolchain" ]] &&
         note "the image's toolchain is '$image_toolchain', this host's '$host_toolchain'; copying"
-
-    # Tarred, since scp -r copies symlink targets twice; skipped if sizes match.
-    want=$(du -sb "$SLANG_ROOT/bin" "$SLANG_ROOT/lib" | awk '{t+=$1} END {print t}')
-    have=$(gssh 20 'du -sb ~/slang/bin ~/slang/lib 2>/dev/null | awk "{t+=\$1} END {print t+0}"')
-    if [[ "$want" == "$have" ]]; then
-        pass "slang toolchain already present ($want bytes)"
-    else
-        note "copying the slang toolchain ($want bytes) — one-off, a minute or two"
-        gssh 20 'rm -rf ~/slang && mkdir -p ~/slang'
-        if tar -C "$SLANG_ROOT" -cf - bin lib |
-            gssh 600 'tar -C ~/slang -xf -'; then
-            gssh 20 'ln -sf ~/slang/bin/slangc ~/.local/bin/slangc'
-            pass "slang toolchain"
-        else
-            fail "slang toolchain (hot reload will not work)"
-        fi
-    fi
     # lavapipe: the guest ships no working Vulkan ICD of its own, so the host's
     # (same mesa and llvm versions) drops in with a hand-written manifest.
     have_lvp=$(gssh 20 'stat -c %s ~/libvulkan_lvp.so 2>/dev/null || echo 0')
@@ -512,9 +498,6 @@ else
             fail "libvulkan_lvp.so"
     fi
 fi
-# slangc's first line is its version.
-slangc_v=$(gssh 60 '~/.local/bin/slangc -v 2>&1 | head -1')
-if [[ "$slangc_v" =~ [0-9]+\.[0-9]+ ]]; then pass "slangc runs in the guest: $slangc_v"; else fail "slangc does not run in the guest: $slangc_v"; fi
 # The manifest names the guest's own path, so it is written in the guest.
 gssh 20 "dir=$GUEST_LVP_DIR"'; printf "{\n  \"file_format_version\": \"1.0.1\",\n  \"ICD\": {\n    \"library_path\": \"%s/libvulkan_lvp.so\",\n    \"api_version\": \"1.4.354\"\n  }\n}\n" "$dir" > ~/lvp_icd.json' >/dev/null
 
@@ -538,9 +521,6 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # ends the quoting or runs a command.)
 Environment=RUST_LOG=info,caustics_bar::layout=debug,caustics_bar::shape=debug
 CONF' >/dev/null && pass "drop-in" || fail "drop-in"
-else
-    slangc_v=$(on_target 60 '"$T_SLANGC" -v 2>&1 | head -1')
-    if [[ "$slangc_v" =~ [0-9]+\.[0-9]+ ]]; then pass "slangc runs on the target: $slangc_v"; else fail "slangc does not run on the target: $slangc_v"; fi
 fi
 # The tunables as the run found them. Every step that edits the target's
 # `bar_tunables.slang` puts this snapshot back (`restore_tunables`), and a
@@ -554,7 +534,7 @@ say "2b. the oracle: the table bar_build builds, on this adapter"
 # on lavapipe on the target's vCPUs (112 s quiet, past 300 s on a busy host);
 # it is a correctness gate, and the stamps say where a slow pass was.
 oracle_out=$(on_target 600 'cd "$T_HOME" && vk_env && CAUSTICS_BAR_ORACLE=1 \
-    SLANGC=$T_SLANGC CAUSTICS_DIR=$T_CAUSTICS \
+    CAUSTICS_DIR=$T_CAUSTICS \
     "$T_ORACLE" oracle --nocapture --test-threads=1 2>&1 |
     awk "{ print strftime(\"%T\"), \$0; fflush() }" | tee "$T_HOME/oracle.log"' |
     tail -200)
@@ -3412,7 +3392,8 @@ else
 fi
 
 # An edit that does not compile must leave the last good bar running, and
-# slangc's diagnostic names the file in the tree, the one being edited.
+# Slang's diagnostic names the file in the tree, the one being edited, at the
+# line and column (`…/caustics/bar_tunables.slang:<line>:<col>`).
 on_target 20 'cp $T_CAUSTICS/bar_tunables.slang $T_CAUSTICS/bar_tunables.slang.new
     printf "\n#error deliberate tunables failure\n" >> $T_CAUSTICS/bar_tunables.slang.new
     mv -f $T_CAUSTICS/bar_tunables.slang.new $T_CAUSTICS/bar_tunables.slang' >/dev/null
@@ -3423,10 +3404,10 @@ else
     fail "a broken bar_tunables.slang produced no diagnostic"
 fi
 assert_contains "the bar is still up" "$(bar_active)" active
-if journal | tail -n 40 | grep -qF 'caustics/bar_tunables.slang'; then
-    pass "the diagnostic names caustics/bar_tunables.slang"
+if journal | tail -n 40 | grep -qE 'caustics/bar_tunables\.slang:[0-9]+:[0-9]+'; then
+    pass "the diagnostic names caustics/bar_tunables.slang, at a line and column"
 else
-    fail "the diagnostic did not name caustics/bar_tunables.slang: $(journal | tail -n 8 | tr '\n' '|' | cut -c1-600)"
+    fail "the diagnostic did not name caustics/bar_tunables.slang:<line>:<col>: $(journal | tail -n 8 | tr '\n' '|' | cut -c1-600)"
 fi
 
 anchors_before=$(journal_count "re-anchored to the top edge")
@@ -3488,7 +3469,7 @@ on_target 20 'cp $T_CAUSTICS/bar_tunables.slang $T_CAUSTICS/bar_tunables.slang.n
     printf "\n#error deliberate reload failure\n" >> $T_CAUSTICS/bar_tunables.slang.new
     mv -f $T_CAUSTICS/bar_tunables.slang.new $T_CAUSTICS/bar_tunables.slang' >/dev/null
 if wait_for_journal_more "reload: failed" 40 "$failures_before"; then
-    pass "reload: failed, with slangc's diagnostic"
+    pass "reload: failed, with Slang's diagnostic"
     note "$(journal | tail -n 6 | tail -4)"
 else
     fail "a broken caustic did not produce 'reload: failed'"
@@ -3552,7 +3533,7 @@ else
     fi
 fi
 
-# The SPIR-V cache, keyed on the bytes that reach slangc, spares a restart
+# The SPIR-V cache, keyed on the bytes that reach the compiler, spares a restart
 # after an edit seconds of the baked chrome. A never-seen file is a miss; a
 # restart over it is a hit, timed from the format to the generation sent.
 reloads_before=$(journal_count "$SWAPPED")

@@ -65,7 +65,7 @@ export TOPAZ_TEST_ID="$CAUSTICS_VM_SLOT_HELD"
 # The guest uses about 1.4 GB; anything more becomes page cache it never
 # returns, and qemu keeps every page the guest touches resident on the host,
 # so a guest's size is what it costs. 3 GB is the floor: at 2 GB the oracle on
-# lavapipe ran past its cap, a slangc reload took over 40 s, and a 5 s toast
+# lavapipe ran past its cap, a hot reload's compile took over 40 s, and a 5 s toast
 # expired before its screendump. bar-test.sh prints the guest's memory at the
 # end of the run, so a tight guest is seen rather than guessed at.
 # `TOPAZ_TEST_RAM` overrides.

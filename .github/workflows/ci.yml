@@ -16,7 +16,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  SLANG_VERSION: "2026.14.1"
 
 jobs:
   check-and-test:
@@ -27,8 +26,9 @@ jobs:
 
       # libwayland at link time; fontconfig and sans-serif fonts for the text
       # tests (they skip without one; Noto Sans lacks the chart arrows, DejaVu
-      # Sans has them); lavapipe for the oracle; spirv-val for
-      # the compile tests; dbus-daemon for the sidecars' private test buses.
+      # Sans has them); lavapipe for the oracle; spirv-val, which every
+      # compile runs over its modules when it is installed; dbus-daemon for
+      # the sidecars' private test buses.
       - name: System packages
         run: |
           sudo apt-get update
@@ -38,22 +38,17 @@ jobs:
             mesa-vulkan-drivers libvulkan1 spirv-tools \
             dbus
 
-      - name: slangc
-        id: slang
+      # The Slang compiler is in process (punchcutter-slang). Its release is
+      # downloaded by the `shader-slang-sys` build script on a first build,
+      # pinned and checked against its SHA-256, and kept under
+      # ~/.cache/shader-slang/; caching that directory spares every run the
+      # download. Cargo.lock pins the crate, and with it the release.
+      - name: Slang release
         uses: actions/cache@v4
         with:
-          path: ~/slang
-          key: slang-${{ env.SLANG_VERSION }}-linux-x86_64
-      - name: slangc (download)
-        if: steps.slang.outputs.cache-hit != 'true'
-        run: |
-          mkdir -p ~/slang
-          curl -sSfL "https://github.com/shader-slang/slang/releases/download/v${SLANG_VERSION}/slang-${SLANG_VERSION}-linux-x86_64.tar.gz" \
-            | tar -xz -C ~/slang
-      - name: slangc (on PATH)
-        run: |
-          echo "$HOME/slang/bin" >> "$GITHUB_PATH"
-          ~/slang/bin/slangc -v
+          path: ~/.cache/shader-slang
+          key: shader-slang-${{ hashFiles('Cargo.lock') }}
+          restore-keys: shader-slang-
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2

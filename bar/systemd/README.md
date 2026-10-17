@@ -57,11 +57,11 @@ and `systemctl --user daemon-reload` is the whole edit cycle.
 
 ### What the build wants of the machine
 
-- `slangc` on `PATH`, or `$SLANGC` naming it. `bar/build.rs` compiles
-  `caustics/bar.slang` for every entry point and both swapchain formats, so
-  there is no build without it. At *run* time only `caustics-reload` needs it: a
-  machine with no slangc runs the caustic baked into the bar and never
-  hot-reloads.
+- Nothing for Slang. `bar/build.rs` and `caustics-reload` compile
+  `caustics/bar.slang` with the Slang compiler carried inside
+  `punchcutter-slang`, whose first build downloads the pinned Slang release
+  (README.md, *Requirements*). At *run* time only `caustics-reload` compiles, in
+  its own process, and needs nothing installed.
 - The Wayland client library at link time (`libwayland-dev` or your
   distribution's equivalent). On an immutable host whose shared libraries
   lack the development symlinks, the script points `LIBRARY_PATH` at
@@ -90,9 +90,10 @@ it sets, and why:
   are its diagnostics and go to stderr; a user manager's default may not be
   the journal.
 - `MemoryMax=1G`. A backstop, not a budget. The bar itself sits far below it,
-  but `caustics-reload` runs slangc inside this unit's cgroup, and compiling one
-  entry point of the caustic peaks at 350–450 MB. One compile runs at a time,
-  so the peak is one compile plus the set. There is no `CPUQuota`: an
+  but `caustics-reload` compiles the caustic in its own process inside this
+  unit's cgroup, and a compile of every entry point peaks at about 400 MB
+  (the sidecar gives it back when the compile ends). One compile runs at a
+  time, so the peak is one compile plus the set. There is no `CPUQuota`: an
   interaction burst may use a core, and the bar's stall witness is what
   catches a busy loop.
 - `RUST_LOG=info`.
@@ -213,7 +214,7 @@ worth knowing:
 | `preview: window N 1280x800` | a captured still reached the GPU |
 | `tunables: applied (edge=top height=32)` | the caustic asked for a surface and got it |
 | `caustics-reload: generation N sent (7 modules, … KiB, … ms, cold)` | the caustic was recompiled (`warm` = read back from the cache) |
-| `caustics-reload: failed (<entry>); keeping the old bar` + slangc's own text | a caustic that does not compile; the running one stays |
+| `caustics-reload: failed; keeping the old bar` + Slang's own text (`--> path:line:col`) | a caustic that does not compile; the running one stays |
 | `sidecar caustics-reload: generation N, 7 modules, swapped (…)` | and the bar put that generation on the GPU |
 | `text: N runs have a glyph the font lacks` | the caustic asked `caustics-glyphs` to cover them from a fallback face |
 | `redraw: still animating after N s: …` (WARN) | something has not settled; the caustic's `stall:` lines follow, naming what is still moving |

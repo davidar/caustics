@@ -10,7 +10,7 @@
 #
 #   on_target <deadline> <cmd>   a shell command where the bar runs, with
 #                                `$T_HOME $T_CONFIG $T_STATE $T_CACHE $T_BIN
-#                                $T_CAUSTICS $T_SLANGC $T_ORACLE
+#                                $T_CAUSTICS $T_ORACLE
 #                                $T_FAKE_UPOWER` and `bus_env gui_env vk_env`
 #                                defined in it (the target's prelude)
 #   to_target <src> <dst>        a file there (dst relative to $T_HOME)
@@ -35,20 +35,15 @@ TOPAZ_TESTS="${TOPAZ_TESTS:?set TOPAZ_TESTS to the tests directory of the VM har
 # shellcheck disable=SC1091
 source "$TOPAZ_TESTS/lib.sh"
 
-# The toolchain the copy step puts in the guest beside the bar. slangc is a
-# thin driver over libslang-compiler.so and friends, found through an
-# $ORIGIN/../lib rpath, so the whole install tree goes over, not the binary.
-# lavapipe comes from the host (`$CAUSTICS_VM_LVP`), with a hand-written manifest.
-SLANGC_HOST="${SLANGC:-$HOME/.local/bin/slangc}"
-SLANG_ROOT="$(dirname "$(dirname "$(readlink -f "$SLANGC_HOST")")")"
+# The toolchain the copy step puts in the guest beside the bar: lavapipe, from
+# the host (`$CAUSTICS_VM_LVP`), with a hand-written manifest. No compiler:
+# `caustics-reload` carries Slang inside its binary.
 LVP_HOST="${CAUSTICS_VM_LVP:-/usr/lib64/libvulkan_lvp.so}"
-# One line naming both: slangc's own version and the lavapipe build's hash. An
-# image that ships the toolchain records the same line, and the copy step
+# The lavapipe build's hash, as one line. An image that ships lavapipe records
+# the same line (after any older fields, `; `-separated), and the copy step
 # compares the two.
 vm_toolchain_version() {
-    printf 'slang %s; lvp %s\n' \
-        "$("$SLANGC_HOST" -v 2>&1 | head -1)" \
-        "$(sha256sum "$LVP_HOST" | cut -c1-16)"
+    printf 'lvp %s\n' "$(sha256sum "$LVP_HOST" | cut -c1-16)"
 }
 
 T_NAME=vm
@@ -75,7 +70,7 @@ U_SESSION_BUS='unix:path=%t/bus'
 # `$HOME` is the *guest's*, expanded by the remote shell. The three functions
 # set up the session bus, the graphical session, and lavapipe.
 T_PRELUDE='T_HOME=$HOME; T_CONFIG=$HOME/.config; T_STATE=$HOME/.local/state; T_CACHE=$HOME/.cache;
-T_BIN=$HOME/.local/bin; T_CAUSTICS=$HOME/caustics-bar/caustics; T_SLANGC=$HOME/.local/bin/slangc;
+T_BIN=$HOME/.local/bin; T_CAUSTICS=$HOME/caustics-bar/caustics;
 T_ORACLE=$HOME/caustics-bar-oracle;
 T_FAKE_UPOWER=$HOME/caustics-bar/caustics-fake-upower;
 bus_env() { export XDG_RUNTIME_DIR=/run/user/$(id -u); export DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus; };
