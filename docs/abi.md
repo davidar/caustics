@@ -798,8 +798,10 @@ and `RowsBuilder::body` refuses one that would.
 **Toasts.** `RFLAG_SHOW` on a `ROW_ITEM` means "show my rows without a
 click". `caustics-notify` sets it on its chip while a notification younger than
 its toast time exists and do-not-disturb is off, and clears it with a fresh
-frame when the youngest expires. The caustic opens that item's
-`RFLAG_ATTENTION` rows (direct children, no separators, at most
+frame when the youngest expires; `caustics-audio` and `caustics-power` set it
+for a moment after a volume, mute or brightness change that did not come from
+their menu, flagging the slider and checkbox rows that changed. The caustic
+opens that item's `RFLAG_ATTENTION` rows (direct children, no separators, at most
 `TOAST_MAX_ROWS`, the frame's order) as a `POPUP_TOAST` without a grab while
 the bit is set and the popup is idle, and ends it when the bit or the frame
 goes or a row is clicked. `RFLAG_ATTENTION` on a menu row means nothing in a
@@ -896,11 +898,13 @@ writes rather than copies, on `ACT_POPUP_OPEN`/`ACT_POPUP_CLOSE` with a slot
 (*The action ring*): the bar tells the sidecar that owns a menu when it opens and when it
 closes. `row` is the item whose menu it is, the same row both times; `pos`,
 `button` and `value` are zero. **A sidecar may ignore both**, and
-`caustics-tray`, `caustics-audio` and `caustics-bluetooth` do, without a witness. Two
+`caustics-tray` and `caustics-bluetooth` do, without a witness. Three
 sidecars want them: `caustics-network`, which scans for the access points in
-range while its menu is up and stops when it closes, and `caustics-power`, which
-reads the backlight when the battery's menu opens and once a second while it
-stays up, and never while it is closed. The dock's own right-click menu sends
+range while its menu is up and stops when it closes; `caustics-power`, which
+polls the backlight when the battery's menu opens and once a second while it
+stays up, and never on a clock while it is closed; and both it and
+`caustics-audio`, which raise no on-screen display toast while their menu is
+up and end one when it opens. The dock's own right-click menu sends
 neither: its rows are the bar's, and there is no sidecar at the other end.
 `ACTION_MENU_CLOSE` is sent however the popup's life ends (a click elsewhere,
 a leaf row performing, the compositor dismissing it, the caustic moving to

@@ -132,8 +132,8 @@ The sidecars the bar starts, compiled in as `SIDECARS` in
 |---|---|---|---|
 | `caustics-sysmon` | `/proc`, hwmon, drm sysfs, NVML | the chart samples | no charts |
 | `caustics-tray` | StatusNotifierWatcher/Item, `com.canonical.dbusmenu` (session bus) | the tray's chips and menus | no tray |
-| `caustics-power` | UPower, logind, power-profiles-daemon, the backlight | the battery chip, its menu, the power menu | no battery, no power menu |
-| `caustics-audio` | `pactl subscribe`, `wpctl` | the volume chip, its slider, output and input devices | no audio chip |
+| `caustics-power` | UPower, logind, power-profiles-daemon, the backlight and its kernel uevents | the battery chip, its menu, the power menu, the brightness on-screen display | no battery, no power menu |
+| `caustics-audio` | `pactl subscribe`, `wpctl` | the volume chip, its slider, output and input devices, the volume on-screen display | no audio chip |
 | `caustics-network` | NetworkManager (system bus) | the network chip, its menu, networks in range while the menu is open | no network chip |
 | `caustics-bluetooth` | BlueZ (system bus) | the Bluetooth chip and its devices | no Bluetooth chip |
 | `caustics-notify` | `org.freedesktop.Notifications` (it *is* the daemon) | the bell, its history menu, toasts | no notifications from the bar |
@@ -353,7 +353,7 @@ What the bar adds on top:
   level by the row's id, not its index, so a network list that reshapes while
   you are reading it moves nothing you are holding. The sidecar is told when
   its menu opens and closes: the network sidecar scans for access points only
-  while its menu is up, and the power sidecar reads the backlight only then.
+  while its menu is up, and the power sidecar polls the backlight only then.
 - **Long menus scroll.** The caustic knows the output's size and clamps a
   menu to it, less the bar and a margin. The wheel scrolls rows within the
   band while the back row stays pinned.
@@ -362,7 +362,10 @@ What the bar adds on top:
   those rows fixed while it is up (a row that arrives meanwhile waits for the
   next toast, one that leaves is a gap, and the popup never moves under the
   pointer), and tells the sidecar which rows it actually showed when it
-  closes.
+  closes. The audio and power sidecars raise their own slider (and, for a
+  mute, its checkbox) as a toast for a moment when the volume, a mute or the
+  brightness changes by any route but their menu, which makes that the bar's
+  on-screen display.
 - **The calendar** is the clock's menu: the month laid out in the caustic
   from the date words the process writes.
 - **The dock's menu** is the bar's own rows. `DOCK_MENU` in the tunables

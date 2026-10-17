@@ -11,8 +11,9 @@ you can edit while the bar is running.
 
 What it shows: a dock with pinned and running applications and hover previews
 of their windows, a system tray, charts, a clock with a calendar, and menus for
-battery and power, audio, network and Bluetooth, plus an idle-inhibit toggle
-and a notification daemon with toasts.
+battery and power, audio, network and Bluetooth, plus an idle-inhibit toggle,
+a notification daemon with toasts, and an on-screen display for volume and
+brightness changes.
 
 ![The bar across the top of one output: the dock on the left, the clock and six charts in the centre, the tray, network, Bluetooth, audio, do-not-disturb, notifications, battery and power on the right](docs/bar.png)
 
