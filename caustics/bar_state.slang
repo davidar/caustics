@@ -211,6 +211,24 @@ public struct NotifyScratch
     public uint toast_said_held;
 };
 
+/// What the wake keeps between dispatches (`wake.slang`): its sources, the
+/// pointer as it last saw it, and whether it was last witnessed stirred.
+public struct WakeScratch
+{
+    /// The sources, a ring: x and y in bar px, age in seconds, and height as
+    /// a multiple of WAKE_HEIGHT. Height 0 is an empty slot.
+    public float4 sources[WAKE_SOURCES];
+    /// The pointer as the wake last saw it, x and y in bar px (x < 0 when it
+    /// was not on the bar); the px it has travelled since the last source,
+    /// and the seconds since that source.
+    public float4 track;
+    /// The slot the next source takes.
+    public uint next;
+    /// 1 while any source lives, as last witnessed (`wake: stirred`, `wake:
+    /// still`). `bar_draw` reads it too: 0 is a slab with no light to add.
+    public uint said;
+};
+
 /// What the clock keeps (`clock.slang`): nothing between dispatches, and
 /// inside one build the clock's item index, which the calendar's cells hang
 /// off.
@@ -338,6 +356,8 @@ public struct Private
     public NotifyScratch notify;
     /// The clock's (`clock.slang`).
     public ClockScratch clock;
+    /// The wake's (`wake.slang`).
+    public WakeScratch wake;
 
     // -- the anchor, likewise ----------------------------------------------
     /// The `(EDGE, BAR_HEIGHT)` pair last pushed as an `ACT_ANCHOR`. Zero
@@ -432,19 +452,6 @@ public struct Private
     public uint body_line_count;
     public BodyLine body_lines[MAX_BODY_POOL];
 
-    // -- the wake under the pointer (*The wake*) ----------------------------
-    /// The sources, a ring: x and y in bar px, age in seconds, and height as
-    /// a multiple of WAKE_HEIGHT. Height 0 is an empty slot.
-    public float4 wake[WAKE_SOURCES];
-    /// The pointer as the wake last saw it, x and y in bar px (x < 0 when it
-    /// was not on the bar); the px it has travelled since the last source,
-    /// and the seconds since that source.
-    public float4 wake_track;
-    /// The slot the next source takes.
-    public uint wake_next;
-    /// 1 while any source lives, as last witnessed (`wake: stirred`, `wake:
-    /// still`). `bar_draw` reads it too: 0 is a slab with no light to add.
-    public uint said_wake;
 
     // -- the tables ---------------------------------------------------------
     public Element elements[MAX_ELEMENTS];
@@ -641,7 +648,7 @@ public void ensure_private()
     // No pointer until one arrives as a command (docs/abi.md, *The action ring*).
     private[0].pointer = float2(-1.0, -1.0);
     private[0].pointer_target = NO_INDEX;
-    private[0].wake_track = float4(-1.0, -1.0, 0.0, 0.0);
+    private[0].wake.track = float4(-1.0, -1.0, 0.0, 0.0);
     // "This slot has never published a chip", which is what makes a departure
     // witness name the chip rather than one of its rows.
     for (uint s = 0u; s < MAX_SLOTS; ++s)

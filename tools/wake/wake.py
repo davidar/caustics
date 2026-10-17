@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
 """Preview the bar's wake off the GPU: the same height field, refraction and
-tone map as `caustics/bar.slang`'s `wake_field` and `wake_light`, stepped the
+tone map as `caustics/wake.slang`'s `wake_field` and `wake_light`, stepped the
 way `step_wake` steps it, drawn by numpy into a PNG. Beside the per-pixel
 Jacobian picture the shader draws, it can also splat rays into a histogram
 (the logo renderer's method) as a ground truth for the approximation.
 
 Every knob is read out of the tree so the preview cannot drift from the
 shader: the `WAKE_*` tunables and `SLAB_RGB`/`HOVER_RGB` from
-`caustics/bar_tunables.slang`, and the `static const` constants of the wake
-from `caustics/bar.slang`. `--set NAME=VALUE` overrides any of them for a
+`caustics/bar_tunables.slang`, the `static const` constants of the wake
+from `caustics/wake.slang`, and its ring's size, `WAKE_SOURCES`, from
+`caustics/bar_state.slang`, where the private buffer's layout is. `--set NAME=VALUE` overrides any of them for a
 trial; the names are the shader's own without the `WAKE_` prefix.
 
     python3 tools/wake/wake.py --out ~/.cache/wake-preview
@@ -29,7 +30,7 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 TREE = os.path.normpath(os.path.join(HERE, '..', '..'))
 TUNABLES = os.path.join(TREE, 'caustics', 'bar_tunables.slang')
-SHADER = os.path.join(TREE, 'caustics', 'bar.slang')
+SHADERS = [os.path.join(TREE, 'caustics', name) for name in ('wake.slang', 'bar_state.slang')]
 
 # The shader's name for each knob, and the name the functions below use.
 NAMES = {
@@ -43,8 +44,8 @@ NAMES = {
 
 
 def read_knobs():
-    """Every WAKE_ constant the two Slang files declare, by the short name."""
-    text = open(TUNABLES).read() + open(SHADER).read()
+    """Every WAKE_ constant the Slang files declare, by the short name."""
+    text = open(TUNABLES).read() + ''.join(open(path).read() for path in SHADERS)
     knobs = {}
     for name, short in NAMES.items():
         m = re.search(r'\b' + name + r'\s*=\s*([0-9.]+)u?;', text)
