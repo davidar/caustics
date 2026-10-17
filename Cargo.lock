@@ -329,6 +329,7 @@ version = "0.1.0"
 dependencies = [
  "caustics-bar-abi",
  "caustics-sidecar",
+ "libc",
  "punchcutter-slang",
 ]
 

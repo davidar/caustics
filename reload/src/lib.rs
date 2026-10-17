@@ -61,8 +61,9 @@
 //! stays resident with it. A compile here is rare (a save) and the process
 //! is otherwise idle for hours, so each generation is compiled on a thread
 //! that ends with it ([`compile_apart`]), and the session and everything it
-//! allocated go with the thread. A save pays the session's creation again;
-//! an idle bar does not pay for a compiler it is not running.
+//! allocated go with the thread, back to the system. A save pays the
+//! session's creation again; an idle bar does not pay for a compiler it is
+//! not running.
 
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -363,16 +364,18 @@ impl Toolchain {
 ///
 /// Slang's global session belongs to the thread that made it, so the thread
 /// ending is what frees it, and with it the compiler's whole working set: a
-/// sidecar that compiled once an hour ago holds none of it now (the module
-/// docs, *The compile runs on a thread of its own*). The stack is the main
-/// thread's usual eight mebibytes rather than a spawned thread's two,
-/// because Slang's front end recurses with the source.
+/// sidecar that compiled once an hour ago holds next to none of it now (the
+/// module docs, *The compile runs on a thread of its own*). The stack is a
+/// main thread's usual eight mebibytes rather than a spawned thread's two:
+/// every other compile of the caustic (the build script, the tests) runs
+/// with at least that much, and this one should not be the first to find out
+/// how deep Slang goes.
 pub fn compile_apart(
     source: &Path,
     entries: &[&str],
     options: &Options,
 ) -> Result<punchcutter_slang::Program, SlangError> {
-    std::thread::scope(|scope| {
+    let result = std::thread::scope(|scope| {
         let compile = std::thread::Builder::new()
             .name("slang".to_owned())
             .stack_size(8 << 20)
@@ -385,7 +388,26 @@ pub fn compile_apart(
         compile
             .join()
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-    })
+    });
+    give_back();
+    result
+}
+
+/// Hand the compile's freed memory back to the system.
+///
+/// The thread's end frees what Slang allocated, but the allocator keeps
+/// freed pages for reuse, and a thread's allocations sit in an arena of its
+/// own that nothing else will reuse: measured on the bar's caustic, the
+/// sidecar stays at 300 to 370 MiB resident after a compile without this and
+/// at 50 to 65 MiB with it (most of that is the compiler's library, mapped),
+/// against a peak of about 390 MiB either way.
+fn give_back() {
+    // SAFETY: `malloc_trim` takes no pointers and only returns free memory
+    // to the system; any thread may call it at any time.
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    unsafe {
+        libc::malloc_trim(0);
+    }
 }
 
 /// The files whose bytes reach the compiler, in a fixed order: [`watched`], in

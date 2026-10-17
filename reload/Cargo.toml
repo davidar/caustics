@@ -9,6 +9,9 @@ rust-version.workspace = true
 [dependencies]
 # The witness line, one copy for every sidecar.
 caustics-sidecar = { path = "../sidecar" }
+# `malloc_trim`: the compile's freed memory goes back to the system when the
+# compile ends (`compile_apart`). Already in Cargo.lock via the bar.
+libc = "0.2.189"
 # The wire, and the whole of what this binary knows about the bar: it reads a
 # `Request` naming the swapchain format and writes `Module` frames back
 # (docs/abi.md, *Request*, *Module*). `ENTRIES` — the entry points to compile and
