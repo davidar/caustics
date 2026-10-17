@@ -1040,16 +1040,17 @@ fn the_shape_dispatch_covers_the_caustics_block_table() {
     );
 }
 
-/// The three snap constants out of `caustics/bar.slang`, so this moves with
-/// them rather than asserting yesterday's numbers.
+/// The three snap constants out of `caustics/bar_state.slang`, so this moves
+/// with them rather than asserting yesterday's numbers.
 fn snap_constants() -> (i32, f32, u32) {
-    let path = bar_slang();
+    let path = caustics_dir().join("bar_state.slang");
     let source = std::fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("could not read {}: {err}", path.display()));
     let value = |name: &str| -> String {
         let needle = format!(" {name} = ");
         source
             .lines()
+            .map(|line| line.strip_prefix("public ").unwrap_or(line))
             .find(|line| line.starts_with("static const") && line.contains(&needle))
             .and_then(|line| line.split_once(&needle))
             .map(|(_, tail)| tail.trim().trim_end_matches([';', 'u']).to_string())
@@ -1062,7 +1063,7 @@ fn snap_constants() -> (i32, f32, u32) {
     )
 }
 
-/// `snap_px` from `caustics/bar.slang`: the nearest size within the window whose cap height is whole, else
+/// `snap_px` from `caustics/bar_state.slang`: the nearest size within the window whose cap height is whole, else
 /// the number that was asked for.
 fn snap_px(cap_height: f32, want: u32) -> u32 {
     let (window, tolerance, min_px) = snap_constants();
