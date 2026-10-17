@@ -19,7 +19,7 @@ libc = "0.2.189"
 # drift into compiling a program the bar cannot assemble.
 caustics-bar-abi = { path = "../bar/abi" }
 # The Slang compiler, in process, with the engine's modules on its search
-# path, and `slang_dir()`: where those modules are written out, which the
-# cache key reads. Nothing here touches wgpu, which is the difference between
+# path from memory, and `slang_dir()`: where those modules are also written
+# out, which the cache key reads. Nothing here touches wgpu, which is the difference between
 # this process and the bar's.
 punchcutter-slang.workspace = true

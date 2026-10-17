@@ -157,11 +157,12 @@ refuse a sidecar from another build anyway, and the script exists so that
 there is no way to make that pairing.
 
 Hot reload compiles against the text engine's Slang modules as they were
-compiled into the set, with the Slang release compiled into it:
-`caustics-reload` writes the modules once into
-`~/.cache/punchcutter/slang/<hash>/`, which is on the search path of every
-compile, so the engine and the compiler the bar runs with are the ones it
-was built against, whatever has happened to cargo's caches since.
+compiled into the set, with the Slang release compiled into it: the
+compiler serves the modules from memory on every compile's search path, so
+the engine and the compiler the bar runs with are the ones it was built
+against, whatever has happened to cargo's caches since. `caustics-reload`
+also writes them once into `~/.cache/punchcutter/slang/<hash>/`, to hash
+into its cache key beside the modules it watches.
 
 **On a laptop with a discrete GPU**, also install the iGPU-only drop-in,
 which pins the Vulkan loader to the integrated GPU's driver so the discrete

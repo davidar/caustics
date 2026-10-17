@@ -54,9 +54,10 @@ icon coverage, the Slug algorithm), `shape` (the shaper), `ot` (OpenType's
 binary format, walked in place) and `shape_abi` (the arena's header) are
 punchcutter's, compiled into `punchcutter-slang` (`punchcutter_slang::modules`);
 punchcutter is the text engine, a dependency. Every compile through that
-crate searches a directory written from those copies last, after this one and
-the bar's rendered contracts: `punchcutter_slang::slang_dir()`, a cache
-directory written once per version of the engine.
+crate serves them from memory, searched last, after this directory and the
+bar's rendered contracts; `punchcutter_slang::slang_dir()` writes the same
+copies to a cache directory, once per version of the engine, for whatever
+wants them as files.
 
 **The bar's two contracts are rendered, not kept here.** `bar_abi` (the
 buffer contract between the bar process and the caustic, docs/abi.md, *The
@@ -161,7 +162,7 @@ compiled, because the module that imports it changed, but is not watched
 until the sidecar restarts). `bar/build.rs` and the harness's copy into a
 guest take the same list. The text engine's modules are not watched: an engine change is a dependency bump and a
 rebuild. On a save it compiles every entry point in one link, with Slang in
-its own process, caches the
+the sidecar's own process, caches the
 result under `$XDG_CACHE_HOME/caustics/reload/` keyed on the bytes that reach
 the compiler (the engine's modules included) and the compiler's version (a cached generation is milliseconds; a cold one is
 seconds), and sends the SPIR-V and the reflection to the bar as one

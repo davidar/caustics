@@ -1544,7 +1544,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 [[package]]
 name = "punchcutter-core"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=c8e27b452ea44b7600c3425a2f7585d9a13ec4de#c8e27b452ea44b7600c3425a2f7585d9a13ec4de"
+source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
 dependencies = [
  "ash",
  "pollster",
@@ -1555,7 +1555,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-fonts"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=c8e27b452ea44b7600c3425a2f7585d9a13ec4de#c8e27b452ea44b7600c3425a2f7585d9a13ec4de"
+source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
 dependencies = [
  "punchcutter-core",
  "punchcutter-shape",
@@ -1566,7 +1566,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-shape"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=c8e27b452ea44b7600c3425a2f7585d9a13ec4de#c8e27b452ea44b7600c3425a2f7585d9a13ec4de"
+source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
 dependencies = [
  "punchcutter-core",
  "ttf-parser",
@@ -1575,7 +1575,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-slang"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=c8e27b452ea44b7600c3425a2f7585d9a13ec4de#c8e27b452ea44b7600c3425a2f7585d9a13ec4de"
+source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
 dependencies = [
  "serde",
  "serde_json",
@@ -1586,7 +1586,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-text"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=c8e27b452ea44b7600c3425a2f7585d9a13ec4de#c8e27b452ea44b7600c3425a2f7585d9a13ec4de"
+source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
 dependencies = [
  "anyhow",
  "punchcutter-core",
@@ -1913,7 +1913,7 @@ dependencies = [
 [[package]]
 name = "shader-slang"
 version = "0.1.0"
-source = "git+https://github.com/davidar/slang-rs?rev=3b3d2da01ea1aa2950dfca6c08a65b108b111750#3b3d2da01ea1aa2950dfca6c08a65b108b111750"
+source = "git+https://github.com/davidar/slang-rs?rev=187639dca673b0fcec6d4e799286aea2ebf0234a#187639dca673b0fcec6d4e799286aea2ebf0234a"
 dependencies = [
  "libloading",
  "shader-slang-sys",
@@ -1922,7 +1922,7 @@ dependencies = [
 [[package]]
 name = "shader-slang-sys"
 version = "0.1.0"
-source = "git+https://github.com/davidar/slang-rs?rev=3b3d2da01ea1aa2950dfca6c08a65b108b111750#3b3d2da01ea1aa2950dfca6c08a65b108b111750"
+source = "git+https://github.com/davidar/slang-rs?rev=187639dca673b0fcec6d4e799286aea2ebf0234a#187639dca673b0fcec6d4e799286aea2ebf0234a"
 dependencies = [
  "flate2",
  "libloading",

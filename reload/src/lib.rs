@@ -127,8 +127,8 @@ pub use caustics_bar_abi::RENDERED;
 
 /// The text engine's modules the caustic imports, directly (`text`, `shape`)
 /// or through them (`ot`, `shape_abi`): punchcutter's, compiled into it and
-/// written out by [`punchcutter_slang::slang_dir`], which every compile
-/// searches last.
+/// served from memory on every compile's search path, last; the copies
+/// [`punchcutter_slang::slang_dir`] writes out are what the cache key hashes.
 ///
 /// The second kind of input that is **not watched**, beside [`RENDERED`]:
 /// inputs to every compile and to its cache key, but an engine change is a
@@ -140,7 +140,8 @@ pub const ENGINE: &[&str] = &["text.slang", "shape.slang", "ot.slang", "shape_ab
 /// order puts the source's own directory first, so a copy beside the caustic
 /// wins), else the directory its compiled-in copy is written to —
 /// [`caustics_bar_abi::rendered_dir`] for the bar's, [`punchcutter_slang::slang_dir`]
-/// for the engine's.
+/// for the engine's (which the compiler itself serves from memory; the file
+/// is for the cache key and the tests).
 pub fn unwatched_file(dir: &Path, name: &str) -> PathBuf {
     let beside = dir.join(name);
     if beside.is_file() {
