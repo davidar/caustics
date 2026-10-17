@@ -3447,10 +3447,18 @@ on_target 20 'cp $T_CAUSTICS/bar_tunables.slang $T_CAUSTICS/bar_tunables.slang.n
     mv -f $T_CAUSTICS/bar_tunables.slang.new $T_CAUSTICS/bar_tunables.slang' >/dev/null
 if wait_for_journal_more "$SWAPPED" 40 "$reloads_before"; then
     pass "$SWAPPED"
-    sleep 1
-    shot reload-after.png
-    if [[ "$probe_ok" -eq 1 ]]; then
+    # The swap line is written before the swapped caustic's first frame is
+    # presented, seconds before it on a software device, so the probe is
+    # polled for the change rather than read off one screenshot a second on.
+    after_rgb=
+    for _ in $(seq 15); do
+        sleep 1
+        shot reload-after.png
+        [[ "$probe_ok" -eq 1 ]] || break
         after_rgb=$(png_mean "$SHOTS/reload-after.png" "$probe_x" "$probe_y" "$probe_w" "$probe_h")
+        [[ -n "$before_rgb" && "$after_rgb" != "$before_rgb" ]] && break
+    done
+    if [[ "$probe_ok" -eq 1 ]]; then
         note "clock mean RGB: [$before_rgb] -> [$after_rgb]"
         if [[ -n "$before_rgb" && "$before_rgb" != "$after_rgb" ]]; then
             pass "the clock's texels changed colour: the swapped caustic is on screen"
@@ -3664,10 +3672,10 @@ mark_journal
 bar_env fault "CAUSTICS_BAR_FAULT=protocol"
 bar_restart
 # Waited for: the bar's stderr can trail the supervisor's exit line.
-if wait_for_journal "wayland protocol error" 20; then
+if wait_for_journal "wayland protocol error" 60; then
     pass "the protocol error is in the journal verbatim"
 else
-    fail "no 'wayland protocol error' in the journal within 20 s"
+    fail "no 'wayland protocol error' in the journal within 60 s"
 fi
 # The compositor's message can be empty: `wl_surface` code 0 is invalid_scale.
 if wait_for_journal "object_interface=wl_surface code=0" 20; then
@@ -3814,7 +3822,7 @@ gssh 20 'chmod +x ~/install.sh; rm -rf ~/caustics-install-test' >/dev/null
 install_out=$(gssh 120 '$HOME/install.sh --from $HOME/.local/bin --prefix $HOME/caustics-install-test 2>&1')
 note "$(printf '%s' "$install_out" | tail -5)"
 assert_contains "the script named the set" "$install_out" "set $BAR_HASH"
-assert_contains "and installed eleven binaries" "$install_out" "installed 11 into"
+assert_contains "and installed eleven binaries" "$install_out" "installed 11 of 11 into"
 assert_contains "and did not restart a unit it does not point at" \
     "$install_out" "not restarting caustics-bar"
 
