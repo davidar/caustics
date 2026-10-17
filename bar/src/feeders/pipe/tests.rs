@@ -518,10 +518,11 @@ fn a_restarted_child_is_asked_everything_again() {
         name: "audio-volume-high-symbolic".into(),
     });
     assert!(pipe.request(&asked, "the request"));
-    thread::sleep(BACKOFF_START + Duration::from_millis(1500));
-    drop(pipe);
-
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    // Wait for the second child to have copied the replay out before ending
+    // it, as the test above does: a fixed sleep here loses to a slangc
+    // running in another crate's tests, the drop killing the restarted child
+    // before its `cat` began. The restart itself waits out BACKOFF_START.
+    let deadline = std::time::Instant::now() + BACKOFF_START + Duration::from_secs(10);
     let mut bytes = Vec::new();
     while std::time::Instant::now() < deadline {
         bytes = std::fs::read(&echoed).unwrap_or_default();
@@ -530,6 +531,7 @@ fn a_restarted_child_is_asked_everything_again() {
         }
         thread::sleep(Duration::from_millis(20));
     }
+    drop(pipe);
     let mut input = std::io::Cursor::new(bytes);
     match wire::read(&mut input) {
         Ok(Some(Frame::Request(got))) => assert_eq!(got.name, "audio-volume-high-symbolic"),
