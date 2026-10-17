@@ -119,7 +119,7 @@ pub const BUF_LAST: u32 = 6;
 abi_consts! {
     CHARTS = "The samples body (docs/abi.md, *Samples*): how much history it carries, and what a row \
               *measures*. What a row of a given kind looks like — heat or line, which \
-              colour — is `bar_tunables.slang`'s, and drawing it is `bar.slang`'s";
+              colour — is `bar_tunables.slang`'s, and drawing it is `sysmon.slang`'s";
 
     /// Chart rows the body carries room for.
     pub const MAX_CHARTS: usize = 8;
@@ -2046,7 +2046,7 @@ const MODULE_DOC: &[&str] = &[
     "The bar parses none of it — `wire::read` checks the framing, the embassy",
     "copies the body, and the caustic is the only thing that reads a row. What a",
     "row of a given kind *looks like* is `bar_tunables.slang`'s, and drawing it",
-    "is `bar.slang`'s.",
+    "is `sysmon.slang`'s.",
     "",
     "This contract is the opposite of the buffer's: the two ends are separate",
     "processes, so every frame carries a magic, its kind and its length, and a",

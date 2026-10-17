@@ -866,3 +866,11 @@ public float4 draw_separator(Element e, float2 p, float4 col)
                SEPARATOR_ALPHA * coverage(rounded_rect_sdf(p - org, float2(e.rect.z, h), 0.0)),
                col);
 }
+
+/// A menu row that is its own thing, `whole`: a separator is a hairline and
+/// nothing else — no chip, no hover.
+public float4 draw_row_own(Element e, Item it, float2 p, float4 col, out bool whole)
+{
+    whole = (it.flags & IFLAG_SEPARATOR) != 0u;
+    return whole ? draw_separator(e, p, col) : col;
+}

@@ -4,7 +4,7 @@
 //!
 //! | | [`buffer`] | [`wire`] |
 //! |---|---|---|
-//! | parties | `caustics-bar` and `caustics/bar.slang` | `caustics-bar` and any sidecar |
+//! | parties | `caustics-bar` and the caustic, `caustics/` | `caustics-bar` and any sidecar |
 //! | built | together, from one tree | separately, by anyone, at any time |
 //! | stability | none needed across builds | byte-stable within one [`ABI_HASH`] |
 //! | version | [`BAR_ABI_VERSION`], a courtesy | [`wire::WIRE_MAGIC`] + [`ABI_HASH`] in the `Hello` frame (docs/abi.md, *Hello*) |

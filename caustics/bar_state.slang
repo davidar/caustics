@@ -1800,3 +1800,39 @@ public void act_sidecar(Item it, uint kind, uint button, float2 pos, float value
     arg(a, token ? 1u : 0u);
     push_action(ACT_SIDECAR, a);
 }
+
+/// The surface this file wants: the tunables' edge and height.
+///
+/// Pushed as a message (docs/abi.md, *The action ring*). The tunables' edge
+/// and height are pushed once — on the frame `ensure_private` ran, because
+/// the pair it is compared against is zero then — and again whenever a
+/// reload changes either. The embassy's `ACT_ANCHOR` handler re-anchors
+/// when it differs from what is live, and says so.
+public void push_anchor()
+{
+    uint want_edge = EDGE;
+    uint want_height = uint(max(BAR_HEIGHT, 1.0) + 0.5);
+    if (want_edge != private[0].anchor_edge || want_height != private[0].anchor_height)
+    {
+        private[0].anchor_edge = want_edge;
+        private[0].anchor_height = want_height;
+        act2(ACT_ANCHOR, want_edge, want_height);
+    }
+}
+
+/// How long a shape pass may take.
+///
+/// The same shape of message as the anchor's, and for the same reason: the
+/// number is this file's, the machinery is the embassy's, and neither side
+/// polls the other. What the embassy does when a pass runs over is fixed —
+/// one witness, and no more shaping until the arena is written again — so
+/// this pushes a threshold and never a policy.
+public void push_watchdog()
+{
+    uint want_watchdog = max(SHAPE_WATCHDOG_MS, 1u);
+    if (want_watchdog != private[0].watchdog_ms)
+    {
+        private[0].watchdog_ms = want_watchdog;
+        act2(ACT_WATCHDOG, want_watchdog, 0u);
+    }
+}

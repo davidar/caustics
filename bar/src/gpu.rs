@@ -26,7 +26,7 @@
 //! that module declares for itself — which is what let it be written and tested
 //! before anything imported it. Group 2 is the engine's `shape.slang`'s font tables plus
 //! the strings buffer; that module declares no bindings at all, so the numbers
-//! there are `bar.slang`'s choice and `shape_tables()` in it is the gather.
+//! there are `bar_state.slang`'s choice and `shape_tables()` in it is the gather.
 //!
 //! **The layouts are built from slangc's reflection**, not from a list here
 //! ([`BAKED_REFLECTION`]), so there is no second copy of every binding here to
@@ -1324,7 +1324,7 @@ impl Gpu {
 
     /// Drop one captured still into the preview slot, at (0, 0).
     ///
-    /// The bytes must be **premultiplied** RGBA8: `caustics/bar.slang`
+    /// The bytes must be **premultiplied** RGBA8: the caustic (`caustics/bar_paint.slang`)
     /// composites the sample with `over` and never unpremultiplies, so there
     /// is exactly one alpha convention in the bar and the conversion from the
     /// capture feeder's straight alpha happens on this side of the upload.
@@ -2559,7 +2559,7 @@ const SETS: [u32; 3] = [SET_BAR, SET_TEXT, SET_SHAPE];
 ///
 /// The embassy allocates this many and then never writes or reads one of them.
 /// It comes from the *reflection* rather than from a constant because the ABI
-/// describes no word of that struct: `bar.slang` may add a field, and the only
+/// describes no word of that struct: `bar_state.slang` may add a field, and the only
 /// thing on this side that has to change is this number. A reload whose stride
 /// differs is refused by the existing bindings diff, which is the design.
 fn private_stride(bindings: &[Binding]) -> u64 {

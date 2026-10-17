@@ -265,7 +265,7 @@ effect at the next restart.
 ## The first start after a bind-group change
 
 A hot reload whose bindings differ from the running bar's (a buffer added,
-removed or resized in `bar.slang`) is refused, because a dispatch whose
+removed or resized in `bar_state.slang`) is refused, because a dispatch whose
 descriptors and whose `[[vk::binding]]` literals disagree is a device loss on
 one driver and silently wrong buffers on another. A bar that was running when
 such a change was installed refuses the first generation `caustics-reload` sends,

@@ -151,7 +151,7 @@ fn slot_fact_layout() {
 /// `RWStructuredBuffer<uint>` — they have to be, because `shapeRun` takes its
 /// text through such a handle and a row's label lives in the arena — so
 /// `RowsHeader`, `Row`, `GlyphBody` and `AppBody` have no reflected layout to
-/// compare against. `bar.slang` reads them word by word at the literal offsets
+/// compare against. The caustic reads them word by word at the literal offsets
 /// below, and this is what says those literals are still the wire's.
 #[test]
 fn the_arenas_hold_what_the_wire_can_send() {
@@ -165,7 +165,7 @@ fn the_arenas_hold_what_the_wire_can_send() {
     // `Item.fact_row` packs a slot and a row index against `MAX_ROWS`.
     assert!(MAX_SLOTS * wire::MAX_ROWS < NO_INDEX as usize);
 
-    // `rows_header` and `row_at` in `bar.slang`.
+    // `rows_header` and `row_at` in `bar_state.slang`.
     assert_eq!(size_of::<wire::RowsHeader>(), 16);
     assert_eq!(offset_of!(wire::RowsHeader, applet), 0);
     assert_eq!(offset_of!(wire::RowsHeader, row_count), 4);
@@ -184,7 +184,8 @@ fn the_arenas_hold_what_the_wire_can_send() {
     assert_eq!(offset_of!(wire::Row, min), 36);
     assert_eq!(offset_of!(wire::Row, max), 40);
 
-    // `index_answers`, `answer_of` and `build_entry` in `bar.slang`.
+    // `index_answers` and `answer_of` in `bar_table.slang`, `build_entry` in
+    // `dock.slang`.
     assert_eq!(size_of::<wire::GlyphBody>(), 16, "then `name_len` bytes");
     assert_eq!(offset_of!(wire::GlyphBody, gid), 0);
     assert_eq!(offset_of!(wire::GlyphBody, flags), 4);
@@ -798,7 +799,7 @@ fn chart_tunables() -> ChartTunables {
     }
 }
 
-/// The CPU stand-in for `draw_chart`/`draw_series` in `caustics/bar.slang`:
+/// The CPU stand-in for `draw_chart`/`draw_series` in `caustics/sysmon.slang`:
 /// the same per-texel walk — map x to a fractional column of the valid
 /// tail, take the two bracketing samples, and cover the segment between
 /// them — returning the line's coverage rather than a colour.
@@ -1179,7 +1180,7 @@ fn clock_tunables() -> (Vec<String>, Vec<String>, Vec<String>) {
     )
 }
 
-/// `compose_clock_time` and `compose_clock_date` from `caustics/bar.slang`,
+/// `compose_clock_time` and `compose_clock_date` from `caustics/clock.slang`,
 /// over the tunables' own tables: the bytes the compose pass writes.
 fn compose(time: u32, date: u32) -> (String, String) {
     let (weekdays, months, order) = clock_tunables();
@@ -1341,7 +1342,7 @@ fn single_hash_literal(marker: &str) -> String {
         .to_owned()
 }
 
-/// `build_first_line` in `caustics/bar.slang`, reimplemented: a label is one
+/// `build_first_line` in `caustics/bar_table.slang`, reimplemented: a label is one
 /// line, trimmed, and the range shrinks rather than any byte moving.
 ///
 /// dbusmenu rows and window titles both arrive multi-line on the live bus, and

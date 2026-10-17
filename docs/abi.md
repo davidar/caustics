@@ -27,7 +27,7 @@ neither is in the tree.
 
 | | the buffer | the wire |
 |---|---|---|
-| parties | `caustics-bar` and `caustics/bar.slang` | `caustics-bar` and any sidecar |
+| parties | `caustics-bar` and the caustic, `caustics/` | `caustics-bar` and any sidecar |
 | built | together, from one tree; the caustic from source at build and on reload | separately, by anyone, at any time |
 | stability | none needed across builds; both halves change in one commit | byte-stable framing; a reader that skips what it does not know |
 | version | `BAR_ABI_VERSION` (u32), a courtesy for buffer dumps | `WIRE_MAGIC` in every frame header, and one `ABI_HASH` per child (*The ABI hash*) |
@@ -515,12 +515,12 @@ the rings. `frame` doubles as "has the caustic run at all" (0 until the first
 
 ### The private buffer
 
-`RWStructuredBuffer<Private> private`, one element, declared in `bar.slang`,
+`RWStructuredBuffer<Private> private`, one element, declared in `bar_state.slang`,
 holding whatever the passes want in whatever layout they want: the element
 table, the item and block tables, the last pointer position, the popup want,
 the anchor last pushed, the notdef set's hash, each rows region's shape copy,
-the menu level, the springs, the pointer's wake, and every value a witness is
-compared against.
+the menu level, the springs, one scratch struct per subject (the charts', the
+toasts', the wake's, …), and every value a witness is compared against.
 
 **`runs` is private in the same sense** and is a binding only because
 the engine's `shapeRun` writes through an `RWStructuredBuffer<ShapedGlyph>`
@@ -548,7 +548,7 @@ the menu level and the springs survive a reload. A reload that changes
 The vocabulary the caustic uses for it (`ITEM_*`, `IFLAG_*`, `ELEM_*`,
 `EFLAG_*`, `BLOCK_*`, `COMPOSE_*`, `ID_*` and the `Id` type, `DOCK_*`,
 `WHEN_*`, and the item and id helpers) lives in **`caustics/bar_model.slang`**,
-imported by `bar.slang` and by `bar_tunables.slang` (which needs
+imported by every module of the caustic and by `bar_tunables.slang` (which needs
 `ITEM_KIND_COUNT` for `TEXT_PX` and `WHEN_*` for `DOCK_MENU`). It is the
 caustic's own module, hand-written, hot-reloadable, and **not a contract**: no
 Rust reads it. No id crosses the buffer. Tests reach into `private` by name
@@ -560,7 +560,7 @@ promise.
 **Bindings.** The three bind group layouts, the pipeline layout and the bind
 groups are built from the reflection: `Gpu::bind_group` maps each reflected
 `Binding.name` to its resource and never writes a number. `[[vk::binding(n,
-s)]]` literals stay in `bar.slang` because an attribute cannot take a
+s)]]` literals stay in `bar_state.slang` because an attribute cannot take a
 constant; they are the caustic's, pinned by the reflection the layouts come
 from. Set 0 must be dense: wgpu-hal numbers a Vulkan binding by its entry's
 position, so a gap is a panic at startup. A reload whose bindings differ in

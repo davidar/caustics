@@ -1,9 +1,9 @@
 // The oracle, as a GPU pass (docs/abi.md, *Bindings and the oracle*).
 //
-// **Not a module and not an import**: this file is `#include`d at the bottom
-// of `bar.slang` under `-DCAUSTICS_BAR_CHECK`, so it sees every binding and every
-// helper that file has — `private`, `item_of`, `element_name`, the whole
-// naming family — without any of them being made public for it. Production's
+// **Not a module**: this file is `#include`d at the bottom of `bar.slang`
+// under `-DCAUSTICS_BAR_CHECK`, so it sees what that file sees — `private`
+// and `item_of` (public in `bar_state`), `element_name` and the whole naming
+// family — and imports the one subject it checks (below). Production's
 // `ENTRIES` never names `bar_check` and the baked SPIR-V never carries it; the
 // oracle test compiles the caustic a second time with the define and loads
 // this one entry point beside the seven.
@@ -24,6 +24,11 @@
 //
 // There is no second, CPU-built table to compare against: these checks are
 // invariants of the caustic's own table.
+
+// The chart checks draw a chart and read the samples body, which are the
+// charts' subject's, so this file imports `sysmon` itself: `bar.slang`
+// names no subject, and every other name here is in its scope.
+import sysmon;
 
 /// `check: item <name> kind={n} parent={n+1}` — one per built item, in the
 /// same name family the `layout:` lines use.

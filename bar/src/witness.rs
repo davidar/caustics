@@ -1,6 +1,6 @@
 //! **`printf` for a caustic** (docs/abi.md, *The witness ring*): the witness ring, printed.
 //!
-//! A witness is a *format literal* in `caustics/bar.slang` and up to ten words.
+//! A witness is a *format literal* in the caustic (`caustics/`) and up to ten words.
 //! slangc records the literal's text in the reflection's `hashedStrings`, the
 //! caustic pushes its `getStringHash` as the record's head, and this file
 //! resolves the head through that table and substitutes. There is **no

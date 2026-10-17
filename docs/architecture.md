@@ -167,7 +167,13 @@ of those, out of process, can only cost its own feature.
 ### The caustic
 
 `caustics/bar.slang` is seven compute entry points, in dispatch order
-(`ENTRIES` in `bar/abi/src/entries.rs`):
+(`ENTRIES` in `bar/abi/src/entries.rs`), each a short sequence of calls into
+the modules beside it: the bar's own (`bar_state`, the bindings and the
+private buffer; `bar_popups`; `bar_layout`; `bar_paint`; `bar_table`), one
+module per subject the bar shows (`sysmon`, the charts; `notify`, the toasts;
+`clock`; `wake`; `dock`; `applets`, every sidecar's chips and menus), and
+`bar_dispatch`, the one module that knows which subjects exist
+(caustics/README.md, *The files*):
 
 - **The shape submission**, only when something built is owed (a new window,
   a sidecar's rows changing shape, a new minute, a reload). `bar_build` turns

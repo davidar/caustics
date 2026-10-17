@@ -481,7 +481,7 @@ pub fn is_menu_notice(kind: u32) -> bool {
 /// A click on a bar item is `Activate` only for an item **without**
 /// `RFLAG_HAS_MENU`: an item with one has its rows open instead, and the bar
 /// never sends the activate (docs/abi.md, *Rows*). Secondary and middle both
-/// reach `SecondaryActivate`: bar.slang pushes ACTION_SECONDARY for a right
+/// reach `SecondaryActivate`: the caustic (`applets.slang`) pushes ACTION_SECONDARY for a right
 /// click on an applet and ACTION_MIDDLE for a middle one.
 pub fn dispatch(
     targets: &HashMap<u32, Target>,

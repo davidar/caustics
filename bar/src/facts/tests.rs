@@ -358,7 +358,7 @@ fn want_row_icon(facts: &mut Facts, images: &mut Images, name: &str, kind: u32) 
 }
 
 /// The tray's case (docs/abi.md, *Pixmap*): its `Pixmap` arrives before any build
-/// has named the key, is kept, and the `REQ_ICON` the caustic's icon stitch (`caustics/bar.slang`) sends after the
+/// has named the key, is kept, and the `REQ_ICON` the caustic's icon stitch (`caustics/bar_table.slang`) sends after the
 /// glyph sidecar's `GLYPH_MISSING` lands it — with no request out.
 #[test]
 fn a_pixmap_nobody_asked_for_is_kept_and_a_want_lands_it_without_asking() {

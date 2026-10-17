@@ -345,3 +345,54 @@ public float4 draw_item_content(Element e, Item it, float2 p, float4 col)
     }
     return col;
 }
+
+/// What every button-shaped element wears: the hover chip and the press dip
+/// while it is enabled (the back row is one too), and the urgent wash.
+public float4 draw_button(uint idx, Element e, Item it, float2 p, float4 col)
+{
+    bool enabled = (it.flags & IFLAG_DISABLED) == 0u;
+    if (enabled && (idx == ELEM_BACK || item_is_button(it.kind)))
+    {
+        col = draw_chip(e, p, col);
+    }
+
+    // Urgent is a standing wash, not a hover one: it has to be visible with
+    // the pointer nowhere near the bar.
+    if ((it.flags & (IFLAG_URGENT | IFLAG_ATTENTION)) != 0u)
+    {
+        col = ink(URGENT_TINT, URGENT_ALPHA * coverage(element_sdf(e, p)), col);
+    }
+    return col;
+}
+
+/// The back row's whole content is one left chevron in the gutter it
+/// shares with the check column.
+public float4 draw_back(Element e, float2 p, float4 col)
+{
+    float s = scale_px();
+    float m = MENU_MARK * s;
+    float2 org = float2(e.rect.x + floor((MENU_GUTTER * s - m) * 0.5),
+                        e.rect.y + floor((e.rect.w - m) * 0.5));
+    return ink(MARK_INK, coverage(chevron_sdf(p, org, m, -1.0) - MARK_STROKE * s * 0.5), col);
+}
+
+/// An element with a block but no item: the preview's title.
+public float4 draw_title(Element e, float2 p, float4 col)
+{
+    // Its block is centred in its rect when it fits; a title wider than
+    // the popup (most of Firefox's) is left-aligned instead and fades
+    // out over the rect's last TITLE_FADE logical px, so it reads as
+    // cut, not as clipped mid-glyph at both ends.
+    float2 sz = block_size(e.block);
+    bool wide = sz.x > e.rect.z;
+    float2 org = wide
+        ? float2(e.rect.x, e.rect.y + floor((e.rect.w - sz.y) * 0.5))
+        : e.rect.xy + floor((e.rect.zw - sz) * 0.5);
+    float dim = 1.0;
+    if (wide)
+    {
+        float right = e.rect.x + e.rect.z;
+        dim = saturate((right - p.x) / max(TITLE_FADE * scale_px(), 1.0));
+    }
+    return draw_block_at(e.block, org, p, col, dim);
+}

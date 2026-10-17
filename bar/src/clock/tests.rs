@@ -151,13 +151,13 @@ fn tm(hour: i32, min: i32, wday: i32, mon: i32, mday: i32) -> libc::tm {
 }
 
 /// `weekday << 16 | month << 8 | day`, the other way round — the same split
-/// `compose_clock_date` does in `caustics/bar.slang`.
+/// `compose_clock_date` does in `caustics/clock.slang`.
 fn unpack(date: u32) -> (u32, u32, u32) {
     ((date >> 16) & 0xff, (date >> 8) & 0xff, date & 0xff)
 }
 
 /// `year << 16 | first << 8 | days`, the other way round — the split the
-/// calendar does in `caustics/bar.slang`.
+/// calendar does in `caustics/clock.slang`.
 fn unpack_month(month: u32) -> (u32, u32, u32) {
     (month >> 16, (month >> 8) & 0xff, month & 0xff)
 }

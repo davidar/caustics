@@ -725,3 +725,349 @@ public uint rows_shape_of(uint slot)
     // so the first `CMD_ROWS` for a slot is always a rebuild.
     return h == 0u ? FNV_PRIME : h;
 }
+
+/// Whether a sidecar's region the embassy rewrote this frame (`rewritten`,
+/// one bit a slot) is a rebuild (docs/abi.md, *The arenas*).
+///
+/// The embassy copied bytes and said which slot; whether that is a rebuild
+/// is this file's, because it is the only one that knows what the item
+/// table was built from. A shape it has already seen is one `write_buffer`
+/// and this frame, and nothing else.
+public bool rows_reshaped(uint rewritten)
+{
+    bool rebuild = false;
+    for (uint slot = 0u; slot < MAX_SLOTS; ++slot)
+    {
+        if ((rewritten & (1u << slot)) == 0u)
+        {
+            continue;
+        }
+        uint shape = rows_shape_of(slot);
+        if (shape != private[0].rows_shape[slot])
+        {
+            private[0].rows_shape[slot] = shape;
+            rebuild = true;
+        }
+    }
+    return rebuild;
+}
+
+/// The shaper's notdef runs, and the bytes behind them.
+///
+/// `bar_shape` flags a run whose codepoints the merged font lacks; this
+/// reads the blocks back and says so once per change, and asks the curves
+/// sidecar to cover the **bytes** of each flagged text block whose bytes
+/// are the embassy's (docs/abi.md, *The action ring*). Still a witness: nothing
+/// here waits for the answer or draws differently because of it.
+public void witness_shaping()
+{
+    uint notdefs = 0u;
+    uint texts = 0u;
+    uint truncated = NO_INDEX;
+    uint stalled = NO_INDEX;
+    uint hash = 2166136261u; // FNV-1a 32 over the *set* of flagged blocks
+    uint nblocks = live_blocks();
+    for (uint b = 0u; b < nblocks; ++b)
+    {
+        if (private[0].blocks[b].kind != BLOCK_TEXT)
+        {
+            continue;
+        }
+        texts += 1u;
+        if ((private[0].blocks[b].flags & SHAPE_RUN_NOTDEF) != 0u)
+        {
+            notdefs += 1u;
+            hash = (hash ^ b) * 16777619u;
+        }
+        // A body block that ran out of its slots is a cut, drawn as one
+        // (`body_slots`); the deadline is still the deadline.
+        uint cut_flags = (private[0].blocks[b].bflags & BLOCK_BODY) != 0u
+                         ? SHAPE_RUN_DEADLINE : (SHAPE_RUN_TRUNCATED | SHAPE_RUN_DEADLINE);
+        if ((private[0].blocks[b].flags & cut_flags) != 0u && truncated == NO_INDEX)
+        {
+            truncated = b;
+        }
+        if ((private[0].blocks[b].flags & SHAPE_RUN_DEADLINE) != 0u)
+        {
+            stalled = b;
+        }
+    }
+
+    // -- a run that ran out of slots ----------------------------------------
+    //
+    // `bar_build` gives a block `text_slots(bytes)` — four a byte plus eight,
+    // `Batch::push`'s own rule — so a substitution that grows a Latin label
+    // fits, and a run that is still truncated is a bug in the slot rule or the shaper
+    // rather than a label that was always too long. It
+    // says so once per change, with the block and what it was given.
+    if (truncated != private[0].said_truncated)
+    {
+        private[0].said_truncated = truncated;
+        if (truncated != NO_INDEX && stalled == NO_INDEX)
+        {
+            witness2(WITNESS_WARN,
+                     getStringHash("shape: block {0} ran out of glyph slots ({1} bytes)"),
+                     truncated, private[0].blocks[truncated].b);
+        }
+        // The wall-clock deadline: `shapeRun` reads the device's realtime
+        // clock (`VK_KHR_shader_clock`) and stops a run that passes it, the
+        // guard against a runaway shader that holds even when the op
+        // accounting is wrong. A run that hits
+        // it drew short, and the only way that happens with a font the bar
+        // actually loaded is an arena that is not one — so it says so.
+        if (stalled != NO_INDEX)
+        {
+            witness1(WITNESS_WARN,
+                     getStringHash("shape: block {0} passed the run deadline and stopped"),
+                     stalled);
+        }
+    }
+    if (notdefs != private[0].said_notdef)
+    {
+        private[0].said_notdef = notdefs;
+        if (notdefs == 0u)
+        {
+            witness0(WITNESS_INFO, getStringHash("text: every run has its glyphs"));
+        }
+        else
+        {
+            witness1(WITNESS_INFO,
+                     getStringHash("text: {0} runs have a glyph the font lacks"), notdefs);
+        }
+    }
+    // **Every** run flagged is not a font missing a script: it is a font that
+    // has not landed. The bar starts with no curves and no `cmap` at all (they
+    // arrive from `caustics-glyphs` over its pipe),
+    // so for the first few hundred milliseconds the shaper answers `.notdef`
+    // for every codepoint there is, and asking the sidecar to cover the bar's
+    // own Latin labels would be one wire frame and one remembered question
+    // each for nothing. One drawable run is enough to make the flagged ones
+    // mean what they say. The guard sits here, beside the loop that would
+    // otherwise ask.
+    if (notdefs > 0u && notdefs < texts && hash != private[0].notdef_hash)
+    {
+        private[0].notdef_hash = hash;
+        for (uint b = 0u; b < nblocks; ++b)
+        {
+            TextBlock blk = private[0].blocks[b];
+            if (blk.kind != BLOCK_TEXT || (blk.flags & SHAPE_RUN_NOTDEF) == 0u)
+            {
+                continue;
+            }
+            // A composed block's bytes are this file's — `bar_compose` wrote
+            // them into the strings buffer on the GPU and the embassy's copy
+            // is zeroes — so there is nothing at that range for it to send.
+            if ((blk.bflags & BLOCK_COMPOSED) != 0u)
+            {
+                continue;
+            }
+            // Every other block's bytes are the embassy's, in whichever of
+            // its three buffers the block was built from — a title or a
+            // literal in `strings`, a sidecar's row label in its slot's
+            // region of the rows arena, an app's name in `answers` — so the
+            // range goes out with the block's own `source`, the word
+            // `ACT_WANT_ICON` carries for the same reason (docs/abi.md, *The action ring*). A menu row
+            // `🇦🇺 Australia` is a question like any title.
+            act3(ACT_COVER, blk.a, blk.b, blk.source);
+        }
+    }
+}
+
+/// The sizes one build draws at: the icons' box, and each kind's TEXT_PX in
+/// device px, snapped against the loaded font's cap height (`snap_px`).
+/// Computed once per build, at its top, and nowhere else, so every block of
+/// a kind is one size.
+public struct BuildSizes
+{
+    public uint icon;
+    public uint text[ITEM_KIND_COUNT];
+};
+
+public BuildSizes build_sizes()
+{
+    BuildSizes z;
+    z.icon = uint(max(icon_px(), 1.0) + 0.5);
+    for (uint k = 0u; k < ITEM_KIND_COUNT; ++k)
+    {
+        z.text[k] = snap_px(uint(max(TEXT_PX[k] * scale_px(), 1.0) + 0.5));
+    }
+    return z;
+}
+
+/// The one ellipsis every cut body ends in, shaped once at the body's size
+/// `px`, when any row this build made has a body.
+public void build_ellipsis(inout Build b, bool bodies, uint px)
+{
+    private[0].ellipsis_block = NO_INDEX;
+    if (bodies)
+    {
+        Literal ell = literal(BODY_ELLIPSIS);
+        private[0].ellipsis_block = build_text(b, SRC_STRINGS, ell.off, ell.len,
+                                               px, BODY_INK, BODY_ELLIPSIS);
+    }
+}
+
+/// What comes back from a build made for menu level `level`: the tables'
+/// counts, the image slots it drew and the names it wants asked about.
+public void build_publish(Build b, Id level)
+{
+    private[0].built_items = b.items;
+    private[0].built_blocks = b.blocks;
+    private[0].built_glyphs = b.glyphs;
+    private[0].built_dropped = b.dropped;
+    // The level this table was built for. `bar_apply` compares the live one
+    // against it and pushes an `ACT_REBUILD` when they differ, which the
+    // embassy answers exactly as it answers a clock tick.
+    private[0].built_for = level;
+    private[0].build_serial += 1u;
+
+    // ---- the image slots this build drew ----
+    //
+    // Before the wants, so the embassy marks what is on the bar before it
+    // serves a want that may take a slot from something else. Every build
+    // says it, an empty mask included: a picture no longer drawn is then one
+    // the slots may let go.
+    Args drawn = args_new();
+    for (uint w = 0u; w < DRAWN_WORDS; ++w)
+    {
+        arg(drawn, b.drawn[w]);
+    }
+    push_action(ACT_IMAGES_DRAWN, drawn);
+
+    // ---- the names this build wants resolved ----
+    //
+    // One action per name, with the bytes and the `REQ_*` (docs/abi.md
+    // *The action ring*). The embassy reads the range, writes a `Request` and remembers the
+    // name; a want repeated by the next build costs nothing.
+    for (uint w = 0u; w < b.wants; ++w)
+    {
+        act4(ACT_WANT_ICON, b.want_off[w], b.want_len[w], b.want_req[w], b.want_src[w]);
+    }
+}
+
+/// The build's own witnesses, each against what it last said: its size, and
+/// the items it had no room for.
+public void witness_build(Build b)
+{
+    if (b.items != private[0].said_built_items
+        || b.blocks != private[0].said_built_blocks
+        || b.glyphs != private[0].said_built_glyphs)
+    {
+        private[0].said_built_items = b.items;
+        private[0].said_built_blocks = b.blocks;
+        private[0].said_built_glyphs = b.glyphs;
+        witness3(WITNESS_DEBUG,
+                 getStringHash("built: {0} items, {1} blocks, {2} glyphs"),
+                 b.items, b.blocks, b.glyphs);
+    }
+    if (b.dropped != private[0].said_dropped)
+    {
+        private[0].said_dropped = b.dropped;
+        if (b.dropped > 0u)
+        {
+            witness2(WITNESS_WARN,
+                     getStringHash("items: table capped at {0} ({1} dropped); some of the bar is not drawn"),
+                     MAX_ITEMS, b.dropped);
+        }
+    }
+}
+
+/// Block `b`'s text, shaped (`bar_shape`'s one thread): its UTF-8 decoded,
+/// mapped through the font's `cmap`, the ligatures fired and the pair kerns
+/// applied, `(gid, x, y)` per glyph into `runs`, and the run's advance and
+/// line box into the block's own `size`. A BLOCK_GLYPH or a BLOCK_IMAGE is
+/// left exactly as it arrived.
+public void shape_block(uint b)
+{
+    if (b >= live_blocks())
+    {
+        return;
+    }
+    TextBlock blk = private[0].blocks[b];
+    if (blk.kind != BLOCK_TEXT)
+    {
+        return;
+    }
+
+    uint capacity;
+    uint stride;
+    runs.GetDimensions(capacity, stride);
+    uint limit = min(capacity, MAX_GLYPHS);
+    if (blk.first_glyph >= limit || blk.px <= 0.0)
+    {
+        private[0].blocks[b].size = float2(0.0, 0.0);
+        private[0].blocks[b].glyph_count = 0u;
+        private[0].blocks[b].flags = SHAPE_RUN_TRUNCATED;
+        return;
+    }
+
+    // Which buffer this block's bytes are in (docs/abi.md, *The arenas*). The
+    // shaper takes its text through `ShapeTables.utf8`, so handing it the
+    // arena is the whole of what it takes to shape a sidecar's row label or an
+    // app's name out of bytes the embassy never transcribed.
+    //
+    // **A selector and not an assignment**: under SPIR-V's logical addressing a
+    // resource handle cannot be a conditionally written local, so `t.utf8 = …`
+    // inside an `if` is a module spirv-val rejects. Three buffers would mean
+    // three `shapeRun` call sites — and slangc, which must inline every
+    // function taking a descriptor, emits the whole OpenType shaper once per
+    // call: three times was 5.4 MB of SPIR-V and 5.3 s of compile for this
+    // one entry point. The shaper reads its bytes through a selector, so
+    // there is one call.
+    uint start = blk.a;
+    uint limit_bytes = facts[0].header.string_words * 4u;
+    if (blk.source == SRC_ANSWERS)
+    {
+        limit_bytes = facts[0].header.answer_bytes;
+    }
+    else if (blk.source < MAX_SLOTS)
+    {
+        start += blk.source * ROWS_ARENA_BYTES;
+        limit_bytes = (blk.source + 1u) * ROWS_ARENA_BYTES;
+    }
+
+    ShapeRequest req;
+    req.byte_start = start;
+    req.byte_len = min(blk.b, limit_bytes > start ? limit_bytes - start : 0u);
+    req.px_size = blk.px;
+    req.out_start = blk.first_glyph;
+    // `bar_build` allocated `block_slots(blk)` for this block (`text_slots` for a
+    // label, `body_slots` for a body), and the same expression here is what
+    // the shaper may fill. A composed block was
+    // reserved at COMPOSE_MAX_BYTES and `blk.b` is what `bar_compose` actually
+    // wrote, which is never more — so one expression covers both.
+    req.out_cap = min(block_slots(blk), limit - blk.first_glyph);
+    // The bar forces no feature: the default shaper's set is what its chrome
+    // wants, and the feature seam is for the test harness.
+    req.feature_start = 0u;
+    req.feature_count = 0u;
+    req._rsvd0 = 0u;
+
+    uint source = 0u;
+    if (blk.source == SRC_ANSWERS)
+    {
+        source = 2u;
+    }
+    else if (blk.source < MAX_SLOTS)
+    {
+        source = 1u;
+    }
+    let run = shapeRun(shape_tables(source), shapeParams, req, runs, limit);
+
+    // The three words the embassy does not write and never reads: the metric
+    // comes back into the block, and `block_size` is what the layout asks.
+    // Clamped, and not as a formality: the paint walks this run per texel and
+    // sizes a chip around this width, so a metric that came back absurd — a
+    // corrupt table, a font whose flattened kerns are nonsense — would become
+    // an absurd rect rather than an ugly one. A bar is never wider than a few
+    // thousand px; MAX_METRIC_PX is far past any label and far short of
+    // anything that breaks the layout arithmetic.
+    float advance = clamp(float(run.advance) / 64.0, 0.0, MAX_METRIC_PX);
+    private[0].blocks[b].size = float2(advance, text_line_height(blk.px));
+    private[0].blocks[b].glyph_count = run.glyph_count;
+    private[0].blocks[b].flags = run.flags;
+    // A truncated run is a **bug rather than a size** (`text_slots`), and
+    // `bar_apply` names the block — there rather than here, because the
+    // witness ring's count is a read-modify-write and this pass is one thread
+    // per block.
+}

@@ -1082,3 +1082,89 @@ public void resolve_hover_item()
     uint hover_elem = h < live_elements() ? h : NO_INDEX;
     private[0].hover_item = hover_elem == NO_INDEX ? NO_INDEX : private[0].elements[hover_elem].item;
 }
+
+/// A button went down at `pos` on `target`: the pointer is kept, and so is
+/// what the press landed on, by element and by item.
+public void press(uint target, float2 pos)
+{
+    set_pointer(target, pos);
+    uint hit = press_target(target, pos);
+    private[0].pressed_element = hit;
+    // What the press landed *on*, not just where: a sidecar's frame may
+    // re-lay the menu out between the press and the release, and an
+    // element index alone would then fire the row that moved into its
+    // place. The caustic's own elements — a slab, the back row —
+    // carry no item and so record the zero id, which still matches itself.
+    set_pressed_id(item_id_of_element(hit));
+}
+
+/// The button came up at `pos` on `target`: the element the release clicks,
+/// or NO_INDEX. The press is forgotten by `release_end`, after the click.
+public uint release(uint target, float2 pos)
+{
+    set_pointer(target, pos);
+    uint hit = press_target(target, pos);
+    uint pressed = private[0].pressed_element;
+    // The same element *and* the same item: a release across a re-layout
+    // fires nothing rather than firing whatever took that slot — which is
+    // what lets an open menu survive its rows changing under it.
+    bool same_item = pressed_id().eq(item_id_of_element(hit));
+    return (pressed != NO_INDEX && pressed == hit && same_item) ? pressed : NO_INDEX;
+}
+
+/// Forget the press, once its release has been answered.
+public void release_end()
+{
+    private[0].pressed_element = NO_INDEX;
+    set_pressed_id(id_zero());
+}
+
+/// The pointer left `target`.
+public void pointer_leave(uint target)
+{
+    // The pointer is on neither surface as far as this target knows. Only
+    // the target that was left may say so — the pointer moving from the
+    // bar into the popup leaves the bar, and the popup has it.
+    if (private[0].pointer_target == target)
+    {
+        private[0].pointer = float2(-1.0, -1.0);
+        private[0].pointer_target = NO_INDEX;
+    }
+    // Clear hover only if it belongs to the target that was left: the
+    // pointer moving from the bar into the popup leaves the bar, and the
+    // popup's hover must survive it.
+    uint h = private[0].hover_element;
+    if (h < live_elements() && private[0].elements[h].target == target)
+    {
+        private[0].hover_element = NO_INDEX;
+    }
+    // A button held while the pointer leaves is a button that will never
+    // click; releasing it here is what stops a stuck press (docs/architecture.md,
+    // *Rules*: a toolkit that drops a pointer-leave).
+    uint p = private[0].pressed_element;
+    if (p < live_elements() && private[0].elements[p].target == target)
+    {
+        private[0].pressed_element = NO_INDEX;
+        set_pressed_id(id_zero());
+    }
+}
+
+/// The popup's slab, `ELEM_POPUP`, and whether the popup is open: it exists
+/// only while the compositor says it is mapped *and* the
+/// CPU has said how big it came out. Anything less and its elements are
+/// absent, which is what keeps the carve and the draw off an unmapped
+/// surface. `popup` is the size it came out.
+public bool layout_popup(out float2 popup)
+{
+    popup = float2(inputs.popup_size);
+    bool open = private[0].popup_state == POPUP_UP && popup.x > 0.0 && popup.y > 0.0;
+    place(ELEM_POPUP, TARGET_POPUP, float4(0.0, 0.0, popup), POPUP_RADIUS * scale_px(),
+          NO_INDEX, NO_INDEX, open);
+    return open;
+}
+
+/// The layout is done: `next` is the first element it did not use.
+public void layout_end(uint next)
+{
+    private[0].element_count = max(next, ELEM_FIRST_FREE);
+}

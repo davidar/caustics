@@ -1228,7 +1228,7 @@ pub const STRUCTS: &[AbiStruct] = &[
 const MODULE_DOC: &[&str] = &[
     "The buffer (docs/abi.md, *The buffer*): the layout of the GPU buffers the bar's",
     "embassy and its caustic share. Deliberately inert — no bindings, no entry",
-    "points, no state; `bar.slang` binds its own resources (docs/abi.md, *Who writes what*), and the",
+    "points, no state; `bar_state.slang` binds the caustic's own resources (docs/abi.md, *Who writes what*), and the",
     "caustic's own helper functions are `bar_model.slang`.",
     "",
     "Both halves are built from one tree, so this contract has no binary",

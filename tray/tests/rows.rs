@@ -1383,7 +1383,7 @@ fn an_action_id_becomes_the_call_it_would_make() {
         rows::dispatch(&built.targets, &action(plain_id, ACTION_ACTIVATE)),
         Ok((":1.7".to_owned(), Call::Activate { x: 12, y: 31 })),
     );
-    // Right and middle both mean SecondaryActivate, as bar.slang pushes them.
+    // Right and middle both mean SecondaryActivate, as the caustic pushes them.
     for kind in [ACTION_SECONDARY, ACTION_MIDDLE] {
         assert_eq!(
             rows::dispatch(&built.targets, &action(plain_id, kind)),
