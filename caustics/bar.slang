@@ -114,8 +114,9 @@
 //
 // One toolchain hazard, if you are editing this file: never let a
 // `[numthreads]` attribute detach from its entry point and land on a helper
-// above it. Slang 2026.14.1's command-line compiler segfaults instead of
-// diagnosing it (docs/slang-numthreads.md).
+// above it. Slang 2026.14.1 emits invalid SPIR-V for that instead of
+// diagnosing it, and its command-line compiler crashes on the result
+// (shader-slang/slang#12397).
 // ---------------------------------------------------------------------------
 
 // ===========================================================================
