@@ -174,6 +174,43 @@ public StructuredBuffer<Facts> facts;
 /// private buffer's layout and not a tunable.
 public static const uint WAKE_SOURCES = 16u;
 
+/// What the toasts keep between dispatches (`notify.slang`): the hold on an
+/// ended toast, and the open toast's own rows. `bar_popups` reads the rows
+/// too, to tell their sidecar which were shown when the popup ends and to
+/// cap a toast row's body lines (`say_toast_shown`, `toast_index_of`).
+public struct NotifyScratch
+{
+    /// A toast the compositor dismissed or refused is not
+    /// asked for again for the same news: the slot, the chip's row id, and
+    /// the id of the newest attention row it was showing. The hold lifts when
+    /// that chip stops asking or something newer arrives. `toast_hold_slot`
+    /// NO_INDEX is no hold — without it a compositor that refuses the popup
+    /// would be asked again every frame.
+    public uint toast_hold_slot;
+    public uint toast_hold_chip;
+    public uint toast_hold_newest;
+    /// The toast's own rows, **taken when it opens and
+    /// kept until it ends**: no frame that arrives while it is up changes what
+    /// it shows or where. `toast_pending` is 1 from the frame a chip first
+    /// asks — its level set, its rows not built yet — until the frame they are
+    /// built, shaped and wrapped, when the toast opens at exactly their size.
+    /// `toast_slot`/`toast_chip` are the chip that asked; `toast_count` rows,
+    /// in the frame's order at the open: `toast_ids` their row ids,
+    /// `toast_lines` the body lines each shows, `toast_h` each one's height
+    /// in px. `toast_size` is the size the open asked for, which is the size
+    /// the toast keeps. `toast_said_held` is the newest row id a `toast: held`
+    /// line was said for, so it is said once per arrival.
+    public uint toast_pending;
+    public uint toast_slot;
+    public uint toast_chip;
+    public uint toast_count;
+    public uint toast_ids[TOAST_ROWS_CAP];
+    public uint toast_lines[TOAST_ROWS_CAP];
+    public float toast_h[TOAST_ROWS_CAP];
+    public float2 toast_size;
+    public uint toast_said_held;
+};
+
 /// What the charts keep between dispatches (`sysmon.slang`): the strip's
 /// shape, what was last witnessed of it, and the chart numbers' popup.
 public struct SysmonScratch
@@ -285,39 +322,12 @@ public struct Private
     /// The band of popup y the scrolled rows are drawn and hit in: below the
     /// back row, above the bottom pad. `(0, 0)` is no band — nothing clips.
     public float2 menu_clip;
-    /// A toast the compositor dismissed or refused is not
-    /// asked for again for the same news: the slot, the chip's row id, and
-    /// the id of the newest attention row it was showing. The hold lifts when
-    /// that chip stops asking or something newer arrives. `toast_hold_slot`
-    /// NO_INDEX is no hold — without it a compositor that refuses the popup
-    /// would be asked again every frame.
-    public uint toast_hold_slot;
-    public uint toast_hold_chip;
-    public uint toast_hold_newest;
-    /// The toast's own rows, **taken when it opens and
-    /// kept until it ends**: no frame that arrives while it is up changes what
-    /// it shows or where. `toast_pending` is 1 from the frame a chip first
-    /// asks — its level set, its rows not built yet — until the frame they are
-    /// built, shaped and wrapped, when the toast opens at exactly their size.
-    /// `toast_slot`/`toast_chip` are the chip that asked; `toast_count` rows,
-    /// in the frame's order at the open: `toast_ids` their row ids,
-    /// `toast_lines` the body lines each shows, `toast_h` each one's height
-    /// in px. `toast_size` is the size the open asked for, which is the size
-    /// the toast keeps. `toast_said_held` is the newest row id a `toast: held`
-    /// line was said for, so it is said once per arrival.
-    public uint toast_pending;
-    public uint toast_slot;
-    public uint toast_chip;
-    public uint toast_count;
-    public uint toast_ids[TOAST_ROWS_CAP];
-    public uint toast_lines[TOAST_ROWS_CAP];
-    public float toast_h[TOAST_ROWS_CAP];
-    public float2 toast_size;
-    public uint toast_said_held;
 
     // -- the subjects' own, one struct each ---------------------------------
     /// The charts' (`sysmon.slang`).
     public SysmonScratch sysmon;
+    /// The toasts' (`notify.slang`).
+    public NotifyScratch notify;
 
     // -- the anchor, likewise ----------------------------------------------
     /// The `(EDGE, BAR_HEIGHT)` pair last pushed as an `ACT_ANCHOR`. Zero
@@ -599,9 +609,9 @@ public void ensure_private()
     private[0].pressed_element = NO_INDEX;
     private[0].hover_item = NO_INDEX;
     private[0].popup_slot = NO_INDEX;
-    private[0].toast_hold_slot = NO_INDEX;
-    private[0].toast_slot = NO_INDEX;
-    private[0].toast_said_held = NO_INDEX;
+    private[0].notify.toast_hold_slot = NO_INDEX;
+    private[0].notify.toast_slot = NO_INDEX;
+    private[0].notify.toast_said_held = NO_INDEX;
     private[0].dwell_candidate = -1.0;
     private[0].preview_owner = -1.0;
     // "Nothing witnessed yet", so the first frame says everything once.

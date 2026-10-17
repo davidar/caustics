@@ -293,7 +293,7 @@ public uint body_shown(Item it)
         // rect was sized for them. A re-wrap that finds
         // fewer leaves the rest of the rect empty; one that finds more cuts.
         uint k = toast_index_of(it);
-        cap = k == NO_INDEX ? TOAST_BODY_LINES : private[0].toast_lines[k];
+        cap = k == NO_INDEX ? TOAST_BODY_LINES : private[0].notify.toast_lines[k];
     }
     return min(item_body_line_count(it), min(cap, MAX_BODY_LINES));
 }

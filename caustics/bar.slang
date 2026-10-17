@@ -143,11 +143,13 @@ import bar_layout;
 import bar_paint;
 import bar_table;
 import sysmon;
+import notify;
 
 export static const uint SYSMON_CHART = ITEM_CHART;
 export static const uint SYSMON_LINE = ITEM_CHART_LINE;
 export static const uint SYSMON_CHART_TAG = ID_CHART;
 export static const uint SYSMON_LINE_TAG = ID_NUMBERS;
+export static const uint NOTIFY_ROW_TAG = ID_APPLET;
 
 // ===========================================================================
 // Sliders. One definition of where the track is, read by the layout, by the
@@ -544,408 +546,6 @@ Id pick_window(uint entry, Id fallback)
 }
 
 // ---------------------------------------------------------------------------
-// Toasts: a sidecar's chip that carries `RFLAG_SHOW`
-// has its `RFLAG_ATTENTION` rows shown without a click, as a popup without a
-// grab. Whether a chip asks, and which rows it would show, is read off the rows
-// arena, where the sidecar's frame is verbatim.
-//
-// **A toast's rows are fixed while it is up.** When a chip first asks, its
-// level is set and nothing opens: the toast waits a frame for `bar_build` to
-// build those rows, the shaper to shape them and `wrap_bodies` to wrap them,
-// and then opens at exactly their size — ids, order, body lines and heights
-// taken there and kept in `Private` until it ends. A frame that arrives while it
-// is up changes none of that: a new attention row waits for this toast to end
-// (`toast: held`), a row the sidecar removed leaves a gap rather than moving
-// the rows under the pointer, and the toast ends when none of its own rows is
-// still in the frame and still flagged. The size it opened at is the size it
-// keeps, so it never moves. And a click on one of its rows holds it as a
-// refusal does, so the next frame cannot reopen it with "the rest".
-// ---------------------------------------------------------------------------
-
-/// The frame index of slot `slot`'s `ROW_ITEM` whose id is `id`, or NO_INDEX
-/// when the frame no longer carries it (or the slot has no frame at all).
-uint chip_row(uint slot, uint id)
-{
-    if (slot >= MAX_SLOTS)
-    {
-        return NO_INDEX;
-    }
-    uint n = rows_header(slot).row_count;
-    for (uint r = 0u; r < n; ++r)
-    {
-        uint at = 16u + r * 48u;
-        if (rows_word(slot, at + 8u) == ROW_ITEM && rows_word(slot, at) == id)
-        {
-            return r;
-        }
-    }
-    return NO_INDEX;
-}
-
-/// Is frame row `row` one a toast of chip `chip` shows: a direct child of the
-/// chip, flagged `RFLAG_ATTENTION`, and a row or a slider — never a separator.
-bool toast_row(Row row, uint chip)
-{
-    return row.parent == chip && (row.flags & RFLAG_ATTENTION) != 0u
-        && (row.role == ROW_MENU || row.role == ROW_SLIDER);
-}
-
-/// Rows one toast holds: TOAST_MAX_ROWS, within what `Private` keeps.
-uint toast_cap()
-{
-    return min(TOAST_MAX_ROWS, TOAST_ROWS_CAP);
-}
-
-/// How many rows a toast of chip row `chip` in `slot` would show, at most
-/// `toast_cap()`, in the frame's own order (newest first, as the sidecar
-/// ordered them); `newest` is the first one's id, NO_INDEX for none.
-uint toast_rows(uint slot, uint chip, out uint newest)
-{
-    newest = NO_INDEX;
-    if (chip == NO_INDEX)
-    {
-        return 0u;
-    }
-    uint n = rows_header(slot).row_count;
-    uint count = 0u;
-    for (uint r = chip + 1u; r < n && count < toast_cap(); ++r)
-    {
-        Row row = row_at(slot, r);
-        if (!toast_row(row, chip))
-        {
-            continue;
-        }
-        if (count == 0u)
-        {
-            newest = row.id;
-        }
-        count += 1u;
-    }
-    return count;
-}
-
-/// Whether row id `id` is one of the open toast's own rows.
-bool toast_holds(uint id)
-{
-    uint count = min(private[0].toast_count, TOAST_ROWS_CAP);
-    for (uint k = 0u; k < count; ++k)
-    {
-        if (private[0].toast_ids[k] == id)
-        {
-            return true;
-        }
-    }
-    return false;
-}
-
-/// End the toast, saying why: the chip stopped asking, its frame went, none
-/// of its rows is left, or a row in it was clicked. (A menu replacing it says
-/// so in `request_popup`; the compositor ending it, in `CMD_POPUP_DONE`.)
-void end_toast(uint why)
-{
-    witness1(WITNESS_INFO, getStringHash("toast: closed ({0:s})"), why);
-    close_popup();
-}
-
-/// Hold the toast hanging off `id` until its news changes: no toast for that
-/// chip until it stops asking or a newer row than the newest it has now is
-/// first. A refusal, a dismissal and a click all hold, so the
-/// frame that follows cannot reopen what the user just ended. It
-/// also lifts once none of the ended toast's rows still asks: the sidecar
-/// heard `ACTION_TOAST_SHOWN`, and what asks now is what it never showed.
-void hold_toast(Id id)
-{
-    uint slot = id_aux(id);
-    uint chip = chip_row(slot, id_payload(id));
-    uint newest;
-    toast_rows(slot, chip, newest);
-    private[0].toast_hold_slot = slot;
-    private[0].toast_hold_chip = id_payload(id);
-    private[0].toast_hold_newest = newest;
-}
-
-/// The bar element a chip is laid out as — present, on the bar — or NO_INDEX.
-uint bar_element_of(uint item)
-{
-    uint n = live_elements();
-    for (uint e = ELEM_FIRST_FREE; e < n; ++e)
-    {
-        Element el = private[0].elements[e];
-        if (el.item == item && el.target == TARGET_BAR && (el.flags & EFLAG_PRESENT) != 0u)
-        {
-            return e;
-        }
-    }
-    return NO_INDEX;
-}
-
-/// `toast: open slot={0} rows={1} ids=…`: the ids the toast fixed on, in the
-/// order it draws them. One literal per count, because a format is a
-/// compile-time string.
-void witness_toast_open(uint slot, uint count)
-{
-    Args a = args_new();
-    arg(a, slot);
-    arg(a, count);
-    for (uint k = 0u; k < count && k < TOAST_ROWS_CAP; ++k)
-    {
-        arg(a, private[0].toast_ids[k]);
-    }
-    uint head;
-    switch (count)
-    {
-    case 1u: head = getStringHash("toast: open slot={0} rows={1} ids={2}"); break;
-    case 2u: head = getStringHash("toast: open slot={0} rows={1} ids={2},{3}"); break;
-    case 3u: head = getStringHash("toast: open slot={0} rows={1} ids={2},{3},{4}"); break;
-    case 4u: head = getStringHash("toast: open slot={0} rows={1} ids={2},{3},{4},{5}"); break;
-    case 5u: head = getStringHash("toast: open slot={0} rows={1} ids={2},{3},{4},{5},{6}"); break;
-    case 6u:
-        head = getStringHash("toast: open slot={0} rows={1} ids={2},{3},{4},{5},{6},{7}");
-        break;
-    case 7u:
-        head = getStringHash("toast: open slot={0} rows={1} ids={2},{3},{4},{5},{6},{7},{8}");
-        break;
-    default:
-        head = getStringHash(
-            "toast: open slot={0} rows={1} ids={2},{3},{4},{5},{6},{7},{8},{9}");
-        break;
-    }
-    witness(WITNESS_INFO, head, a);
-}
-
-/// A toast asked for and not open yet: open it once its rows are built,
-/// shaped and wrapped, at exactly their size. True when this frame is
-/// accounted for — opened, or still waiting; false when the chip that asked
-/// has stopped (or another popup took the level), and the caller looks again.
-bool step_toast_pending(bool rebuild)
-{
-    uint slot = private[0].toast_slot;
-    uint chip_id = private[0].toast_chip;
-    uint chip = chip_row(slot, chip_id);
-    Id id = id_tagged(ID_APPLET, slot, chip_id);
-    bool held = private[0].toast_hold_slot == slot && private[0].toast_hold_chip == chip_id;
-    bool asking = chip != NO_INDEX && (row_at(slot, chip).flags & RFLAG_SHOW) != 0u && !held;
-    if (!asking || !menu_level_id().eq(id))
-    {
-        private[0].toast_pending = 0u;
-        return false;
-    }
-    // Built for this level, from the arena as it is now: a frame that arrived
-    // this frame with a new shape is built next frame, and the rows are taken
-    // from that build.
-    uint level = index_of_id(id);
-    uint elem = level == NO_INDEX ? NO_INDEX : bar_element_of(level);
-    if (elem == NO_INDEX || rebuild || !private[0].built_for.eq(id))
-    {
-        return true;
-    }
-
-    float s = scale_px();
-    uint n = rows_header(slot).row_count;
-    uint count = 0u;
-    float rows_h = 0.0;
-    for (uint r = chip + 1u; r < n && count < toast_cap(); ++r)
-    {
-        Row row = row_at(slot, r);
-        if (!toast_row(row, chip))
-        {
-            continue;
-        }
-        uint ri = index_of_id(id_tagged(ID_APPLET, slot, row.id));
-        if (ri == NO_INDEX || private[0].items[ri].parent != level)
-        {
-            return true; // not built yet: the next frame's build has it
-        }
-        Item it = private[0].items[ri];
-        uint lines = min(item_body_line_count(it), min(TOAST_BODY_LINES, MAX_BODY_LINES));
-        float h = menu_row_height(it);
-        if (lines > 0u)
-        {
-            h += (float(lines) * MENU_BODY_LINE_H + MENU_BODY_PAD) * s;
-        }
-        private[0].toast_ids[count] = row.id;
-        private[0].toast_lines[count] = lines;
-        private[0].toast_h[count] = h;
-        rows_h += h;
-        count += 1u;
-    }
-    if (count == 0u)
-    {
-        private[0].toast_pending = 0u;
-        return false; // nothing to show is not a toast
-    }
-
-    // As wide as a menu may be — every toast the same width, as a
-    // notification's toast is anywhere else, and the width a body wraps to —
-    // and as tall as its rows, within the output. Nothing it shows can change
-    // either, so the popup never moves.
-    float ppad = POPUP_PAD * s;
-    float want_h = rows_h + 2.0 * ppad;
-    float output_h = float(inputs.output_size.y);
-    if (output_h > 0.0)
-    {
-        float room = output_h - float(inputs.bar_size.y) - POPUP_MARGIN * s;
-        want_h = min(want_h, max(room, 2.0 * ppad + MENU_ROW_H * s));
-    }
-    float2 size = float2(floor(MENU_MAX_W * s + 0.5), floor(want_h + 0.5));
-    private[0].toast_count = count;
-    private[0].toast_size = size;
-    private[0].toast_pending = 0u;
-    private[0].toast_said_held = NO_INDEX;
-    request_popup(POPUP_TOAST, private[0].elements[elem].rect, id, size);
-    witness_toast_open(slot, count);
-    return true;
-}
-
-/// The toast's whole life, once a frame, after the layout (so the chip's rect
-/// is this frame's).
-///
-/// **Up**: end it when its chip no longer carries `RFLAG_SHOW`, when the chip
-/// or its whole frame is gone, or when none of its own rows is still in the
-/// frame and flagged; say `toast: held` once for each row that arrives while it
-/// is up. **Pending**: open it when its rows are built. **Idle**: for the first
-/// chip, in slot order, that asks and has something to show, set the level and
-/// wait. Anything else up — a menu, a preview, a popup still ending — and the
-/// bit is ignored: a toast never replaces a popup, only a menu replaces a
-/// toast.
-void step_toast(bool rebuild)
-{
-    uint newest;
-
-    if (popup_live() && private[0].popup_kind == POPUP_TOAST)
-    {
-        Id id = private[0].popup_id;
-        uint slot = id_aux(id);
-        uint chip = chip_row(slot, id_payload(id));
-        if (chip == NO_INDEX)
-        {
-            end_toast(getStringHash("gone"));
-            return;
-        }
-        if ((row_at(slot, chip).flags & RFLAG_SHOW) == 0u)
-        {
-            end_toast(getStringHash("flag"));
-            return;
-        }
-        uint live = 0u;
-        uint fresh = NO_INDEX;
-        uint n = rows_header(slot).row_count;
-        for (uint r = chip + 1u; r < n; ++r)
-        {
-            Row row = row_at(slot, r);
-            if (!toast_row(row, chip))
-            {
-                continue;
-            }
-            if (toast_holds(row.id))
-            {
-                live += 1u;
-            }
-            else if (fresh == NO_INDEX)
-            {
-                fresh = row.id;
-            }
-        }
-        if (live == 0u)
-        {
-            end_toast(getStringHash("empty"));
-            return;
-        }
-        if (fresh != NO_INDEX && fresh != private[0].toast_said_held)
-        {
-            private[0].toast_said_held = fresh;
-            witness1(WITNESS_INFO, getStringHash("toast: held (new row while up) row={0}"),
-                     fresh);
-        }
-        return;
-    }
-    if (private[0].popup_state != POPUP_IDLE)
-    {
-        // A menu or a preview took the popup (and with a menu, the level).
-        private[0].toast_pending = 0u;
-        return;
-    }
-
-    // The hold lifts when its chip stops asking, when something newer is
-    // first, or when none of the ended toast's own rows is still asking:
-    // the sidecar has heard `ACTION_TOAST_SHOWN` and dropped them, so what
-    // still asks is news the toast never showed — a row that arrived behind
-    // it — and it toasts now, alone. Until that frame the toast's rows still
-    // ask, and the hold is what keeps them from reopening with it. The ended
-    // toast's ids are still `toast_ids`: only the next toast's open rewrites
-    // them.
-    uint held = private[0].toast_hold_slot;
-    if (held != NO_INDEX)
-    {
-        uint chip = chip_row(held, private[0].toast_hold_chip);
-        bool asking = chip != NO_INDEX && (row_at(held, chip).flags & RFLAG_SHOW) != 0u;
-        toast_rows(held, chip, newest);
-        bool kept = false;
-        if (asking)
-        {
-            uint n = rows_header(held).row_count;
-            for (uint r = chip + 1u; r < n && !kept; ++r)
-            {
-                Row row = row_at(held, r);
-                kept = toast_row(row, chip) && toast_holds(row.id);
-            }
-        }
-        if (!asking || newest != private[0].toast_hold_newest || !kept)
-        {
-            private[0].toast_hold_slot = NO_INDEX;
-        }
-    }
-
-    if (private[0].toast_pending != 0u && step_toast_pending(rebuild))
-    {
-        return;
-    }
-
-    for (uint slot = 0u; slot < MAX_SLOTS; ++slot)
-    {
-        uint n = rows_header(slot).row_count;
-        for (uint r = 0u; r < n; ++r)
-        {
-            // Two words a row, not twelve: this scan runs every frame over
-            // every slot, and almost every row is not a chip that asks.
-            uint at = 16u + r * 48u;
-            if (rows_word(slot, at + 8u) != ROW_ITEM
-                || (rows_word(slot, at + 12u) & RFLAG_SHOW) == 0u)
-            {
-                continue;
-            }
-            Row row = row_at(slot, r);
-            if (private[0].toast_hold_slot == slot && private[0].toast_hold_chip == row.id)
-            {
-                continue;
-            }
-            if (toast_rows(slot, r, newest) == 0u)
-            {
-                continue; // nothing to show is not a toast
-            }
-            // The chip has to be on the bar to anchor anything: a frame that
-            // has just arrived is built and laid out a frame from now, and the
-            // bit is still there then.
-            Id id = id_tagged(ID_APPLET, slot, row.id);
-            uint item = index_of_id(id);
-            if (item == NO_INDEX || bar_element_of(item) == NO_INDEX)
-            {
-                continue;
-            }
-            // The level is the chip, so `bar_build` publishes its rows; the
-            // toast opens once they are built (`step_toast_pending`) — this
-            // frame, when they already are.
-            set_menu_level(item);
-            private[0].toast_pending = 1u;
-            private[0].toast_slot = slot;
-            private[0].toast_chip = row.id;
-            step_toast_pending(rebuild);
-            return;
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
 // The calendar: the clock's click opens this month as a
 // menu-kind popup — a title, the weekday initials, the days in a grid, today
 // marked. Its level is the clock's own id, so the popup's whole life (the
@@ -1016,7 +616,7 @@ void witness_calendar()
 }
 
 /// A click landed on `elem` with `button` at `pos`: the bar's entire policy,
-/// in one function. Everything it decides leaves as an **action** with its own
+/// one function per kind. Everything it decides leaves as an **action** with its own
 /// operands (docs/abi.md, *The action ring*) — a window's id, an app id's bytes, a slot
 /// and a row — and the embassy forwards it without resolving anything.
 void click(uint elem, uint button, float2 pos)
@@ -1035,234 +635,277 @@ void click(uint elem, uint button, float2 pos)
         return; // a slab, or an item that has gone since it was drawn
     }
     Item it = private[0].items[ii];
-    Id own = it.id;
-    bool caffeine = id_tag(own) == ID_CAFFEINE;
+    dispatch_click(it.kind, ii, it, elem, button, pos);
+}
 
+/// The click on item `ii`, by its kind: the subject's.
+void dispatch_click(uint kind, uint ii, Item it, uint elem, uint button, float2 pos)
+{
+    switch (kind)
+    {
+    case ITEM_DOCK:
+        click_dock_entry(ii, it, elem, button, pos);
+        break;
+    case ITEM_OVERVIEW:
+        click_overview(button);
+        break;
+    case ITEM_CLOCK:
+        click_clock(ii, it, elem, button);
+        break;
+    case ITEM_CHART:
+        sysmon_click(ii, button);
+        break;
+    case ITEM_APPLET:
+        switch (id_tag(it.id))
+        {
+        case ID_CAFFEINE:
+            click_caffeine(button);
+            break;
+        default:
+            click_chip(ii, it, elem, button, pos);
+            break;
+        }
+        break;
+    case ITEM_MENU_ROW:
+        // A row of the toast that is up is the toast's; any other row is the
+        // menu's, and a dock menu's row is the dock's verb.
+        switch (popup_live_kind())
+        {
+        case POPUP_TOAST:
+            notify_click_row(it, button, pos);
+            break;
+        default:
+            switch (id_tag(it.id))
+            {
+            case ID_DOCK_ROW:
+                click_dock_row(it, button);
+                break;
+            default:
+                click_menu_row(ii, it, button, pos);
+                break;
+            }
+            break;
+        }
+        break;
+    case ITEM_SLIDER:
+        click_slider(it, elem, button, pos);
+        break;
+    default:
+        break;
+    }
+}
+
+/// A dock entry: the middle button is "another one of those", the right one
+/// its own menu, and every other button the window to focus.
+void click_dock_entry(uint ii, Item it, uint elem, uint button, float2 pos)
+{
+    Id own = it.id;
     if (button == BTN_MIDDLE)
     {
-        // Middle click is "another one of those" for a dock entry. For an
-        // applet it is the sidecar's to interpret, and the wire carries the
-        // kind rather than a meaning — `caustics-tray` turns it into SNI's
-        // SecondaryActivate, which is what every tray does.
-        if (it.kind == ITEM_DOCK)
-        {
-            act_app(ACT_SPAWN, it);
-        }
-        else if (it.kind == ITEM_APPLET && !caffeine)
-        {
-            act_sidecar(it, ACTION_MIDDLE, button, pos, 0.0);
-        }
+        // Middle click is "another one of those" for a dock entry.
+        act_app(ACT_SPAWN, it);
         return;
     }
-
     if (button == BTN_RIGHT)
     {
-        // An applet's secondary click is the sidecar's to interpret, and the
-        // wire carries the kind rather than a meaning.
-        if (it.kind == ITEM_APPLET)
-        {
-            if (!caffeine)
-            {
-                act_sidecar(it, ACTION_SECONDARY, button, pos, 0.0);
-            }
-            return;
-        }
-        // So is a sidecar's menu row's: `caustics-notify`
-        // reads it as "dismiss without acting". The menu stays up — the row
-        // leaves it with the sidecar's next frame — and a toast ends and is
-        // held, as on a left click.
-        if (it.kind == ITEM_MENU_ROW && id_tag(own) == ID_APPLET
-            && (it.flags & (IFLAG_SEPARATOR | IFLAG_DISABLED)) == 0u)
-        {
-            act_sidecar(it, ACTION_SECONDARY, button, pos, 0.0);
-            if (private[0].popup_kind == POPUP_TOAST && popup_live())
-            {
-                hold_toast(private[0].popup_id);
-                end_toast(getStringHash("click"));
-            }
-            return;
-        }
         // A dock entry opens its own menu — New window, Close, Pin or Unpin
         // (DOCK_MENU in the tunables). `own` is the *entry's* id: the menu is
         // about the app, and `bar_build` publishes the rows of the level held
         // here.
-        if (it.kind == ITEM_DOCK)
-        {
-            if (popup_live() && private[0].popup_kind == POPUP_MENU
-                && private[0].popup_id.eq(own))
-            {
-                // Right-clicking the entry whose menu is up closes it, the same
-                // rule the applet arm has.
-                close_popup();
-                return;
-            }
-            // The one item on the bar that may *already* have a popup of its
-            // own: the hover preview, which fires after HOVER_DWELL_S on any
-            // entry with a window, so by the time a right click lands it is
-            // usually up.
-            end_preview_for_menu();
-            set_menu_level(ii);
-            request_popup(POPUP_MENU, private[0].elements[elem].rect, own,
-                          private[0].popup_want);
-        }
-        return;
-    }
-
-    switch (it.kind)
-    {
-    case ITEM_DOCK:
-    {
-        // The whole of what a dock click means, decided here: the window this
-        // file picked, or — nothing running under the entry — the app id's own
-        // bytes for the embassy to resolve to an argv (a desktop-entry lookup,
-        // launched through the compositor; this file never sees a command line).
-        uint pick = pick_window_index(ii);
-        if (pick == NO_INDEX)
-        {
-            act_app(ACT_SPAWN, it);
-        }
-        else
-        {
-            act_window(ACT_ACTIVATE_WINDOW, private[0].items[pick]);
-        }
-        break;
-    }
-
-    case ITEM_OVERVIEW:
-        act(ACT_TOGGLE_OVERVIEW);
-        break;
-
-    // The calendar: a menu whose level is the clock.
-    // Clicking the clock while it is up closes it, as an applet's chip does.
-    case ITEM_CLOCK:
-    {
-        if (!CLOCK_SHOW_CALENDAR)
-        {
-            break;
-        }
         if (popup_live() && private[0].popup_kind == POPUP_MENU
             && private[0].popup_id.eq(own))
         {
+            // Right-clicking the entry whose menu is up closes it, the same
+            // rule the applet arm has.
             close_popup();
-            break;
+            return;
         }
-        // A dock preview still in its grace period when the click lands.
+        // The one item on the bar that may *already* have a popup of its
+        // own: the hover preview, which fires after HOVER_DWELL_S on any
+        // entry with a window, so by the time a right click lands it is
+        // usually up.
         end_preview_for_menu();
         set_menu_level(ii);
         request_popup(POPUP_MENU, private[0].elements[elem].rect, own,
-                      calendar_want(POPUP_PAD * scale_px(), 0.0));
-        witness_calendar();
-        break;
-    }
-
-    case ITEM_CHART:
-        sysmon_click(ii, button);
-        break;
-
-    // One kind for every chip a sidecar publishes — the tray icons, the
-    // battery and the power button among them — and
-    // the one chip that is not a sidecar's at all: caffeine, whose inhibitor
-    // is an object on the bar's own Wayland connection.
-    case ITEM_APPLET:
-    {
-        if (caffeine)
-        {
-            act(ACT_TOGGLE_CAFFEINE);
-            break;
-        }
-        if ((it.flags & IFLAG_HAS_MENU) == 0u)
-        {
-            // No menu: one `ACTION_ACTIVATE` naming the row, with `pos` the
-            // physical px this file saw — the embassy divides by the scale,
-            // because that is what SNI's `Activate(x, y)` takes at the
-            // sidecar's far end.
-            act_sidecar(it, ACTION_ACTIVATE, button, pos, 0.0);
-            break;
-        }
-        if (popup_live() && private[0].popup_kind == POPUP_MENU
-            && private[0].popup_id.eq(own))
-        {
-            // Clicking the item whose menu is up closes it, the way every
-            // other tray does.
-            close_popup();
-            break;
-        }
-        set_menu_level(ii);
-        request_popup(POPUP_MENU, private[0].elements[elem].rect, own,
                       private[0].popup_want);
-        break;
+        return;
     }
-
-    case ITEM_MENU_ROW:
+    // The whole of what a dock click means, decided here: the window this
+    // file picked, or — nothing running under the entry — the app id's own
+    // bytes for the embassy to resolve to an argv (a desktop-entry lookup,
+    // launched through the compositor; this file never sees a command line).
+    uint pick = pick_window_index(ii);
+    if (pick == NO_INDEX)
     {
-        if ((it.flags & (IFLAG_SEPARATOR | IFLAG_DISABLED)) != 0u)
-        {
-            break;
-        }
-        if (private[0].popup_kind == POPUP_TOAST && popup_live())
-        {
-            // A toast's row is a leaf whatever it carries: the click is the
-            // `ACT_SIDECAR` the same row sends from the menu, and a row with a
-            // submenu (a notification with actions) is activated rather than
-            // descended into — a toast has no back row to come up by. The
-            // click holds the toast as a refusal does: the
-            // frames before the sidecar's answer still ask, and must not
-            // reopen it with the rows the user just walked away from.
-            act_sidecar(it, ACTION_ACTIVATE, button, pos, 0.0);
-            hold_toast(private[0].popup_id);
-            end_toast(getStringHash("click"));
-            break;
-        }
-        if ((it.flags & IFLAG_SUBMENU) != 0u)
-        {
-            // Descend. The popup stays mapped; the want follows the new level
-            // and `ACT_POPUP_MOVE` goes out when the two differ.
-            set_menu_level(ii);
-            break;
-        }
-        if (id_tag(own) == ID_DOCK_ROW)
-        {
-            // A dock entry's menu row: the verb the tunable named, with its
-            // own operands. `ACT_CLOSE_WINDOW` carries the window the entry's
-            // own left click would act on, so Close and "click, then close"
-            // cannot disagree; the other three carry the entry's app id range.
-            uint verb = item_dock_verb(it);
-            if (verb == ACT_CLOSE_WINDOW)
-            {
-                uint pick = it.parent < live_items() ? pick_window_index(it.parent) : NO_INDEX;
-                if (pick != NO_INDEX)
-                {
-                    act_window(ACT_CLOSE_WINDOW, private[0].items[pick]);
-                }
-            }
-            else if (verb != ACT_NONE)
-            {
-                act_app(verb, it);
-            }
-        }
-        else
-        {
-            act_sidecar(it, ACTION_ACTIVATE, button, pos, 0.0);
-        }
-        close_popup();
-        break;
+        act_app(ACT_SPAWN, it);
     }
+    else
+    {
+        act_window(ACT_ACTIVATE_WINDOW, private[0].items[pick]);
+    }
+}
 
-    // A slider ends its drag where the pointer left it, and the popup stays
-    // up: unlike a leaf menu row, moving a volume is not "done with this
-    // menu". The press and every motion in between already pushed the same
-    // kind, so the sidecar sees a stream ending on the final position.
-    case ITEM_SLIDER:
-        if ((it.flags & IFLAG_DISABLED) == 0u)
+/// The overview button: any button but the middle and the right toggles it.
+void click_overview(uint button)
+{
+    if (button == BTN_MIDDLE || button == BTN_RIGHT)
+    {
+        return;
+    }
+    act(ACT_TOGGLE_OVERVIEW);
+}
+
+/// The clock: the calendar, a menu whose level is the clock.
+/// Clicking the clock while it is up closes it, as an applet's chip does.
+/// The middle and the right button do nothing.
+void click_clock(uint ii, Item it, uint elem, uint button)
+{
+    if (button == BTN_MIDDLE || button == BTN_RIGHT || !CLOCK_SHOW_CALENDAR)
+    {
+        return;
+    }
+    Id own = it.id;
+    if (popup_live() && private[0].popup_kind == POPUP_MENU
+        && private[0].popup_id.eq(own))
+    {
+        close_popup();
+        return;
+    }
+    // A dock preview still in its grace period when the click lands.
+    end_preview_for_menu();
+    set_menu_level(ii);
+    request_popup(POPUP_MENU, private[0].elements[elem].rect, own,
+                  calendar_want(POPUP_PAD * scale_px(), 0.0));
+    witness_calendar();
+}
+
+/// The caffeine chip, the one chip that is not a sidecar's at all: its
+/// inhibitor is an object on the bar's own Wayland connection. Only the left
+/// button (and any but the middle and the right) toggles it.
+void click_caffeine(uint button)
+{
+    if (button == BTN_MIDDLE || button == BTN_RIGHT)
+    {
+        return;
+    }
+    act(ACT_TOGGLE_CAFFEINE);
+}
+
+/// One kind for every chip a sidecar publishes — the tray icons, the
+/// battery and the power button among them.
+void click_chip(uint ii, Item it, uint elem, uint button, float2 pos)
+{
+    Id own = it.id;
+    if (button == BTN_MIDDLE)
+    {
+        // For an applet the middle button is the sidecar's to interpret, and
+        // the wire carries the kind rather than a meaning — `caustics-tray`
+        // turns it into SNI's SecondaryActivate, which is what every tray does.
+        act_sidecar(it, ACTION_MIDDLE, button, pos, 0.0);
+        return;
+    }
+    if (button == BTN_RIGHT)
+    {
+        // An applet's secondary click is the sidecar's to interpret, and the
+        // wire carries the kind rather than a meaning.
+        act_sidecar(it, ACTION_SECONDARY, button, pos, 0.0);
+        return;
+    }
+    if ((it.flags & IFLAG_HAS_MENU) == 0u)
+    {
+        // No menu: one `ACTION_ACTIVATE` naming the row, with `pos` the
+        // physical px this file saw — the embassy divides by the scale,
+        // because that is what SNI's `Activate(x, y)` takes at the
+        // sidecar's far end.
+        act_sidecar(it, ACTION_ACTIVATE, button, pos, 0.0);
+        return;
+    }
+    if (popup_live() && private[0].popup_kind == POPUP_MENU
+        && private[0].popup_id.eq(own))
+    {
+        // Clicking the item whose menu is up closes it, the way every
+        // other tray does.
+        close_popup();
+        return;
+    }
+    set_menu_level(ii);
+    request_popup(POPUP_MENU, private[0].elements[elem].rect, own,
+                  private[0].popup_want);
+}
+
+/// A sidecar's menu row, not in a toast. The right button is the sidecar's
+/// to interpret (`caustics-notify` reads it as "dismiss without acting"):
+/// the menu stays up and the row leaves it with the sidecar's next frame.
+void click_menu_row(uint ii, Item it, uint button, float2 pos)
+{
+    if (button == BTN_MIDDLE || (it.flags & (IFLAG_SEPARATOR | IFLAG_DISABLED)) != 0u)
+    {
+        return;
+    }
+    if (button == BTN_RIGHT)
+    {
+        if (id_tag(it.id) == ID_APPLET)
         {
-            Row row = item_row(it);
-            float at = slider_value_at(private[0].elements[elem].rect, pos.x);
-            act_sidecar(it, ACTION_SET_VALUE, button, pos, lerp(row.min, row.max, at));
+            act_sidecar(it, ACTION_SECONDARY, button, pos, 0.0);
         }
-        break;
+        return;
+    }
+    if ((it.flags & IFLAG_SUBMENU) != 0u)
+    {
+        // Descend. The popup stays mapped; the want follows the new level
+        // and `ACT_POPUP_MOVE` goes out when the two differ.
+        set_menu_level(ii);
+        return;
+    }
+    act_sidecar(it, ACTION_ACTIVATE, button, pos, 0.0);
+    close_popup();
+}
 
-    default:
-        break;
+/// A dock entry's menu row: the verb the tunable named, with its
+/// own operands. `ACT_CLOSE_WINDOW` carries the window the entry's
+/// own left click would act on, so Close and "click, then close"
+/// cannot disagree; the other three carry the entry's app id range.
+/// Only the left button (any but the middle and the right) acts; a dock
+/// menu row is never a separator, disabled or a submenu, since the dock
+/// builds it with no flag.
+void click_dock_row(Item it, uint button)
+{
+    if (button == BTN_MIDDLE || button == BTN_RIGHT)
+    {
+        return;
+    }
+    uint verb = item_dock_verb(it);
+    if (verb == ACT_CLOSE_WINDOW)
+    {
+        uint pick = it.parent < live_items() ? pick_window_index(it.parent) : NO_INDEX;
+        if (pick != NO_INDEX)
+        {
+            act_window(ACT_CLOSE_WINDOW, private[0].items[pick]);
+        }
+    }
+    else if (verb != ACT_NONE)
+    {
+        act_app(verb, it);
+    }
+    close_popup();
+}
+
+/// A slider ends its drag where the pointer left it, and the popup stays
+/// up: unlike a leaf menu row, moving a volume is not "done with this
+/// menu". The press and every motion in between already pushed the same
+/// kind, so the sidecar sees a stream ending on the final position. The
+/// middle and the right button do nothing.
+void click_slider(Item it, uint elem, uint button, float2 pos)
+{
+    if (button == BTN_MIDDLE || button == BTN_RIGHT)
+    {
+        return;
+    }
+    if ((it.flags & IFLAG_DISABLED) == 0u)
+    {
+        Row row = item_row(it);
+        float at = slider_value_at(private[0].elements[elem].rect, pos.x);
+        act_sidecar(it, ACTION_SET_VALUE, button, pos, lerp(row.min, row.max, at));
     }
 }
 
@@ -1371,16 +1014,7 @@ void apply_command(Command c)
         {
             act(ACT_PREVIEW_END);
         }
-        // A toast this file did not end — the compositor dismissed it, or
-        // refused it outright — is held until its news changes, or the next
-        // frame would ask for the same one again.
-        if (private[0].popup_kind == POPUP_TOAST && private[0].popup_state != POPUP_ENDING)
-        {
-            say_toast_shown();
-            hold_toast(private[0].popup_id);
-            witness1(WITNESS_INFO, getStringHash("toast: closed ({0:s})"),
-                     getStringHash("dismissed"));
-        }
+        notify_popup_done();
         sysmon_popup_done();
         private[0].popup_state = POPUP_IDLE;
         private[0].popup_kind = 0u;
@@ -1576,68 +1210,18 @@ uint layout_calendar(uint next, bool open, float2 popup, float ppad)
     return next;
 }
 
-/// A toast's rows, placed. Returns the next free element.
-///
-/// Nothing here is measured: the rows, their order and their heights are the
-/// ones `step_toast_pending` took when the toast opened, and the popup's want
-/// is the size it opened at. Each row's rect is where it was when the toast
-/// opened, whatever frames have arrived since — a new attention row is not
-/// one of them, and a row the sidecar removed is a gap, not a reason for the
-/// rows below to move up under the pointer. A row that no longer fits the
-/// surface the compositor gave is not placed.
-uint layout_toast(uint next, bool open, float2 popup, float ppad)
-{
-    uint level = menu_level();
-    uint slot = private[0].toast_slot;
-    float2 size = private[0].toast_size;
-    private[0].popup_want = size;
-    private[0].menu_scroll = 0.0;
-    private[0].menu_scroll_max = 0.0;
-    private[0].menu_clip = float2(0.0, 0.0);
-
-    float view_h = open ? popup.y : size.y;
-    float inner_w = max((open ? popup.x : size.x) - 2.0 * ppad, 1.0);
-    float bottom = view_h - ppad;
-    place(ELEM_BACK, TARGET_POPUP, float4(0.0, 0.0, 0.0, 0.0), 0.0, NO_INDEX, NO_INDEX, false);
-    float y = ppad;
-    uint count = min(private[0].toast_count, TOAST_ROWS_CAP);
-    for (uint k = 0u; k < count && next < MAX_ELEMENTS; ++k)
-    {
-        float h = private[0].toast_h[k];
-        float at = y;
-        y += h;
-        uint i = index_of_id(id_tagged(ID_APPLET, slot, private[0].toast_ids[k]));
-        if (i == NO_INDEX || private[0].items[i].parent != level || at + h > bottom + 0.5)
-        {
-            continue;
-        }
-        Item it = private[0].items[i];
-        place(next, TARGET_POPUP, float4(ppad, floor(at), inner_w, h), MENU_RADIUS * scale_px(),
-              it.block, i, open);
-        witness_body(next, it, open, true);
-        next += 1u;
-    }
-    place(ELEM_PREVIEW, TARGET_POPUP, float4(0.0, 0.0, 0.0, 0.0), 0.0,
-          NO_INDEX, NO_INDEX, false);
-    return next;
-}
-
 /// The menu rows of the current level, measured and placed. Returns the next
 /// free element index.
 ///
 /// A toast has a layout of its own (`layout_toast`): the
 /// rows it opened with, where it opened with them.
-uint layout_menu(uint next, bool open, float2 popup, float ppad, bool toast)
+uint layout_menu(uint next, bool open, float2 popup, float ppad)
 {
     float s = scale_px();
     uint n = live_items();
     uint level = menu_level();
     float gutter = MENU_GUTTER * s;
 
-    if (toast)
-    {
-        return layout_toast(next, open, popup, ppad);
-    }
     // The clock's menu is its calendar: a grid, not rows.
     if (level < n && private[0].items[level].kind == ITEM_CLOCK)
     {
@@ -1840,9 +1424,13 @@ void layout()
     {
         next = layout_numbers(next, open, popup, ppad);
     }
-    else if (kind == POPUP_MENU || kind == POPUP_TOAST)
+    else if (kind == POPUP_TOAST)
     {
-        next = layout_menu(next, open, popup, ppad, kind == POPUP_TOAST);
+        next = layout_toast(next, open, popup, ppad);
+    }
+    else if (kind == POPUP_MENU)
+    {
+        next = layout_menu(next, open, popup, ppad);
     }
     else if (kind == POPUP_PREVIEW)
     {

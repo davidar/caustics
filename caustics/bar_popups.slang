@@ -52,13 +52,13 @@ public void say_toast_shown()
     {
         return;
     }
-    uint slot = private[0].toast_slot;
-    uint count = min(private[0].toast_count, TOAST_ROWS_CAP);
+    uint slot = private[0].notify.toast_slot;
+    uint count = min(private[0].notify.toast_count, TOAST_ROWS_CAP);
     for (uint k = 0u; k < count; ++k)
     {
         Args a = args_new();
         arg(a, slot);
-        arg(a, private[0].toast_ids[k]);
+        arg(a, private[0].notify.toast_ids[k]);
         arg(a, ACTION_TOAST_SHOWN);
         arg(a, 0u);              // no button
         arg2(a, float2(0.0, 0.0));
@@ -134,14 +134,14 @@ public void close_popup()
 public uint toast_index_of(Item it)
 {
     if (private[0].popup_kind != POPUP_TOAST || id_tag(it.id) != ID_APPLET
-        || id_aux(it.id) != private[0].toast_slot)
+        || id_aux(it.id) != private[0].notify.toast_slot)
     {
         return NO_INDEX;
     }
-    uint count = min(private[0].toast_count, TOAST_ROWS_CAP);
+    uint count = min(private[0].notify.toast_count, TOAST_ROWS_CAP);
     for (uint k = 0u; k < count; ++k)
     {
-        if (private[0].toast_ids[k] == id_payload(it.id))
+        if (private[0].notify.toast_ids[k] == id_payload(it.id))
         {
             return k;
         }
@@ -186,4 +186,11 @@ public void set_pointer(uint target, float2 pos)
 {
     private[0].pointer = pos;
     private[0].pointer_target = target;
+}
+
+/// The popup's kind while it is asked for or up, else 0: what a click on
+/// one of its rows is about.
+public uint popup_live_kind()
+{
+    return popup_live() ? private[0].popup_kind : 0u;
 }
