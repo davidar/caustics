@@ -466,7 +466,8 @@ public static const uint EFLAG_PRESENT = 1u << 2;
 /// compared against.
 ///
 /// The last three make the caustic its own witness (docs/abi.md, *The witness ring*),
-/// since it alone knows when an element appears, moves or leaves. `place` compares `(id, target, rect)`
+/// since it alone knows when an element appears, moves or leaves. After the layout,
+/// `witness_placed` compares `(id, target, rect)`
 /// with what it left here and pushes one witness when they differ — by **id**,
 /// because an unpin can swap which app a slot holds without moving a rect.
 public struct Element

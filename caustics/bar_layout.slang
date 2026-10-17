@@ -1073,3 +1073,12 @@ public uint layout_strip()
     }
     return next;
 }
+
+/// What the pointer is on, resolved to an item once a frame, after the
+/// layout (`Private.hover_item`), so every step that asks reads one answer.
+public void resolve_hover_item()
+{
+    uint h = private[0].hover_element;
+    uint hover_elem = h < live_elements() ? h : NO_INDEX;
+    private[0].hover_item = hover_elem == NO_INDEX ? NO_INDEX : private[0].elements[hover_elem].item;
+}

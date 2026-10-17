@@ -211,6 +211,20 @@ public struct NotifyScratch
     public uint toast_said_held;
 };
 
+/// What the dock keeps (`dock.slang`): what its last build was witnessed
+/// as, and inside one build each app's window count and entry index, which
+/// the entry's menu and the windows hang off.
+public struct DockScratch
+{
+    /// Entries, and entries with a window, as last witnessed.
+    public uint said_entries;
+    public uint said_running;
+    /// Per row of the apps table: its windows, and its entry's item index or
+    /// NO_INDEX. Written and read inside one `bar_build`.
+    public uint build_windows[MAX_APPS];
+    public uint build_entry[MAX_APPS];
+};
+
 /// What the wake keeps between dispatches (`wake.slang`): its sources, the
 /// pointer as it last saw it, and whether it was last witnessed stirred.
 public struct WakeScratch
@@ -358,6 +372,8 @@ public struct Private
     public ClockScratch clock;
     /// The wake's (`wake.slang`).
     public WakeScratch wake;
+    /// The dock's (`dock.slang`).
+    public DockScratch dock;
 
     // -- the anchor, likewise ----------------------------------------------
     /// The `(EDGE, BAR_HEIGHT)` pair last pushed as an `ACT_ANCHOR`. Zero
@@ -392,8 +408,6 @@ public struct Private
     // "Once per change" is this file's duty: the embassy prints every
     // record it reads and dedups nothing. NO_INDEX is "nothing said yet", so
     // the first frame witnesses everything.
-    public uint said_dock_entries;
-    public uint said_dock_running;
     public uint said_applets;
     public uint said_built_items;
     public uint said_built_blocks;
@@ -632,8 +646,8 @@ public void ensure_private()
     private[0].dwell_candidate = -1.0;
     private[0].preview_owner = -1.0;
     // "Nothing witnessed yet", so the first frame says everything once.
-    private[0].said_dock_entries = NO_INDEX;
-    private[0].said_dock_running = NO_INDEX;
+    private[0].dock.said_entries = NO_INDEX;
+    private[0].dock.said_running = NO_INDEX;
     private[0].said_applets = NO_INDEX;
     private[0].sysmon.said_charts = NO_INDEX;
     private[0].said_built_items = NO_INDEX;
