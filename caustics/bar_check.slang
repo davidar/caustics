@@ -116,7 +116,7 @@ void bar_check(uint3 gid: SV_DispatchThreadID)
 
     // -- the tunables an edit can get wrong without a compile error ---------
     //
-    // slangc compiles `TEXT_PX[ITEM_KIND_COUNT]` with fewer initialisers than
+    // Slang compiles `TEXT_PX[ITEM_KIND_COUNT]` with fewer initialisers than
     // kinds and zero-fills the rest, and `snap_px` clamps a zero to
     // MIN_TEXT_PX, so an edit missing one row draws that kind's text at ~6 px with no
     // complaint anywhere.

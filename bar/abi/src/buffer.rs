@@ -11,7 +11,7 @@
 //! beside it, and `bar_abi.slang` is that table rendered by
 //! [`crate::rendered`], wherever a compile needs it and never in the tree. So
 //! the Slang half is not a second copy to keep in step, and the generic layout
-//! test in `bar/src/abi.rs` still compares slangc's own per-field offsets
+//! test in `bar/src/abi.rs` still compares Slang's own per-field offsets
 //! against `offset_of!` — by walking the same table, rather than a
 //! hand-written list of it.
 //!
@@ -25,7 +25,7 @@
 //! std430. Every struct is 16-byte aligned and a multiple of 16 bytes long; no
 //! field is anything but a `u32`/`f32` or an array of them, for which every
 //! bit pattern is valid — which is what makes the [`Plain`] byte views sound.
-//! Padding is `_padN`, scalar words, never a 3-vector: std430 aligns a 3-vector to 16 B and slangc's reflection once put one at the wrong offset.
+//! Padding is `_padN`, scalar words, never a 3-vector: std430 aligns a 3-vector to 16 B and Slang's reflection once put one at the wrong offset.
 //! [`NO_INDEX`] means "nothing"
 //! wherever an index is optional, on both contracts.
 //!
@@ -42,7 +42,7 @@
 //!   `getStringHash` of a format literal and up to ten words, and the embassy
 //!   prints it; there is no per-witness Rust, and a new line in the journal is
 //!   one Slang line.
-//! - **`private`**, one binding of one struct whose stride comes from slangc's
+//! - **`private`**, one binding of one struct whose stride comes from Slang's
 //!   reflection (docs/abi.md, *The private buffer*). The element table, the item and block tables, the
 //!   scratch, the springs, the popup's want, the last pointer position, every
 //!   rows region's shape hash, every value a witness compares against — all of
@@ -611,7 +611,7 @@ abi_struct! {
     /// One literal of the running caustic's string table, in the pool the embassy
     /// publishes on every content rebuild. 16 B.
     ///
-    /// The caustic names a literal by `getStringHash("…")`, slangc records the
+    /// The caustic names a literal by `getStringHash("…")`, Slang records the
     /// text, and the bar's `Strings` (bar/src/strings.rs) has the table; this is that table as the
     /// GPU can read it — the bytes appended to the strings buffer, and an index of
     /// `(hash, off, len)` beside them. What it buys is a composition that spells
@@ -1242,7 +1242,7 @@ const MODULE_DOC: &[&str] = &[
     "Layout rules (docs/abi.md, *Layout rules*): std430; every struct 16-byte aligned;",
     "every size a multiple of 16; padding is `_padN`, written zero and read by",
     "neither side, scalar words and never a `uint3` — std430 aligns a",
-    "3-vector to 16 B and slangc's reflection duly put one at the wrong offset.",
+    "3-vector to 16 B and Slang's reflection duly put one at the wrong offset.",
 ];
 
 /// `bar_abi.slang`, rendered from the tables above.

@@ -11,7 +11,7 @@ fn note(words: &[u32]) -> Note {
     note
 }
 
-/// A table with the literals a test names, keyed as slangc would key them.
+/// A table with the literals a test names, keyed as Slang would key them.
 fn table(entries: &[(u32, &str)]) -> Strings {
     let mut strings = Strings::new();
     strings.replace(

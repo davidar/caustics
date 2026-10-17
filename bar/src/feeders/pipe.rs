@@ -66,8 +66,7 @@ use crate::model::{Update, Updates};
 ///
 /// [`RELOAD_SIDECAR`] is the only one whose absence costs
 /// nothing a running bar can see: without it the caustic on the GPU is the
-/// baked one and stays the baked one, which is exactly what a machine with no
-/// slangc has.
+/// baked one and stays the baked one, and the bar simply never hot-reloads.
 pub const SIDECARS: &[&str] = &[
     "caustics-sysmon",
     "caustics-tray",
@@ -93,7 +92,8 @@ pub const APPS_SIDECAR: &str = "caustics-apps";
 pub const GLYPHS_SIDECAR: &str = "caustics-glyphs";
 
 /// The sidecar the caustic itself comes from: it watches
-/// the `.slang` files, runs slangc and writes `Module` frames. Asked once, for
+/// the `.slang` files, compiles them with Slang in its own process and writes
+/// `Module` frames. Asked once, for
 /// the swapchain format the device negotiated (`REQ_PROGRAM`), and thereafter
 /// it speaks unprompted like the sampler does.
 pub const RELOAD_SIDECAR: &str = "caustics-reload";

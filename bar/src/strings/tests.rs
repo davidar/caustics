@@ -43,7 +43,7 @@ fn a_reload_replaces_the_table_whole() {
 /// The table a bar actually starts on is the **baked** one, and it already
 /// answers for the words the dock's menu is made of.
 ///
-/// `build.rs` writes slangc's reflection beside the SPIR-V it compiled, so the
+/// `build.rs` writes Slang's reflection beside the SPIR-V it compiled, so the
 /// modules running on the first frame and the literals answering on the first
 /// frame come from one compile. Without it the table would be empty until the
 /// first reload, and a right click in that window would draw a menu with no

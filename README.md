@@ -112,7 +112,7 @@ running bar keeps its own set's sidecars even after a newer set is installed.
 | | |
 |---|---|
 | **Rust** | 1.88 or newer (edition 2024; the workspace declares `rust-version`). |
-| **slangc** | Slang's compiler, on `PATH` or named by `$SLANGC`. Built and tested with **2026.14.1**, from [shader-slang's releases](https://github.com/shader-slang/slang/releases). The build needs it (the bar's build script and the text engine's compile Slang); at run time only `caustics-reload` does, for hot reload. Other versions may differ; docs/slangc-numthreads.md is one known crash. `spirv-val` is used by the tests when present. |
+| **Slang** | Nothing to install. The compiler runs in process, through the text engine's `punchcutter-slang`, which carries a pinned [Slang release](https://github.com/shader-slang/slang/releases) (**2026.14.1**) inside the binaries that compile: the bar's build script, the tests and `caustics-reload`. The first build downloads that release once, checks its SHA-256 and keeps it under `~/.cache/shader-slang/`; for an offline build, point `SLANG_RELEASE_ARCHIVE` at a local copy of the release archive. docs/slang-numthreads.md is one known crash of that release's command-line compiler. `spirv-val` checks every compiled module when it is installed. |
 | **Libraries** | `libwayland-client` at link time (your distribution's `libwayland-dev` or equivalent). Fontconfig and an icon theme at run time. |
 | **GPU** | Vulkan, through wgpu with SPIR-V passthrough. The bar asks for a low-power adapter and **refuses an adapter named NVIDIA** (a status bar must not keep a discrete GPU awake) unless `CAUSTICS_BAR_ALLOW_DGPU=1` is set; an NVIDIA-only machine sets that, or uses Mesa's lavapipe. Tested on AMD integrated graphics (RADV) and on lavapipe. |
 | **Compositor** | `wlr-layer-shell` and `ext-foreign-toplevel-list` (required, for the bar and the dock); `xdg-activation` (a notification's click raising its app) and `idle-inhibit` (the caffeine toggle), each optional. **niri** for the rest: which window is focused or urgent, focusing, closing and launching from the dock, and the overview button go through niri's IPC socket (`$NIRI_SOCKET`). Without it the dock lists windows but cannot act on them. Hover previews need `ext-image-copy-capture` with the foreign-toplevel capture source, which at the time of writing is in a patched niri rather than upstream's; without it there are no previews and nothing else changes. |
@@ -157,10 +157,11 @@ refuse a sidecar from another build anyway, and the script exists so that
 there is no way to make that pairing.
 
 Hot reload compiles against the text engine's Slang modules as they were
-compiled into the set: `caustics-reload` writes them once into
-`~/.cache/punchcutter/slang/<hash>/` and compiles with that directory on the
-include path, so the engine the bar runs with is the one it was built
-against, whatever has happened to cargo's caches since.
+compiled into the set, with the Slang release compiled into it:
+`caustics-reload` writes the modules once into
+`~/.cache/punchcutter/slang/<hash>/`, which is on the search path of every
+compile, so the engine and the compiler the bar runs with are the ones it
+was built against, whatever has happened to cargo's caches since.
 
 **On a laptop with a discrete GPU**, also install the iGPU-only drop-in,
 which pins the Vulkan loader to the integrated GPU's driver so the discrete
@@ -195,7 +196,7 @@ $EDITOR caustics/bar_tunables.slang      # save, and the running bar moves
 ```
 
 The running bar moves on the save. A file that does not compile keeps the
-last good bar and prints slangc's diagnostic to the journal. The shipped bar
+last good bar and prints Slang's diagnostic to the journal. The shipped bar
 sits on the top edge; `EDGE = EDGE_BOTTOM` moves it. The knobs live where
 they are used, any constant can be tuned live, and the compiler is the
 validator. After a `git pull`, your edits are a merge like any other.

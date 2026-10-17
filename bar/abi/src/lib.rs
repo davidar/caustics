@@ -20,7 +20,7 @@
 //! sidecar compiles every entry in that list and names each `Module` frame
 //! after one (docs/abi.md, *Module*), so it is a thing two separately built processes must
 //! agree on — which is what this crate is for. The buffer's layout tests stay
-//! in `bar/src/abi.rs` because the reflection test needs slangc; the wire's
+//! in `bar/src/abi.rs` because the reflection test needs the compiler; the wire's
 //! tests are here, because the wire needs nothing but this crate.
 
 //! # Three channels out, and one buffer this crate does not describe
@@ -35,7 +35,7 @@
 //! Everything the caustic builds for *itself* — the element, item and block
 //! tables, the scratch, the springs, the popup's want — is in a binding this
 //! crate does not describe at all: the embassy allocates it at the stride
-//! slangc's reflection reports and never writes or reads a word (docs/abi.md, *The private buffer*), and
+//! Slang's reflection reports and never writes or reads a word (docs/abi.md, *The private buffer*), and
 //! the vocabulary for it is `caustics/bar_model.slang`'s.
 //!
 //! # Declared once (docs/abi.md, *The two contracts*)
@@ -64,8 +64,8 @@ pub mod wire;
 pub use punchcutter_core::decl;
 pub use punchcutter_core::{abi_consts, abi_struct, slang_ty};
 
-/// The swapchain formats a caustic is baked for, and the slangc flags that
-/// select each: one table for the bar's build script, the bar and the compiler
+/// The swapchain formats a caustic is baked for, and the compiler settings
+/// that select each: one table for the bar's build script, the bar and the compiler
 /// sidecar.
 pub mod format;
 pub use format::DstFormat;
@@ -110,7 +110,7 @@ pub(crate) const NORMATIVE: &[&str] = &[
 pub const RENDERED: [&str; 2] = ["bar_abi.slang", "bar_wire.slang"];
 
 /// The two rendered modules, each with the file name in [`RENDERED`]: what
-/// slangc reads when the caustic says `import bar_abi;`.
+/// the compiler reads when the caustic says `import bar_abi;`.
 pub fn rendered() -> [(&'static str, String); 2] {
     [
         (RENDERED[0], buffer::slang_module()),
@@ -119,7 +119,7 @@ pub fn rendered() -> [(&'static str, String); 2] {
 }
 
 /// Writes the two rendered modules into `dir`, creating it, so that `dir` can
-/// go on slangc's include path. A build script writes them under `OUT_DIR`;
+/// go on the compiler's search path. A build script writes them under `OUT_DIR`;
 /// a process that compiles at run time calls [`rendered_dir`] instead.
 pub fn write_rendered(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
@@ -137,7 +137,7 @@ fn is_rendered(dir: &Path) -> bool {
 }
 
 /// A directory holding the two rendered modules, for a process that compiles
-/// the caustic at run time: pass it to slangc as an include path.
+/// the caustic at run time: put it on the compiler's search path.
 ///
 /// It is `$XDG_CACHE_HOME/caustics/rendered/<ABI_HASH>/` (`~/.cache` when
 /// that is unset), the hash as sixteen hex digits, so each contract has its

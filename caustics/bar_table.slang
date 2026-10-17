@@ -1009,7 +1009,7 @@ public void shape_block(uint b)
     // **A selector and not an assignment**: under SPIR-V's logical addressing a
     // resource handle cannot be a conditionally written local, so `t.utf8 = …`
     // inside an `if` is a module spirv-val rejects. Three buffers would mean
-    // three `shapeRun` call sites — and slangc, which must inline every
+    // three `shapeRun` call sites — and Slang, which must inline every
     // function taking a descriptor, emits the whole OpenType shaper once per
     // call: three times was 5.4 MB of SPIR-V and 5.3 s of compile for this
     // one entry point. The shaper reads its bytes through a selector, so

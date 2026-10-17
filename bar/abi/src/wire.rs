@@ -304,7 +304,7 @@ abi_consts! {
     /// which face has them is the sidecar's to work out — and the answer is the
     /// buffers growing, not a frame that names anything.
     pub const REQ_COVER: u32 = 4;
-    /// The swapchain format's slangc define, exactly as `Gpu::dst_format_args`
+    /// The swapchain format's define, exactly as `Gpu::dst_format_args`
     /// spells it — compile the caustic for *this* program (from the compiler
     /// sidecar). Sent once at startup, and remembered by the
     /// pipe, so a restarted compiler learns the format again with no bar code
@@ -1013,8 +1013,8 @@ pub struct Pixmap {
 /// of the module's payload.
 ///
 /// The payload is `name_len` bytes of entry point, then `spirv_len` bytes of
-/// SPIR-V, then `reflection_len` bytes of slangc's reflection JSON, in that
-/// order. `total` is the whole of it and `offset` says where this frame's bytes
+/// SPIR-V, then `reflection_len` bytes of the program's reflection as JSON
+/// (`punchcutter_slang::Reflection`), in that order. `total` is the whole of it and `offset` says where this frame's bytes
 /// land in it — the shape [`BytesHeader`] has (docs/abi.md, *Bytes*), given to `Module` so that
 /// a shader outgrowing [`WIRE_MAX_BODY`] is several frames
 /// rather than a refused generation.
@@ -1030,7 +1030,7 @@ pub struct ModuleHeader {
     pub index: u32,
     /// Entry points in this generation.
     pub count: u32,
-    /// [`format_code`] of the slangc define this module was compiled for. A
+    /// [`format_code`] of the define this module was compiled for. A
     /// generation compiled for another swapchain format is not this session's.
     pub format: u32,
     /// The whole module's three runs, repeated in every piece — so a reader can
@@ -1078,7 +1078,11 @@ pub struct Module {
     /// The entry point's name, from the caustic's entry list.
     pub name: String,
     pub spirv: Vec<u8>,
-    /// slangc's reflection of this entry point, verbatim.
+    /// The reflection of the program this entry point was linked in, as
+    /// `punchcutter_slang::Reflection::to_json` writes it. Every entry point
+    /// of a generation is linked at once, so every module of a generation
+    /// carries the same reflection; each carries it so that a module stays
+    /// one self-contained record.
     pub reflection: String,
 }
 
@@ -1997,7 +2001,7 @@ pub(crate) const CONST_GROUPS: &[ConstGroup] =
 /// bound by the samples buffer (docs/abi.md, *Samples*). The four heads after them are what the
 /// caustic reads out of the two arenas — a `Rows` body in the
 /// rows arena, a `Glyph` or `App` body in the answers arena — and `bound` is
-/// **still** false for them, because slangc reflects the types a binding's
+/// **still** false for them, because Slang reflects the types a binding's
 /// layout needs and the arenas are bound as `RWStructuredBuffer<uint>`: they
 /// have to be, since `shapeRun` takes its text through an
 /// `RWStructuredBuffer<uint>` handle and a row's label lives in the arena. So

@@ -146,7 +146,7 @@ fn slot_fact_layout() {
 /// the wire's rather than against a second copy (docs/abi.md, *The arenas*) — and
 /// so are the **offsets the caustic reads them at**.
 ///
-/// The generic layout test cannot do this one. slangc reflects the types a
+/// The generic layout test cannot do this one. Slang reflects the types a
 /// binding's layout needs, and both arenas are bound as
 /// `RWStructuredBuffer<uint>` — they have to be, because `shapeRun` takes its
 /// text through such a handle and a row's label lives in the arena — so
@@ -404,7 +404,7 @@ fn reflect_bar(entry: &str, defines: &[&str]) -> Reflection {
     .unwrap_or_else(|err| panic!("reflection failed:\n{err}"))
 }
 
-/// slangc's own per-field byte offsets for every struct in the bar ABI,
+/// Slang's own per-field byte offsets for every struct in the bar ABI,
 /// against `offset_of!` on this side — **from the declaration tables**, not
 /// from a hand-written copy of them (docs/abi.md, *The two contracts*).
 ///
@@ -418,7 +418,7 @@ fn reflect_bar(entry: &str, defines: &[&str]) -> Reflection {
 /// are not in either table — they are the text engine's contracts — so they
 /// stay as the explicit list below.
 ///
-/// `bar_apply` is enough for all of them: slangc reflects the whole global
+/// `bar_apply` is enough for all of them: Slang reflects the whole global
 /// parameter block of the module, not only what one entry point happens to
 /// read, so `Samples` (which only `bar_draw` touches) comes back too.
 #[test]
@@ -436,7 +436,7 @@ fn the_slang_layout_matches_this_one() {
     for entry in STRUCTS.iter().chain(wire::STRUCTS) {
         if !entry.bound {
             // A wire struct the GPU does not read yet (docs/abi.md, *Rows*, *Glyph*, *App*):
-            // slangc lays out the types a binding needs and no others, and
+            // Slang lays out the types a binding needs and no others, and
             // the arenas are bound as `uint` buffers, so there is nothing to
             // compare. The crate's own `wire` tests pin these offsets.
             assert!(
@@ -516,7 +516,7 @@ fn the_slang_layout_matches_this_one() {
     for (name, fields) in &expected {
         let actual = reflected
             .get(*name)
-            .unwrap_or_else(|| panic!("slangc reflected no struct named `{name}`"));
+            .unwrap_or_else(|| panic!("Slang reflected no struct named `{name}`"));
         for (field, offset) in fields {
             let reported = actual.get(*field).copied().unwrap_or_else(|| {
                 panic!("`{name}.{field}` is missing from the Slang declaration")
@@ -578,7 +578,7 @@ fn the_samples_body_is_8336_bytes_in_the_documented_layout() {
 ///
 /// This is the compile check turned into a test: the BGRA variant in particular is easy to break by hand (SPIR-V
 /// has no BGRA storage format, so `dst` is declared format-unknown and the
-/// `-default-image-format-unknown` flag has to come with it) and nothing
+/// compiler's image-format-unknown option has to come with it) and nothing
 /// else in the workspace exercises it for the bar.
 ///
 /// The variants come from `DstFormat`, which is what `bar/build.rs` bakes
@@ -679,15 +679,15 @@ fn dock_menu_rows() -> Vec<TunableRow> {
         .collect()
 }
 
-/// The dock's menu is four rows of the tunables, and slangc knows their words.
+/// The dock's menu is four rows of the tunables, and Slang knows their words.
 ///
 /// This is the dock menu's seam end to end on this side: the rows come out of
-/// `bar_tunables.slang`, the labels come back out of slangc's reflection as
+/// `bar_tunables.slang`, the labels come back out of Slang's reflection as
 /// `getStringHash` literals (which is the only way the embassy ever learns
 /// them — nothing in the bar holds these strings), and the verbs and the
 /// `when`s are `bar_abi.slang`'s. the dock-menu step of `bar/bar-test.sh` reads the same four rows off a real screen.
 #[test]
-fn the_dock_menu_is_four_tunable_rows_whose_words_slangc_knows() {
+fn the_dock_menu_is_four_tunable_rows_whose_words_slang_knows() {
     let rows = dock_menu_rows();
     let spelled: Vec<(&str, &str, &str)> = rows
         .iter()
@@ -718,7 +718,7 @@ fn the_dock_menu_is_four_tunable_rows_whose_words_slangc_knows() {
     for row in &rows {
         assert!(
             table.values().any(|literal| *literal == row.label),
-            "slangc's reflection does not carry {:?}; the bar would draw no row",
+            "Slang's reflection does not carry {:?}; the bar would draw no row",
             row.label
         );
     }
@@ -1202,14 +1202,14 @@ fn the_clock_composes_what_strftime_would() {
     assert_eq!(date, "Sun");
 
     // Every one of those words reaches the GPU the only way it can: through the
-    // literal pool, whose bytes are the reflection's `hashedStrings`.
+    // literal pool, whose bytes are the reflection's string table.
     let reflection = reflect_bar("bar_compose", &["DST_FORMAT_RGBA8"]);
     let table = reflection.strings;
     let (weekdays, months, _) = clock_tunables();
     for word in weekdays.iter().chain(months.iter()) {
         assert!(
             table.values().any(|literal| literal == word),
-            "slangc's reflection does not carry {word:?}; the date would be short a word"
+            "Slang's reflection does not carry {word:?}; the date would be short a word"
         );
     }
     assert!(
@@ -1223,8 +1223,8 @@ fn the_clock_composes_what_strftime_would() {
 }
 
 /// The three icon lists `bar_build` reads are the tunables' own, and every
-/// name in them reaches the GPU the only way a name can — through slangc's
-/// `hashedStrings` and the pool the facts publish.
+/// name in them reaches the GPU the only way a name can — through the
+/// reflection's string table and the pool the facts publish.
 ///
 /// Three Rust `const &[&str]` lists would be exactly the thing the bar process's membership rule (docs/architecture.md, *The bar process*) says the embassy must not hold: which icon a state wears.
 #[test]
@@ -1248,7 +1248,7 @@ fn the_overview_and_caffeine_icons_are_the_tunables_own_lists() {
     for name in overview.iter().chain(on.iter()).chain(off.iter()) {
         assert!(
             table.values().any(|literal| literal == name),
-            "slangc's reflection does not carry {name:?}; the caustic would ask the \
+            "Slang's reflection does not carry {name:?}; the caustic would ask the \
              directory under a hash the embassy has no bytes for"
         );
     }
@@ -1257,7 +1257,7 @@ fn the_overview_and_caffeine_icons_are_the_tunables_own_lists() {
     let glyph = single_hash_literal("OVERVIEW_GLYPH = getStringHash(");
     assert!(
         table.values().any(|literal| *literal == glyph),
-        "slangc's reflection does not carry the overview's fallback glyph"
+        "Slang's reflection does not carry the overview's fallback glyph"
     );
 }
 
@@ -1339,7 +1339,7 @@ fn a_label_is_its_first_line() {
 /// about them the layout cannot get from anywhere else.
 ///
 /// `bar/src/gpu/tests.rs` pins the counts against the *baked* JSON; this one
-/// stands between a slangc whose output shape moved and a bar that panics at
+/// stands between a compiler whose reflection moved and a bar that panics at
 /// startup.
 #[test]
 fn the_bars_caustic_reflects_its_bindings() {
@@ -1389,7 +1389,7 @@ fn the_bars_caustic_reflects_its_bindings() {
     assert_eq!(named("images").kind, BindingKind::Texture { array: true });
     assert_eq!(named("preview").kind, BindingKind::Texture { array: false });
     // `State` is one element, so its stride is the whole state buffer. The
-    // exact size is `caustics-bar`'s to pin (its ABI test compares slangc's layout
+    // exact size is `caustics-bar`'s to pin (its ABI test compares Slang's layout
     // against `size_of::<State>()` on every build) and it moves with every ABI
     // bump, so here it is only "read-write, and reflected at all".
     match named("state").kind {

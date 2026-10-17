@@ -13,7 +13,7 @@
 // The subjects' kinds and tags are bound here too. A subject module names
 // none of the bar's `ITEM_*` and `ID_*` constants: it declares its own as
 // link-time constants (`extern static const uint SYSMON_CHART;`), and the
-// `export`s below give them their values, which slangc folds into the
+// `export`s below give them their values, which Slang folds into the
 // program as it folds any constant.
 
 module bar_dispatch;

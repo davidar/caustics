@@ -485,7 +485,7 @@ fn lines(state: &State, strings: &Strings, bytes: &[u8]) -> Vec<Option<Line>> {
 /// invariant the built table has to satisfy on its own.
 ///
 /// Gated on `CAUSTICS_BAR_ORACLE=1` so `cargo test --workspace` never creates a
-/// Vulkan instance and never runs slangc (the module doc says why). The run
+/// Vulkan instance and never compiles `bar_check` (the module doc says why). The run
 /// prints one line per scenario and one tally, and fails on the first
 /// invariant it can name.
 #[test]

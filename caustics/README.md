@@ -3,8 +3,8 @@
 The bar's GPU programs, in [Slang](https://shader-slang.org/). A **caustic**
 is a compute program that holds policy: here, everything the bar draws and
 every decision about what it draws (docs/architecture.md, *The caustic*). The
-programs are compiled to SPIR-V by slangc, at build time by `bar/build.rs`,
-which bakes the caustic into the bar binary, and at run time by the
+programs are compiled to SPIR-V by Slang, in process through the text
+engine's `punchcutter-slang`: at build time by `bar/build.rs`, which bakes the caustic into the bar binary, and at run time by the
 `caustics-reload` sidecar, which recompiles on every save. They are loaded through
 wgpu's SPIR-V passthrough. Slang rather than WGSL because Slang has modules,
 generics, interfaces, string literals whose hashes reach the host through
@@ -45,26 +45,26 @@ no other subject: what two subjects share is the bar's, in one of the
 `bar_*` modules. And it names none of the bar's kinds or id tags: it declares
 its own as link-time constants (`extern static const uint SYSMON_CHART;`),
 and `bar_dispatch` binds them (`export static const uint SYSMON_CHART =
-ITEM_CHART;`), which slangc folds like any constant. The bar's own modules
+ITEM_CHART;`), which Slang folds like any constant. The bar's own modules
 still name kinds where the bar's policy is about one (the wings drop charts
 from the end; `item_is_button` lists the kinds that take a click).
 
 **The text engine's modules are imported, not kept here.** `text` (glyph and
 icon coverage, the Slug algorithm), `shape` (the shaper), `ot` (OpenType's
 binary format, walked in place) and `shape_abi` (the arena's header) are
-punchcutter's, compiled into `punchcutter-core` (`punchcutter_core::modules`);
-punchcutter is the text engine, a dependency. Every compile puts a directory
-written from those copies on the include path after this one: `bar/build.rs`
-writes it under `OUT_DIR`, and `caustics-reload`, the oracle and the layout
-tests take `punchcutter_core::slang_dir()`, a cache directory written once.
+punchcutter's, compiled into `punchcutter-slang` (`punchcutter_slang::modules`);
+punchcutter is the text engine, a dependency. Every compile through that
+crate searches a directory written from those copies last, after this one and
+the bar's rendered contracts: `punchcutter_slang::slang_dir()`, a cache
+directory written once per version of the engine.
 
 **The bar's two contracts are rendered, not kept here.** `bar_abi` (the
 buffer contract between the bar process and the caustic, docs/abi.md, *The
 buffer*) and `bar_wire` (the frames a sidecar writes that the caustic reads in
 place, *The wire*) are rendered from the Rust declarations in
 `bar/abi/src/buffer.rs` and `bar/abi/src/wire.rs` by
-`caustics_bar_abi::rendered()`. They go on the include path the same way as
-the engine's: `bar/build.rs` writes them into the same directory under
+`caustics_bar_abi::rendered()`. Every compile puts them on its search path
+after this directory: `bar/build.rs` writes them into a directory under
 `OUT_DIR`, and the processes that compile at run time take
 `caustics_bar_abi::rendered_dir()`. To read them after a build, look in
 `~/.cache/caustics/rendered/<abi-hash>/`. To change them, edit the Rust.
@@ -111,7 +111,7 @@ dispatch*).
   `bar_model` and `bar_tunables` are importable anywhere at no cost.
 - **Bindings are named, not numbered, on the host side.** The binding numbers
   are literals in `bar_state.slang` (an attribute cannot take a constant). The bar
-  builds its bind groups by reading each binding's name out of slangc's
+  builds its bind groups by reading each binding's name out of Slang's
   reflection, and refuses a hot reload whose bindings changed.
 - **No vectors in a shared struct.** Every field of anything in `bar_abi` or
   `bar_wire` is a `uint`, a `float` or an array of them. A 3-vector aligns to
@@ -137,7 +137,7 @@ dispatch*).
 documentation: each constant carries a comment saying what it does. To change
 anything, edit it in your checkout and save; the running bar moves. It is a
 module like the others in this directory, and the compiler is its validator:
-an edit that does not compile keeps the last good bar and prints slangc's
+an edit that does not compile keeps the last good bar and prints Slang's
 diagnostic, naming this file, to the journal. Your edits live in your
 checkout, so an update is a merge like any other.
 
@@ -154,7 +154,8 @@ tunables among them, listed when the sidecar starts (a module added later is
 compiled, because the module that imports it changed, but is not watched
 until the sidecar restarts). `bar/build.rs` and the harness's copy into a
 guest take the same list. The text engine's modules are not watched: an engine change is a dependency bump and a
-rebuild. On a save it compiles every entry point with slangc, caches the
+rebuild. On a save it compiles every entry point in one link, with Slang in
+its own process, caches the
 result under `$XDG_CACHE_HOME/caustics/reload/` keyed on the bytes that reach
 the compiler (the engine's modules included) and the compiler's version (a cached generation is milliseconds; a cold one is
 seconds), and sends the SPIR-V and the reflection to the bar as one
@@ -168,7 +169,7 @@ bytes if there is one and otherwise waits for the next save. A restart after
 a live edit therefore shows the edited bar within a second.
 
 **A file that does not compile sends nothing.** The running caustic stays and
-slangc's diagnostics go to the journal. A reload that changes a binding, or
+Slang's diagnostics go to the journal. A reload that changes a binding, or
 the size of the caustic's private buffer, is refused with "restart the bar".
 
 Where `caustics-reload` looks: `caustics/` in its working directory, then

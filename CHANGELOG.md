@@ -22,7 +22,7 @@ on a refusal or a lost GPU device.
 
 **The ABI** (`caustics-bar-abi`). Two contracts: the buffer between the bar
 process and its caustic, declared once in Rust with the Slang side generated
-and checked against slangc's reflection; and the wire between the bar and its
+and checked against Slang's reflection; and the wire between the bar and its
 sidecars, length-prefixed binary frames read by a reader that skips what it
 does not know. One hash over both, carried by every binary and checked on a
 sidecar's first frame. `bar/install.sh` installs the bar and its ten sidecars
@@ -39,9 +39,9 @@ devices), `caustics-notify` (a Desktop Notifications 1.2 daemon: history that
 survives restarts, do-not-disturb, toasts, activation tokens so a click can
 raise its application), `caustics-apps` (desktop entries and colour icons),
 `caustics-glyphs` (the font and symbolic icons as curves, fallback faces on
-demand) and `caustics-reload` (the shader compiler, with a cache keyed on the
-bytes it compiles). Every D-Bus signal stream is drained by a task that awaits
-nothing else.
+demand) and `caustics-reload` (the shader compiler, Slang in its own
+process, with a cache keyed on the bytes it compiles). Every D-Bus signal
+stream is drained by a task that awaits nothing else.
 
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout

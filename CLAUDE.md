@@ -3,8 +3,9 @@
 A status bar for Wayland compositors that renders everything in one Slang
 compute shader and hosts its data sources as sidecar processes. README.md has
 the overview, the build and the install. The text engine (shaping, glyph
-coverage, fonts) is punchcutter, a dependency; its Slang modules are imported
-through `punchcutter_core::slang_dir()`, never copied into `caustics/`.
+coverage, fonts) is punchcutter, a dependency; its Slang modules travel in
+`punchcutter-slang` and are on every compile's search path, never copied
+into `caustics/`.
 
 **References** (living, in `docs/`): architecture.md the parts and the
 reasons for their shape; abi.md the contracts between the bar, its caustic
@@ -42,9 +43,10 @@ of the tree it was built from, `caustics/bar_tunables.slang` included.
   a binary); kill tracked PIDs only. Builders never run `bar/vm-run.sh` or
   qemu; they ask the main session, which runs one guest and relays results.
 - **Slang, not WGSL**, for every shader. Shaders live in `caustics/`,
-  compiled by `bar/build.rs` via slangc to SPIR-V and loaded through wgpu's
-  passthrough. Building needs slangc on PATH (`$SLANGC` overrides);
-  `spirv-val` is used when present.
+  compiled to SPIR-V by Slang in process (`punchcutter-slang`, which carries
+  the pinned release; the first build downloads it into
+  `~/.cache/shader-slang/`) and loaded through wgpu's passthrough. Nothing
+  to install; `spirv-val` is used when present.
 - **The bar copies bytes and parses nothing**: a sidecar writes ABI frames
   over a pipe, the caustic lays them out. New data sources are sidecars; new
   behaviour is the caustic's. There is no config file: the tunables module is

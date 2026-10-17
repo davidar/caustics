@@ -28,7 +28,7 @@ __exported import bar_abi;
 
 // ---------------------------------------------------------------------------
 // Capacities. The caustic's own, because the tables they bound are its own:
-// the embassy allocates `private` by the stride slangc reports for it and has
+// the embassy allocates `private` by the stride Slang reports for it and has
 // no opinion about what is inside (docs/abi.md, *The private buffer*).
 // ---------------------------------------------------------------------------
 

@@ -186,7 +186,7 @@ fn drop_ends_a_sleeping_child() {
     // shell would sit for an hour.
     let pipe = Pipe::start(&player("sleeper.sh", "read line; exit 0"), tx);
     // Poll for the child rather than sleeping a fixed 200 ms: under a loaded
-    // host — `cargo test --workspace` running slangc in the next crate — the
+    // host — `cargo test --workspace` compiling Slang in the next crate — the
     // spawn can take longer than that, and this is a test of `Drop`, not of
     // how fast a process starts.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
@@ -470,7 +470,7 @@ fn a_request_asked_before_the_child_exists_reaches_it_when_it_starts() {
     // Asking twice writes once.
     assert!(pipe.request(&asked, "the early request again"));
     // Wait for the child to have copied the request out before ending it: a
-    // fixed sleep here loses to a slangc running in the next crate's tests,
+    // fixed sleep here loses to a Slang compile in the next crate's tests,
     // the drop killing the child before its `cat` began.
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     let mut bytes = Vec::new();
@@ -519,8 +519,8 @@ fn a_restarted_child_is_asked_everything_again() {
     });
     assert!(pipe.request(&asked, "the request"));
     // Wait for the second child to have copied the replay out before ending
-    // it, as the test above does: a fixed sleep here loses to a slangc
-    // running in another crate's tests, the drop killing the restarted child
+    // it, as the test above does: a fixed sleep here loses to a Slang
+    // compile in another crate's tests, the drop killing the restarted child
     // before its `cat` began. The restart itself waits out BACKOFF_START.
     let deadline = std::time::Instant::now() + BACKOFF_START + Duration::from_secs(10);
     let mut bytes = Vec::new();

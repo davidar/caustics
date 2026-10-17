@@ -28,8 +28,8 @@ CHANGELOG.md.
 ## Packaging
 
 3. **The bar as a distribution image's panel by default.** A build stage
-   with slangc pinned, the set under `/usr/lib/caustics-bar/<hash>/`, `caustics/`
-   at `/usr/share/caustics/`, the unit gated on the session and preset-enabled in
+   building the set (its Slang release pinned by `Cargo.lock`), the set under
+   `/usr/lib/caustics-bar/<hash>/`, `caustics/` at `/usr/share/caustics/`, the unit gated on the session and preset-enabled in
    place of the previous panel and notification daemon. After the top-edge
    default has been lived with.
 
@@ -96,6 +96,8 @@ been verified line by line. Check before building.
   a menu whose item disappears.
 - The positioner has no `ResizeY` and there is no scroll indicator; another
   panel's exclusive zone is what `POPUP_MARGIN` absorbs.
-- The compiler sends one reflection per entry point, near-identical.
+- The compiler sends the program's reflection with every entry point,
+  identical each time (docs/abi.md, *Module*); one copy per generation is a
+  wire change.
 - A test that rewords `DOCK_MENU` in the tunables and reads it off the
   screen; a test that edits a binding and watches the reload refuse.

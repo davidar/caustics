@@ -8,7 +8,7 @@
 // It is a module that declares bindings, the one exception to the rule in
 // caustics/README.md (*Conventions*): a binding declared here and imported
 // is the same global shader parameter in every module and every entry point,
-// and the embassy finds each one in slangc's reflection by its name, as it
+// and the embassy finds each one in Slang's reflection by its name, as it
 // did when they were declared in `bar.slang`.
 
 module bar_state;
@@ -68,7 +68,7 @@ public struct BodyLine
 
 // ---------------------------------------------------------------------------
 // Bind group 0, shared by every entry. The embassy builds the layouts and the
-// bind group from slangc's reflection, mapping each binding by its *name*, so
+// bind group from Slang's reflection, mapping each binding by its *name*, so
 // the `[[vk::binding]]` literals below are this file's to choose (an attribute
 // cannot take a constant, hence literals), and a reload that changes one is
 // refused rather than misread (docs/abi.md, *Who writes what*, *Bindings and the oracle*). Bindings a given
@@ -154,7 +154,7 @@ public StructuredBuffer<Samples> samples;
 ///
 /// It is what lets `bar_compose` spell a weekday: the words are this file's
 /// (`WEEKDAYS`, `MONTHS` in the tunables), the bytes are in a buffer, and the
-/// embassy — which has slangc's own table of them — never learns that any of
+/// embassy — which has Slang's own table of them — never learns that any of
 /// them is a weekday. The binding number is this file's alone, as `samples`
 /// above says.
 [[vk::binding(11, 0)]]
@@ -304,7 +304,7 @@ public struct SysmonScratch
 /// want, and every value a witness is compared against.
 ///
 /// The ABI does not describe a word of it. The embassy allocates the stride
-/// slangc's reflection reports for `Private`, and then never writes it and
+/// Slang's reflection reports for `Private`, and then never writes it and
 /// never reads it — it starts zero (wgpu's creation guarantee) and
 /// `ensure_private()` writes the non-zero defaults on the first pass of the
 /// first frame. A reload keeps it, so the popup, the menu level and the
@@ -607,7 +607,7 @@ public float text_line_height(float px)
 // The element table, the item and block tables, the menu level, the pressed
 // id, the dwell clock, the drag, the popup's whole state machine and every
 // value a witness is compared against. The embassy allocates it by the stride
-// slangc reports and **never writes it and never reads it**: it starts zero
+// Slang reports and **never writes it and never reads it**: it starts zero
 // (wgpu's creation guarantee) and `ensure_private` below writes the non-zero
 // defaults once.
 //
@@ -788,7 +788,7 @@ public void push_action(uint kind, Args a)
 
 /// One line of the journal, as a format literal and its words (docs/abi.md, *The witness ring*).
 ///
-/// `head` is `getStringHash("…")` of the literal; slangc records the text in
+/// `head` is `getStringHash("…")` of the literal; Slang records the text in
 /// its reflection and the embassy resolves it there. There is no per-witness
 /// Rust: a new line is one call here.
 ///

@@ -299,7 +299,7 @@ pub struct Gpu {
     commands: wgpu::Buffer,
     /// **What the caustic keeps for itself** (docs/abi.md, *The private buffer*): the
     /// element, item and block tables, the scratch, the springs, the popup's
-    /// want, the witness memory. One element of the stride slangc's reflection
+    /// want, the witness memory. One element of the stride Slang's reflection
     /// reports for `Private`, `STORAGE` only — no `COPY_SRC`, no `COPY_DST`,
     /// so neither a readback nor a `write_buffer` can be written against it by
     /// accident.
@@ -405,7 +405,7 @@ pub struct Gpu {
     mirror: Box<State>,
     /// `bar_check`, the test-only eighth entry point, once the oracle has
     /// compiled and loaded one (docs/abi.md, *Bindings and the oracle*). `None` in every other
-    /// build, and in a test run that could not reach slangc.
+    /// build.
     #[cfg(test)]
     check: Option<wgpu::ComputePipeline>,
     /// The frame this device is on (docs/abi.md, *The three rules the buffer adds*, rule 1). Starts at 1,
@@ -554,7 +554,7 @@ impl Gpu {
         // `shape.slang`'s tables — so it asks for what the adapter has rather
         // than for a number: RADV's ceiling is in the millions and lavapipe's is
         // its own business, and a bar that asked for 32 would fail on a driver
-        // that offered 31 for no reason. The counts come from slangc's
+        // that offered 31 for no reason. The counts come from Slang's
         // reflection of the caustic itself, so a binding added in Slang is
         // counted here without anyone editing this file.
         let reflected = baked_bindings();
@@ -744,7 +744,7 @@ impl Gpu {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
-        // What the caustic keeps for itself, at the stride slangc's reflection
+        // What the caustic keeps for itself, at the stride Slang's reflection
         // reports for `Private` (docs/abi.md, *The private buffer*). `STORAGE` alone: no
         // readback, no upload, and the usage flags say so.
         let private = device.create_buffer(&wgpu::BufferDescriptor {
@@ -2568,7 +2568,7 @@ const SET_SHAPE: u32 = 2;
 /// layout takes them.
 const SETS: [u32; 3] = [SET_BAR, SET_TEXT, SET_SHAPE];
 
-/// The stride slangc reports for `Private`, which is how many bytes the
+/// The stride Slang reports for `Private`, which is how many bytes the
 /// caustic's own memory takes (docs/abi.md, *The private buffer*).
 ///
 /// The embassy allocates this many and then never writes or reads one of them.
@@ -2665,7 +2665,7 @@ fn layout_entry(binding: &Binding, format: wgpu::TextureFormat) -> wgpu::BindGro
             ty: wgpu::BufferBindingType::Uniform,
             has_dynamic_offset: false,
             // The struct's size is pinned far more strictly than a floor here
-            // would: `bar/src/abi/tests.rs` compares slangc's own field offsets
+            // would: `bar/src/abi/tests.rs` compares Slang's own field offsets
             // against `offset_of!` on the Rust half, every build.
             min_binding_size: None,
         },
@@ -2709,7 +2709,7 @@ fn layout_entry(binding: &Binding, format: wgpu::TextureFormat) -> wgpu::BindGro
 ///
 /// SPIR-V bakes it into the module, and the `dst` image is declared
 /// format-*unknown* on the Bgra8 variant ([`DstFormat::Bgra8`](caustics_bar_abi::DstFormat::Bgra8)) precisely
-/// because SPIR-V has no BGRA storage format to name — so slangc reflects no
+/// because SPIR-V has no BGRA storage format to name — so Slang reflects no
 /// format for it at all there. Two images, two arms, and a third one is a
 /// panic rather than a guess: a storage image bound at the wrong format is
 /// wrong pixels on one driver and a device-lost on another.

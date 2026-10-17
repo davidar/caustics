@@ -39,11 +39,12 @@ bar's.
 ## Languages and layouts
 
 - **Slang, not WGSL**, for every shader. Shaders are compiled to SPIR-V by
-  slangc and loaded through wgpu's passthrough.
+  Slang in process, through `punchcutter-slang`, and loaded through wgpu's
+  passthrough.
 - **Shared layouts are declared once, in Rust**, in `bar/abi/` for the bar's
   two contracts. The Slang side, `bar_abi.slang` and `bar_wire.slang`, is
   rendered from it wherever a compile needs it and is not in the tree; edit
-  the Rust and build. A test compares every struct's offsets with slangc's
+  the Rust and build. A test compares every struct's offsets with Slang's
   reflection.
 - **The text engine is a dependency.** Shaping, glyph coverage and the
   OpenType arena's layout are punchcutter's; a change to them is a change
@@ -85,9 +86,10 @@ lockfile. Please do not run `cargo update` as part of an unrelated change.
   Integration tests with recorded bus bodies or captures are in a crate's
   `tests/`, with their data in `tests/data/`.
 - **Before a pull request**: `cargo check --workspace --all-targets` with
-  **zero warnings**, and `cargo test --workspace` green. Both need slangc on
-  `PATH`. The same two run in CI on every pull request, with the oracle on
-  lavapipe (docs/testing.md, *Continuous integration*).
+  **zero warnings**, and `cargo test --workspace` green. The first build
+  downloads the pinned Slang release (README.md, *Requirements*). The
+  same two run in CI on every pull request, with the oracle on lavapipe
+  (docs/testing.md, *Continuous integration*).
 - **The oracle**, if you touched the caustic's build, compose or shape
   passes: `CAUSTICS_BAR_ORACLE=1 cargo test -p caustics-bar oracle -- --nocapture` on
   any Vulkan device (lavapipe will do). New invariants go in

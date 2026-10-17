@@ -139,7 +139,7 @@ The sidecars the bar starts, compiled in as `SIDECARS` in
 | `caustics-notify` | `org.freedesktop.Notifications` (it *is* the daemon) | the bell, its history menu, toasts | no notifications from the bar |
 | `caustics-apps` | desktop entries, icon themes | app names, launch argv, colour icons as pixels | the dock shows app ids, letters for icons |
 | `caustics-glyphs` | fontconfig, the font files, symbolic icon themes | the font's curves and OpenType tables, symbolic icons as curves, fallback faces | **no text at all** |
-| `caustics-reload` | `caustics/`, the user's tunables, slangc | the compiled caustic, on every save | no hot reload; the bar runs the caustic built into it |
+| `caustics-reload` | `caustics/`, the user's tunables, Slang (in its own process) | the compiled caustic, on every save | no hot reload; the bar runs the caustic built into it |
 
 Each name resolves to the binary beside the bar's own executable, then to the
 name on `PATH`. `$CAUSTICS_SIDECARS` replaces the whole list with a
@@ -239,7 +239,7 @@ the "have" side in its inputs and compares for itself.
 
 **Witnesses are the caustic's `printf`.** A witness is a format literal in
 Slang (`witness(WITNESS_INFO, getStringHash("dock: {0} entries ({1}
-running)"), count, running)`) and up to ten words. slangc's reflection maps
+running)"), count, running)`) and up to ten words. Slang's reflection maps
 each literal's hash to its text, and the process substitutes and prints. A
 new log line is one line of Slang and no Rust. The caustic logs once per
 change, comparing against what it persisted, so the journal is a list of
@@ -253,7 +253,7 @@ There are two contracts, both in docs/abi.md, byte for byte:
   from one tree and changed in one commit; declared once in Rust
   (`caustics-bar-abi`), with the Slang side (`bar_abi.slang`,
   `bar_wire.slang`) rendered from the declaration wherever a compile needs it,
-  never kept in the tree. A test compares every struct's Rust offsets with slangc's reflection of the
+  never kept in the tree. A test compares every struct's Rust offsets with Slang's reflection of the
   Slang, both ways.
 - **The wire**, between the bar and any sidecar, which may be built
   separately. Byte-stable framing, and a reader that skips what it does not
@@ -278,8 +278,8 @@ were well-formed. One hash over the whole contract can.
 The text engine is **punchcutter** (README.md links it), a dependency:
 OpenType shaping and Slug glyph coverage in Slang compute shaders, with a CPU
 side that finds fonts through fontconfig and parses them into bytes. The bar's caustic imports its `text` and `shape` modules, and the
-bar's binary links only its byte views, its shaping structs and its slangc
-driver. Its contract (the curve buffers, the arena, the merged glyph space,
+bar's binary links only its byte views, its shaping structs and the
+reflection's types (`punchcutter-slang` without its compiler). Its contract (the curve buffers, the arena, the merged glyph space,
 the shaping dispatch) is `punchcutter/docs/arena.md`; its gaps (bidirectional
 text, complex-script shapers, colour fonts, variable instances) are on its
 own roadmap.
@@ -403,7 +403,7 @@ date order, the shape watchdog. To change the bar, edit that file in the
 checkout the bar was built from and save: `caustics-reload` recompiles, and
 the running bar moves within a second, keeping its popup, its menu level and
 its springs. A file that does not compile keeps the last good bar and prints
-slangc's diagnostic, naming the file. A different bar is a fork of the code,
+Slang's diagnostic, naming the file. A different bar is a fork of the code,
 and an update is a merge into it like any other.
 
 Why Slang rather than a configuration file: with a file, every new knob is a
@@ -452,9 +452,11 @@ A status bar must never be the reason a laptop's discrete GPU is awake.
 - **Render on events, not on vblank** (*The frame*, above). An idle bar
   draws nothing.
 - **Memory.** The unit caps the bar at 1 GB. The bar itself sits far below
-  that; the headroom is for `caustics-reload`'s slangc, which runs in the unit's
-  cgroup and peaks at 350–450 MB compiling one entry point. (A 256 MB cap
-  killed the whole unit on every uncached reload.)
+  that; the headroom is for `caustics-reload`'s compile, which runs in that
+  process, in the unit's cgroup, and peaks at about 400 MB linking every
+  entry point. The sidecar compiles on a thread that ends with the compile
+  and gives the memory back, so between saves it sits near 60 MB. (A 256 MB
+  cap killed the whole unit on every uncached reload.)
 
 ## Rules
 

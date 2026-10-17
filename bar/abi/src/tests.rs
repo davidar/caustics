@@ -1,6 +1,6 @@
 /// The rendered modules are written once into a directory named by the hash,
 /// and what is there is the rendering, byte for byte: a compile at run time
-/// puts this directory on slangc's include path and reads nothing else for
+/// puts this directory on the compiler's search path and reads nothing else for
 /// `import bar_abi;`.
 #[test]
 fn the_rendered_dir_holds_the_rendering() {

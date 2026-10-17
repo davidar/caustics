@@ -9,12 +9,12 @@ is the third tier, **the nested gate**.
 
 | tier | command | proves | needs | takes |
 |---|---|---|---|---|
-| unit tests | `cargo test --workspace` | every crate's logic: the wire's reader rules, each sidecar's frames against recorded bus bodies, the ABI layouts against slangc's reflection, the rendered Slang modules on disk against their Rust declaration | Rust, slangc; fontconfig for the text tests (they skip without it) | a minute or two |
-| the oracle | `CAUSTICS_BAR_ORACLE=1 cargo test -p caustics-bar oracle -- --nocapture` | the caustic's own passes (`bar_build`, `bar_compose`, `bar_shape`) on a real GPU with a real font: the tables they build obey `caustics/bar_check.slang`'s invariants, every block is the size its tunable says, every built item can be named, no glyph is a notdef | a Vulkan adapter (Mesa's lavapipe will do) | about a minute, most of it slangc |
+| unit tests | `cargo test --workspace` | every crate's logic: the wire's reader rules, each sidecar's frames against recorded bus bodies, the ABI layouts against Slang's reflection, the rendered Slang modules on disk against their Rust declaration | Rust (the first build downloads the pinned Slang release, README.md, *Requirements*); fontconfig for the text tests (they skip without it) | a minute or two |
+| the oracle | `CAUSTICS_BAR_ORACLE=1 cargo test -p caustics-bar oracle -- --nocapture` | the caustic's own passes (`bar_build`, `bar_compose`, `bar_shape`) on a real GPU with a real font: the tables they build obey `caustics/bar_check.slang`'s invariants, every block is the size its tunable says, every built item can be named, no glyph is a notdef | a Vulkan adapter (Mesa's lavapipe will do) | about a minute, most of it compiling |
 | the nested gate | `bar/nested-run.sh` | the bar as a process in a session: the layer surface and its configure, popups and their grabs, the dock against real windows, every sidecar on a real (private) session bus, clicks, hot reload, the install set's refusals, the watchdog, restarts | the list under *What the gate needs* | eight to ten minutes |
 
 The oracle is gated on `CAUSTICS_BAR_ORACLE=1` so that `cargo test --workspace`
-never creates a Vulkan instance or runs slangc beside the rest of the suite
+never creates a Vulkan instance or compiles `bar_check` beside the rest of the suite
 (whose sidecar tests time child processes). A machine with no usable adapter
 runs the suite green and simply never runs the oracle. The oracle lives
 inside the `caustics-bar` crate (`bar/src/oracle.rs`, `bar/src/oracle/tests.rs`)
@@ -115,7 +115,7 @@ could touch the developer's own bar.
   says how). By default the first render node whose driver is not NVIDIA's is
   used and the bar takes whatever adapter Vulkan offers it. On a laptop with
   a discrete GPU, point both at the integrated one.
-- `slangc` on `PATH` (or `$SLANGC`), `dbus-run-session`, `gdbus` and
+- `dbus-run-session`, `gdbus` and
   `busctl`, `flock`, and a terminal emulator for the steps that need a window
   (the first of `cosmic-term`, `kitty`, `foot`, `alacritty`, `xterm`).
 - On an immutable host whose `libwayland`/`libxkbcommon` lack the development
@@ -161,8 +161,7 @@ common ones), and almost every check in the steps is a read of it.
 bar, or would touch the machine running the gate. On the nested target each
 is one `SKIP` line, counted as skipped and never as passed:
 
-1. copying the install set, the unit, slangc and lavapipe into a guest (the
-   gate asserts slangc runs instead);
+1. copying the install set, the unit and lavapipe into a guest;
 2. the half of the notification step that hands the bus name over from
    another daemon (on a private bus nothing else holds it);
 3. audio devices, which loads null sinks into the session's PipeWire and
@@ -250,8 +249,8 @@ bar/nested-run.sh`, then run the gate.
 `.github/workflows/ci.yml` runs the first two tiers on a hosted runner for
 every push and pull request: the build with warnings as errors, the whole
 test suite, the oracle on Mesa's software Vulkan, the link check and the
-scrub check. It downloads slangc from shader-slang's releases and installs
-libwayland, fontconfig with a sans-serif font, lavapipe, `spirv-val` and
+scrub check. It caches the Slang release the first build downloads
+(`~/.cache/shader-slang/`) and installs libwayland, fontconfig with a sans-serif font, lavapipe, `spirv-val` and
 `dbus-daemon` from the distribution. The nested gate is not in it: it needs
 niri, a headless sway and a GPU.
 
@@ -275,7 +274,7 @@ install, not the per-change gate.
 What it needs, and does not yet ship: the harness it sources (`$TOPAZ_TESTS`,
 a directory holding that harness's `lib.sh` and `run.sh`, which boot the
 guest and provide ssh, QMP and VNC access keyed by a run id) and a guest
-image with a niri session at scale 2, sshd, a session bus, UPower, lavapipe
-and slangc. Both are topaz-os's today. Making the VM route this
+image with a niri session at scale 2, sshd, a session bus, UPower and
+lavapipe. Both are topaz-os's today. Making the VM route this
 project's own, an owned launcher over a stock cloud image, is on the roadmap
 (docs/roadmap.md).

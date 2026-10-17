@@ -6,14 +6,14 @@
 // which edge it takes, what goes in which wing — all of it is a
 // `public static const` below, and changing one and saving the file moves the
 // running bar within a second or so: `caustics-reload` (`reload/`) sees the save,
-// compiles the caustic with slangc and hands the bar the new SPIR-V.
+// compiles the caustic with Slang and hands the bar the new SPIR-V.
 //
 // **Editing it.** This file, in the checkout the bar was built from, is the
 // one to edit: save it and the running bar moves. A different bar is a fork of
 // the code, and an update is a merge into your edits like any other.
 //
 // The posture is the shader's, because this *is* a shader: a file that does
-// not compile keeps the last good bar and prints slangc's diagnostic verbatim
+// not compile keeps the last good bar and prints Slang's diagnostic verbatim
 // to the journal. A bad file is never a dead bar.
 //
 // Lengths are **logical** px unless a name says otherwise; the layout
@@ -159,7 +159,7 @@ public static const float CAL_GAP = 2.0;
 // -- what the bar's own items wear ------------------------------------------
 //
 // Three lists of icon names and one bool. A name is a `getStringHash`
-// literal: slangc records the text behind every such call in its reflection,
+// literal: Slang records the text behind every such call in its reflection,
 // the embassy puts the bytes in the strings buffer and indexes them by hash,
 // and `bar_build` reads the bytes back out of the pool to ask about. So a name
 // is decided here, in one place, and the embassy never learns what it means —
@@ -225,7 +225,7 @@ public static const float4 IMAGE_INK = float4(1.0, 1.0, 1.0, 1.0);
 /// The rows of a dock entry's right-click menu: `(label, verb, when)`, in the
 /// order they are shown.
 ///
-/// The **label** is a `getStringHash` literal. slangc records the text behind
+/// The **label** is a `getStringHash` literal. Slang records the text behind
 /// every such call in its reflection, so the bar finds the bytes by hash and
 /// never holds a list of strings of its own. Reword a row here, save, and the
 /// running bar's menu says the new thing within a second: the reload compiles

@@ -4,8 +4,10 @@
 members = ["apps", "audio", "bar", "bar/abi", "bluetooth", "glyphs", "harness/pointer", "network", "notify", "power", "reload", "sidecar", "sysmon", "tray"]
 # The edition-2024 default, stated because it matters here: `bar` depends on
 # `punchcutter-core` without features from its build script and with `gpu` from
-# its code, and only resolver 2 or later keeps a build script's graph from
-# pulling in wgpu.
+# its code, and on `punchcutter-slang` with its compiler from its build script
+# and its tests and without it from its code. Only resolver 2 or later keeps a
+# build script's graph from pulling in wgpu, and the binary's from pulling in
+# Slang.
 resolver = "3"
 
 # Every member inherits these, so the licence, the edition and the oldest
@@ -17,7 +19,7 @@ license = "MIT"
 rust-version = "1.88"
 
 # The text engine, one revision for every crate that takes it. A bump is the
-# same commit on all four lines, then `cargo fetch`.
+# same commit on all five lines, then `cargo fetch`.
 [workspace.dependencies]
 punchcutter-slang = { git = "https://github.com/davidar/punchcutter", rev = "c8e27b452ea44b7600c3425a2f7585d9a13ec4de" }
 punchcutter-core = { git = "https://github.com/davidar/punchcutter", rev = "c8e27b452ea44b7600c3425a2f7585d9a13ec4de" }

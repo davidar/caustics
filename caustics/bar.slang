@@ -101,21 +101,21 @@
 // caustic compiles once per swapchain format (the define reaches every
 // module, `dst` in `bar_state` among them):
 //
-//   -DDST_FORMAT_RGBA8   rgba8unorm swapchain (an explicit SPIR-V format)
-//   -DDST_FORMAT_BGRA8   bgra8unorm swapchain (SPIR-V has no BGRA image
-//                        format; the image is declared format-unknown, which
-//                        needs -default-image-format-unknown on the command
-//                        line and the BGRA8UNORM_STORAGE feature at runtime)
+//   DST_FORMAT_RGBA8   rgba8unorm swapchain (an explicit SPIR-V format)
+//   DST_FORMAT_BGRA8   bgra8unorm swapchain (SPIR-V has no BGRA image
+//                      format; the image is declared format-unknown, which
+//                      needs the compiler's image-format-unknown option,
+//                      `DstFormat::image_format_unknown`, and the
+//                      BGRA8UNORM_STORAGE feature at runtime)
 //
 // Six of the seven entries never touch `dst`, so a missing define is not a
 // hard #error: the image falls back to format-unknown, which still needs
-// -default-image-format-unknown. build.rs compiles every entry point once
-// per variant.
+// that option. build.rs compiles every entry point once per variant.
 //
 // One toolchain hazard, if you are editing this file: never let a
 // `[numthreads]` attribute detach from its entry point and land on a helper
-// above it. slangc 2026.14.1 segfaults instead of diagnosing it
-// (docs/slangc-numthreads.md).
+// above it. Slang 2026.14.1's command-line compiler segfaults instead of
+// diagnosing it (docs/slang-numthreads.md).
 // ---------------------------------------------------------------------------
 
 // ===========================================================================

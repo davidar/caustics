@@ -1,9 +1,9 @@
-# slangc 2026.14.1: a segfault on `[numthreads]` placed on a called helper
+# Slang 2026.14.1: a segfault on `[numthreads]` placed on a called helper
 
 An editing slip in a large caustic inserted a helper function *between* an
 entry point's attribute block and the entry point itself, leaving
 `[shader("compute")]` and `[numthreads(8,8,1)]` on a `float3`-returning
-helper. slangc segfaulted instead of diagnosing it. The file was minimised by
+helper. Slang's command-line compiler segfaulted instead of diagnosing it. The file was minimised by
 line-level delta debugging (about 700 lines to 110 automatically, then to 12
 by hand from the surviving ingredients).
 
@@ -24,9 +24,11 @@ void entry_point()
 }
 ```
 
+Compiled with the release's command-line compiler, with the options
+`repro.slang -target spirv -entry entry_point -stage compute -o out.spv`:
+
 ```
-slangc repro.slang -target spirv -entry entry_point -stage compute -o out.spv
-→ Segmentation fault (core dumped)
+Segmentation fault (core dumped)
 ```
 
 Control: the identical file with `[numthreads(8, 8, 1)]` moved onto
@@ -35,7 +37,7 @@ one and it compiles or errors normally:
 
 1. `[numthreads]` on a **non-entry** function (`[shader("compute")]` is not
    needed; `numthreads` alone suffices);
-2. that function **called** from the actual `-entry` function;
+2. that function **called** from the actual entry point;
 3. a **resource access** in the entry (the `RWTexture2D` store; without the
    texture it compiles fine).
 
@@ -71,6 +73,15 @@ entry points). The spirv-tools hardening is the deeper fix.
 - No workaround is needed in this tree: the trigger was an editing mistake,
   not a legitimate construct. A comment in `caustics/bar.slang` points here
   in case the pattern recurs.
+- The tree no longer compiles through the command-line compiler. The same
+  release in process, through `punchcutter_slang::compile_program` with the
+  settings every compile here uses, compiles the 12-line reproduction without
+  a crash and returns a module. Whether that holds for every shape of the
+  mistake is not known. If a compile does crash, it now takes its process
+  with it: `bar/build.rs` fails the build, and `caustics-reload` dies and is
+  restarted by the bar, which keeps the caustic it has. A restarted
+  `caustics-reload` compiles nothing until the next save, so a crashing file
+  is not a restart loop.
 - Not yet reported upstream (slang / SPIRV-Tools). This note is the report
   draft. The minimiser's method: an exit-139-specific oracle, greedy
   chunk-sweep ddmin at granularities 64 down to 1, then hand-derivation from

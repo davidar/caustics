@@ -32,7 +32,7 @@ neither is in the tree.
 | stability | none needed across builds; both halves change in one commit | byte-stable framing; a reader that skips what it does not know |
 | version | `BAR_ABI_VERSION` (u32), a courtesy for buffer dumps | `WIRE_MAGIC` in every frame header, and one `ABI_HASH` per child (*The ABI hash*) |
 | declared | once, in Rust (`caustics_bar_abi::buffer`); `bar_abi.slang` is rendered from it | once, in Rust (`caustics_bar_abi::wire`); the frames the caustic reads are rendered into `bar_wire.slang` |
-| enforced by | the layout test (every struct's `offset_of!` against slangc's reflection, both ways) | the reader: magic, kind, length, bounds, or the frame is skipped with one witness |
+| enforced by | the layout test (every struct's `offset_of!` against Slang's reflection, both ways) | the reader: magic, kind, length, bounds, or the frame is skipped with one witness |
 | what crosses | CPU facts and sidecar bytes in; actions, witnesses and one word out | whole-state frames |
 
 The **tunables module** (`caustics/bar_tunables.slang`) is a third thing: a
@@ -46,7 +46,7 @@ version check. It imports `bar_model.slang`, the caustic's own vocabulary
 std430. Every struct is 16-byte aligned and a multiple of 16 bytes. Every
 field is a `uint` or a `float` or an array of them, so every bit pattern is
 valid and the plain byte views are sound. No vectors in shared structs: a
-3-vector aligns to 16, and slangc's reflection once put one at the wrong
+3-vector aligns to 16, and Slang's reflection once put one at the wrong
 offset. **Padding is named `_padN`, is written as zero, and is read by
 neither side.** It exists only to reach the next multiple of 16, never to
 hold a place for later. Nothing is reserved: a retired word is deleted and
@@ -289,7 +289,7 @@ every string is a range into `strings`, and nothing is hashed on this side.
 - **`slots`**: the sidecar slots, by name. Exists so a witness can say
   `applet-caustics-power-3` without the process naming anything.
 - **`literals`**: every `getStringHash` literal of the running caustic, from
-  the reflection's `hashedStrings`, with its bytes in `strings`. This is how
+  the reflection's string table, with its bytes in `strings`. This is how
   text the process never reads reaches the GPU: the dock menu's labels, the
   clock's words, the icon lists.
 - **`strings`**: the UTF-8 the above address, padded to a word, then the
@@ -311,7 +311,7 @@ and constants: `Samples`/`ChartRow`/`CHART_*`, `RowsHeader`/`Row`/`ROW_*`/
 `REQ_*`, and the wire's `ACTION_*` kinds. **The wire is declared once for
 three parties**: the sidecar that writes a frame, the process that frames it,
 the caustic that reads it. The layout test checks these structs against
-slangc's reflection like any other.
+Slang's reflection like any other.
 
 - **`samples`**: one `Samples` body (*Samples*).
 - **`rows`**: `MAX_SLOTS` regions of `ROWS_ARENA_BYTES` (1 MiB in all). A
@@ -426,7 +426,7 @@ A witness is a **format literal** in the caustic and up to ten words:
 witness(WITNESS_INFO, getStringHash("dock: {0} entries ({1} running)"), count, running);
 ```
 
-slangc records the literal in the reflection's `hashedStrings`. The process
+Slang records the literal in the reflection's string table. The process
 resolves `head` through that table and substitutes:
 
 | spec | reads | prints |
@@ -533,7 +533,7 @@ adds glyphs, and a row's body is shaped too (up to `BODY_SHAPE_BYTES` of it a
 row).
 
 What the ABI promises about it is one paragraph. It is **one binding**,
-`private`, of the stride slangc's reflection reports for `Private`. The
+`private`, of the stride Slang's reflection reports for `Private`. The
 process allocates that many bytes, **never writes it and never reads it in
 production** (the usage flags say so: `STORAGE` alone in a shipped bar, with
 `COPY_DST` added only in a test build, where `set_menu_level` writes one
@@ -552,7 +552,7 @@ imported by every module of the caustic and by `bar_tunables.slang` (which needs
 `ITEM_KIND_COUNT` for `TEXT_PX` and `WHEN_*` for `DOCK_MENU`). It is the
 caustic's own module, hand-written, hot-reloadable, and **not a contract**: no
 Rust reads it. No id crosses the buffer. Tests reach into `private` by name
-through `punchcutter_core::slang::struct_offsets` (*Bindings and the oracle*), which is legibility, not a
+through the reflection's struct offsets (`Reflection::structs`, *Bindings and the oracle*), which is legibility, not a
 promise.
 
 ### Bindings and the oracle
@@ -608,10 +608,10 @@ Each expands to the Rust item **and** an entry in a `Decl` table: the
 struct's name, its fields with their Slang type names and its `///` text, or
 the constant's name, value and text. `rendered()` renders the tables into
 `bar_abi.slang` and `bar_wire.slang`, doc comments forwarded, under a header
-that says where they came from. Neither file is **in the tree**: every compile
-gets them the way it gets the text engine's modules. `bar/build.rs` writes
+that says where they came from. Neither file is **in the tree**, any more
+than the text engine's modules are. `bar/build.rs` writes
 them (`write_rendered`) into the directory under `OUT_DIR` it puts on the
-include path, and `caustics-reload`, the oracle and the reflection tests take
+search path, and `caustics-reload`, the oracle and the reflection tests take
 `rendered_dir()`, written once per contract into
 `$XDG_CACHE_HOME/caustics/rendered/<ABI_HASH>/`. So there is no second copy to
 fall out of step, and nothing to regenerate by hand. The macros and the renderer are the text engine's
@@ -621,10 +621,10 @@ way and checks in its own rendering, `shape_abi.slang`
 
 Two tests remain on the buffer side. The **layout test**: the macro also
 emits each struct's `offsets()` from `offset_of!`, and the test compares every
-struct in both tables against `punchcutter_core::slang::struct_offsets` of the
-reflection, both ways (a field on one side only fails). The **compile test**:
-every entry point in every swapchain-format variant, zero warnings. slangc
-lays out only the types a binding's layout needs, so a struct nothing binds
+struct in both tables against the struct offsets of the reflection
+(`punchcutter_slang::Reflection::structs`), both ways (a field on one side
+only fails). The **compile test**: every entry point in every
+swapchain-format variant, zero warnings. Slang lays out only the types a binding's layout needs, so a struct nothing binds
 is marked `bound: false` in the table and the test asserts it is absent
 rather than comparing it.
 
@@ -954,7 +954,7 @@ declare-once macros, and on nothing else. `SAMPLES_SIZE` (8336) is the `Samples`
 reader checks a frame's `len` against. The crate has its own tests for the
 wire (round trips, every reader rule above with a crafted stream, the
 builder); the buffer's layout and compile tests stay in `bar/src/abi/tests.rs`
-because they need slangc; the test that the rendered modules on disk are the
+because they need the Slang compiler; the test that the rendered modules on disk are the
 rendering is this crate's.
 
 **Writing a sidecar** is: depend on `caustics-bar-abi`; greet (*Hello*); build a
@@ -1095,7 +1095,7 @@ struct RequestBody {    // 16 B
 | 2 | `REQ_APP` | an app id | `App` |
 | 3 | `REQ_ICON` | a themed icon name that is not curves | `Pixmap` keyed by the name |
 | 4 | `REQ_COVER` | the bytes of a string | the curves sidecar appends what its font lacks, and answers in `Bytes` |
-| 5 | `REQ_PROGRAM` | the swapchain format's slangc define | a generation of `Module`s |
+| 5 | `REQ_PROGRAM` | the swapchain format's define | a generation of `Module`s |
 | 6 | `REQ_ACTIVATION` | an xdg-activation token | none |
 
 `REQ_LAST` is 6; a kind past it is skipped.
@@ -1155,7 +1155,7 @@ click for a child that has gone is stale. The process's witnesses are
 …`.
 
 **`REQ_PROGRAM`** names not a thing to look up but the **program** the bar
-can run: slangc's swapchain-format define, exactly as `Gpu::dst_format_args`
+can run: the swapchain format's define, exactly as `Gpu::dst_format_args`
 spells it. The bar sends it once, when the device comes up and it first knows
 the format; `caustics-reload` compiles for it on receipt and on every save
 thereafter, and compiles nothing before it. The replay above is what makes a
@@ -1241,7 +1241,7 @@ struct ModuleHeader {   // 40 B
     uint generation;    // 0   which compile; complete when `count` entry points have arrived whole
     uint index;         // 4   this entry point's place in the caustic's entry list; < count
     uint count;         // 8   entry points in this generation (`ENTRIES`, seven)
-    uint format;        // 12  wire::format_code() of the slangc define this was built for
+    uint format;        // 12  wire::format_code() of the define this was built for
     uint spirv_len;     // 16  the whole module's runs, repeated in every piece
     uint reflection_len;// 20
     uint name_len;      // 24  the entry point's name, from the entry list
@@ -1251,8 +1251,17 @@ struct ModuleHeader {   // 40 B
 }
 // then this piece of the payload, which is `name_len` bytes of entry
 // point, then `spirv_len` bytes of SPIR-V, then `reflection_len` bytes
-// of slangc's reflection JSON, in that order
+// of the program's reflection as JSON, in that order
 ```
+
+**The reflection** is `punchcutter_slang::Reflection` as its `to_json`
+writes it: the program's bindings, the field offsets of every struct it lays
+out, and the text of every `getStringHash` literal by hash. The compiler links
+every entry point of a generation at once and reflects the whole program, so
+every module of a generation carries the same reflection (about 14 KiB).
+Each carries it all the same, so that a module stays one self-contained
+record and this layout one per entry point. `bar/build.rs` bakes the same
+JSON once beside the bar's SPIR-V.
 
 **Chunked.** A module is one frame where it fits under `WIRE_MAX_BODY` and
 several, **in order**, where it does not (`bar_shape` with its reflection is
@@ -1268,16 +1277,16 @@ it, `bar/src/gpu.rs` names the pipelines from it.
 
 **A generation is all or nothing.** `Gpu::reload_all` rebuilds every pipeline
 or none, so the bar collects entry points by generation and swaps only when
-`count` have arrived **whole**, with the reflection of index 0 (the
-*parameters* in slangc's reflection are the program's, not an entry point's)
-and the `getStringHash` literals merged from all of them (a literal table is
-per entry point, because reflection reports only what an entry point
-reaches). A generation left incomplete when a newer one starts is dropped: a
+`count` have arrived **whole**, with the bindings of index 0's reflection
+and the `getStringHash` literals merged from every module's (identical when
+the generation came from one link, and a union all the same, so a writer
+that compiled its entry points apart still hands the bar the caustic's whole
+table). Any reflection that does not read refuses the generation. A generation left incomplete when a newer one starts is dropped: a
 compiler only abandons one by being killed mid-write or by recompiling on a
 newer save, and either way the older one is stale.
 
 **A failed compile sends nothing.** Silence is the answer: the running
-caustic stays, and slangc's diagnostics go to the sidecar's *stderr*,
+caustic stays, and Slang's diagnostics go to the sidecar's *stderr*,
 verbatim, which the bar's unit inherits, so they land in the journal.
 
 Reader rules: `count` 0, past `MAX_MODULES` (16), or `index >= count` → skip
@@ -1310,7 +1319,7 @@ the contract:
    the `BUF_*` numbers, which have no Slang half;
 3. `shape_abi.slang`, the OpenType arena's header, rendered by the text
    engine from the same kind of tables and taken as the copy compiled into
-   the engine (`punchcutter_core::modules::SHAPE_ABI`, a build-dependency of
+   the engine (`punchcutter_slang::modules::SHAPE_ABI`, a build-dependency of
    `caustics-bar-abi`), so a dependency bump that changes the arena is a new
    set;
 4. `bar/abi/src/entries.rs`, the entry list a `Module` frame is named by.
