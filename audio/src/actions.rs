@@ -116,11 +116,19 @@ pub fn op_for(row: u32, kind: u32, value: f32) -> Option<Op> {
     }
 }
 
+/// Whether `op` writes something the on-screen display would show (the
+/// volume, a mute, a default device), so the change it brings round is this
+/// sidecar's own and not a toast (`crate::osd`). Opening the settings program
+/// writes nothing.
+pub fn writes(op: Op) -> bool {
+    !matches!(op, Op::Settings)
+}
+
 /// `ACTION_MENU_OPEN` and `ACTION_MENU_CLOSE`: the bar telling the sidecar that owns
-/// a menu that it opened or closed (docs/abi.md, *Action*). This applet has
-/// nothing to do with either — it is told, it is not asked — so the loop drops
-/// them before the `nothing to do` witness: one line per menu open, on every
-/// applet, would be journal noise for nothing.
+/// a menu that it opened or closed (docs/abi.md, *Action*). The applet is told,
+/// not asked: the loop keeps whether the menu is open for the on-screen
+/// display (`crate::osd`) and says nothing, since one line per menu open, on
+/// every applet, would be journal noise for nothing.
 pub fn is_menu_notice(kind: u32) -> bool {
     kind == ACTION_MENU_OPEN || kind == ACTION_MENU_CLOSE
 }

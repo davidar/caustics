@@ -24,15 +24,19 @@
 //! ever moves the volume on the machine it runs on.
 
 pub mod actions;
+pub mod osd;
 pub mod rows;
 pub mod subscribe;
 pub mod wpctl;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use caustics_bar_abi::buffer::ACTION_MENU_OPEN;
+use caustics_bar_abi::wire::ACTION_TOAST_SHOWN;
 use caustics_bar_abi::wire::{self, ActionBody, Frame};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 
+use osd::{Flagged, Osd};
 use wpctl::Sound;
 
 /// The usage text, on stderr — stdout carries frames and nothing else. The bar
@@ -53,6 +57,18 @@ const DEBOUNCE: Duration = Duration::from_millis(50);
 /// self-healing — no `wpctl`, no default sink, no `pactl` and so no wake-ups at
 /// all — for the price of six short-lived children a minute.
 const RETRY: Duration = Duration::from_secs(30);
+
+/// How long the on-screen display stays up after the last change that raised
+/// it (`osd`): long enough to read a volume off the slider, short enough that
+/// a key press is not a popup to wait out. Each further change extends it.
+pub const OSD_HOLD: Duration = Duration::from_millis(1500);
+
+/// How long after this sidecar's own write a change is its own and not shown:
+/// the user is dragging the slider or clicking a mute in the menu, or has
+/// just left it, and the `pactl` event a write brings round arrives a round
+/// trip later. Without it a menu that closes with the flags still set would
+/// pop a toast of what the user just did.
+pub const OSD_OWN_HOLD: Duration = Duration::from_millis(1500);
 
 /// This sidecar's witness line: `caustics-audio: …` on stderr, in **one write**
 /// (docs/abi.md, *Writing a sidecar*; the one copy is `caustics_sidecar::Witness`).
@@ -106,7 +122,9 @@ async fn serve() -> i32 {
     let mut revision = 1u32;
     let mut sound = wpctl::read(None).await;
     say_absence(&sound, None);
-    if !publish(&mut out, revision, &sound) {
+    // The first reading is never a toast: nothing changed, it was only read.
+    let mut osd = Osd::default();
+    if !publish(&mut out, revision, &sound, osd.flagged()) {
         return 0;
     }
 
@@ -115,19 +133,34 @@ async fn serve() -> i32 {
     // happened.
     retry.tick().await;
     loop {
+        let deadline = osd.deadline();
+        let ends = tokio::time::sleep_until(tokio::time::Instant::from_std(
+            deadline.unwrap_or_else(Instant::now),
+        ));
         tokio::select! {
             // `Some(..)`: the watcher's end closing simply disables this arm.
             Some(()) = wakeups.recv() => {
                 // A volume change is several events; let the burst land before paying for the three `wpctl` children of a read.
                 tokio::time::sleep(DEBOUNCE).await;
                 while wakeups.try_recv().is_ok() {}
-                if !refresh(&mut out, &mut revision, &mut sound).await {
+                if !refresh(&mut out, &mut revision, &mut sound, &mut osd).await {
                     return 0;
                 }
             }
             _ = retry.tick() => {
-                if !refresh(&mut out, &mut revision, &mut sound).await {
+                if !refresh(&mut out, &mut revision, &mut sound, &mut osd).await {
                     return 0;
+                }
+            }
+            // The on-screen display's time is up: the same picture without
+            // its bits, which is what ends the toast.
+            _ = ends, if deadline.is_some() => {
+                if osd.expire(Instant::now()) {
+                    witness("osd: ended (timeout)");
+                    revision += 1;
+                    if !publish(&mut out, revision, &sound, osd.flagged()) {
+                        return 0;
+                    }
                 }
             }
             action = incoming.recv() => match action {
@@ -135,14 +168,35 @@ async fn serve() -> i32 {
                     witness("stdin closed; exiting");
                     return 0;
                 }
-                // The bar's two menu notices, which this applet has no use
-                // for (`actions::is_menu_notice`).
-                Some(action) if actions::is_menu_notice(action.kind) => {}
+                // The toast that showed our rows ended (one of these per row
+                // it showed): the burst is over, whatever its clock says.
+                Some(action) if action.kind == ACTION_TOAST_SHOWN => {
+                    if osd.end() {
+                        witness("osd: ended (shown)");
+                        revision += 1;
+                        if !publish(&mut out, revision, &sound, osd.flagged()) {
+                            return 0;
+                        }
+                    }
+                }
+                // The bar's two menu notices (`actions::is_menu_notice`): a
+                // change while the menu is up is on screen already, and the
+                // menu opening ends a burst.
+                Some(action) if actions::is_menu_notice(action.kind) => {
+                    if osd.menu(action.kind == ACTION_MENU_OPEN) {
+                        witness("osd: ended (menu)");
+                        revision += 1;
+                        if !publish(&mut out, revision, &sound, osd.flagged()) {
+                            return 0;
+                        }
+                    }
+                }
                 Some(action) => match actions::op_for(action.row, action.kind, action.value) {
                     // A drag's values go to the setter, newest wins
                     // (`actions::spawn_volume_setter`); the loop never waits
                     // on a `wpctl` for them.
                     Some(actions::Op::SetVolume(percent)) => {
+                        osd.own_write(Instant::now());
                         let _ = volume.send(Some(percent));
                     }
                     // The reply to an action is the next frame, which the
@@ -150,7 +204,12 @@ async fn serve() -> i32 {
                     // click is first checked against the lists it was drawn
                     // from (`actions::admit`).
                     Some(op) => match actions::admit(op, sound.devices()) {
-                        Ok(op) => actions::perform(op).await,
+                        Ok(op) => {
+                            if actions::writes(op) {
+                                osd.own_write(Instant::now());
+                            }
+                            actions::perform(op).await;
+                        }
                         Err(why) => witness(&why),
                     },
                     None => witness(&format!(
@@ -163,25 +222,35 @@ async fn serve() -> i32 {
     }
 }
 
-/// Read both nodes and publish if the picture moved. `false` means stdout is
-/// gone and so are we.
-async fn refresh(out: &mut impl std::io::Write, revision: &mut u32, sound: &mut Sound) -> bool {
+/// Read both nodes and publish if the picture moved, raising the on-screen
+/// display when the change is one to show (`osd::decide`). `false` means
+/// stdout is gone and so are we.
+async fn refresh(
+    out: &mut impl std::io::Write,
+    revision: &mut u32,
+    sound: &mut Sound,
+    osd: &mut Osd,
+) -> bool {
     let next = wpctl::read(sound.devices()).await;
     if next == *sound {
         return true;
     }
     say_absence(&next, Some(sound));
+    if let Some(line) = osd.change(Some(sound), &next, Instant::now()) {
+        witness(&line);
+    }
     *sound = next;
     *revision += 1;
-    publish(out, *revision, sound)
+    publish(out, *revision, sound, osd.flagged())
 }
 
-/// Write the whole picture. `false` means stdout is gone and so are we.
-fn publish(out: &mut impl std::io::Write, revision: u32, sound: &Sound) -> bool {
+/// Write the whole picture, with the on-screen display's bits. `false` means
+/// stdout is gone and so are we.
+fn publish(out: &mut impl std::io::Write, revision: u32, sound: &Sound, osd: Flagged) -> bool {
     let audio = sound.audio();
     let none = wpctl::Devices::default();
     let devices = sound.devices().unwrap_or(&none);
-    let frame = rows::picture(revision, audio, devices, actions::settings_available());
+    let frame = rows::toasting(revision, audio, devices, actions::settings_available(), osd);
     if let Err(err) = wire::write(out, &frame) {
         if err.kind() == std::io::ErrorKind::BrokenPipe {
             witness("stdout closed; exiting");

@@ -11,10 +11,11 @@
 
 use caustics_bar_abi::buffer::APPLET_AUDIO;
 use caustics_bar_abi::wire::{
-    Frame, RFLAG_CHECKABLE, RFLAG_CHECKED, RFLAG_DISABLED, RFLAG_HAS_MENU, RFLAG_RADIO,
-    RFLAG_SUBMENU, RowRef, RowsBuilder,
+    Frame, RFLAG_ATTENTION, RFLAG_CHECKABLE, RFLAG_CHECKED, RFLAG_DISABLED, RFLAG_HAS_MENU,
+    RFLAG_RADIO, RFLAG_SHOW, RFLAG_SUBMENU, RowRef, RowsBuilder,
 };
 
+use crate::osd::Flagged;
 use crate::wpctl::{Audio, Device, Devices};
 
 /// The row ids. Small integers, stable across every frame this process writes
@@ -117,6 +118,21 @@ pub fn icon_for(percent: f32, muted: bool) -> &'static str {
 /// the separator above it are left out: a row that opens nothing is worse
 /// than no row.
 pub fn picture(revision: u32, audio: Option<&Audio>, devices: &Devices, settings: bool) -> Frame {
+    toasting(revision, audio, devices, settings, Flagged::NONE)
+}
+
+/// The same picture, with the on-screen display's bits (`crate::osd`): the
+/// chip carries `RFLAG_SHOW` while any row is flagged, and each flagged row
+/// `RFLAG_ATTENTION`, which is what the caustic opens a toast from
+/// (docs/abi.md, **Toasts**). Ids, order and every other flag are the plain
+/// picture's, so a toast's slider follows the volume in place.
+pub fn toasting(
+    revision: u32,
+    audio: Option<&Audio>,
+    devices: &Devices,
+    settings: bool,
+    osd: Flagged,
+) -> Frame {
     let mut rows = RowsBuilder::new(APPLET_AUDIO, revision);
     let Some(audio) = audio else {
         return rows.frame();
@@ -129,7 +145,7 @@ pub fn picture(revision: u32, audio: Option<&Audio>, devices: &Devices, settings
         // The level the caustic draws on the icon is a fraction, so an
         // overamplified sink draws a full bar rather than an overflowing one.
         audio.volume.clamp(0.0, 1.0),
-        RFLAG_HAS_MENU,
+        RFLAG_HAS_MENU | if osd.any() { RFLAG_SHOW } else { 0 },
     );
     // A volume above 100 shows as a full slider: the track is the range a drag
     // may ask for, and a drag never asks to overamplify.
@@ -140,21 +156,21 @@ pub fn picture(revision: u32, audio: Option<&Audio>, devices: &Devices, settings
         percent.clamp(VOLUME_MIN, VOLUME_MAX),
         VOLUME_MIN,
         VOLUME_MAX,
-        0,
+        attention(osd.volume),
     );
     rows.menu(
         item,
         ROW_MUTE,
         Some(LABEL_MUTE),
         Some(ICON_MUTED),
-        checkbox(audio.muted),
+        checkbox(audio.muted) | attention(osd.mute),
     );
     rows.menu(
         item,
         ROW_MIC,
         Some(LABEL_MIC),
         Some(ICON_MIC),
-        checkbox(audio.mic_muted),
+        checkbox(audio.mic_muted) | attention(osd.mic),
     );
     rows.separator(item, ROW_SEP);
     let output = rows.menu(
@@ -217,4 +233,9 @@ fn choices(rows: &mut RowsBuilder, parent: RowRef, kind: u32, devices: &[Device]
 /// A checkable row's flags, checked or not.
 fn checkbox(checked: bool) -> u32 {
     RFLAG_CHECKABLE | if checked { RFLAG_CHECKED } else { 0 }
+}
+
+/// `RFLAG_ATTENTION` on a row the on-screen display shows.
+fn attention(flagged: bool) -> u32 {
+    if flagged { RFLAG_ATTENTION } else { 0 }
 }
