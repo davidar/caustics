@@ -211,6 +211,22 @@ public struct NotifyScratch
     public uint toast_said_held;
 };
 
+/// What the applets keep (`applets.slang`): what their last build was
+/// witnessed as, each slot's first chip, and inside one build the open
+/// menu's slot's rows' item indices, which its rows hang off.
+public struct AppletsScratch
+{
+    /// Chips, as last witnessed (`applets: N`).
+    public uint said;
+    /// The `Row.id` of each slot's first `ROW_ITEM`, kept when the sidecar
+    /// goes so a departure witness still spells `applet-<name>` and not
+    /// `applet-<name>-<row>`.
+    public uint slot_first_item[MAX_SLOTS];
+    /// Frame row index -> item index for the open menu's slot, written by
+    /// the chips and the rows of one `bar_build` and read by the rows.
+    public uint build_placed[MAX_ROWS];
+};
+
 /// What the dock keeps (`dock.slang`): what its last build was witnessed
 /// as, and inside one build each app's window count and entry index, which
 /// the entry's menu and the windows hang off.
@@ -374,6 +390,8 @@ public struct Private
     public WakeScratch wake;
     /// The dock's (`dock.slang`).
     public DockScratch dock;
+    /// The applets' (`applets.slang`).
+    public AppletsScratch applets;
 
     // -- the anchor, likewise ----------------------------------------------
     /// The `(EDGE, BAR_HEIGHT)` pair last pushed as an `ACT_ANCHOR`. Zero
@@ -408,7 +426,6 @@ public struct Private
     // "Once per change" is this file's duty: the embassy prints every
     // record it reads and dedups nothing. NO_INDEX is "nothing said yet", so
     // the first frame witnesses everything.
-    public uint said_applets;
     public uint said_built_items;
     public uint said_built_blocks;
     public uint said_built_glyphs;
@@ -433,10 +450,6 @@ public struct Private
     // `value`, and the label and icon bytes their ranges name — so a slider
     // tick compares equal and costs no model pass at all.
     public uint rows_shape[MAX_SLOTS];
-    /// The `Row.id` of each slot's first `ROW_ITEM`, kept when the sidecar
-    /// goes so a departure witness still spells `applet-<name>` and not
-    /// `applet-<name>-<row>`.
-    public uint slot_first_item[MAX_SLOTS];
 
     // -- the answers arena, indexed once per build (docs/abi.md, *The arenas*) -------------------
     //
@@ -465,7 +478,6 @@ public struct Private
     /// Lines of `body_lines` in use.
     public uint body_line_count;
     public BodyLine body_lines[MAX_BODY_POOL];
-
 
     // -- the tables ---------------------------------------------------------
     public Element elements[MAX_ELEMENTS];
@@ -648,7 +660,7 @@ public void ensure_private()
     // "Nothing witnessed yet", so the first frame says everything once.
     private[0].dock.said_entries = NO_INDEX;
     private[0].dock.said_running = NO_INDEX;
-    private[0].said_applets = NO_INDEX;
+    private[0].applets.said = NO_INDEX;
     private[0].sysmon.said_charts = NO_INDEX;
     private[0].said_built_items = NO_INDEX;
     private[0].said_built_blocks = NO_INDEX;
@@ -667,7 +679,7 @@ public void ensure_private()
     // witness name the chip rather than one of its rows.
     for (uint s = 0u; s < MAX_SLOTS; ++s)
     {
-        private[0].slot_first_item[s] = NO_INDEX;
+        private[0].applets.slot_first_item[s] = NO_INDEX;
     }
     // An unwritten item slot must read as "nothing here" rather than as block
     // 0 of item 0, and an unwritten element must not be `EFLAG_PRESENT`. Zero
@@ -1514,9 +1526,6 @@ public Row item_row(Item it)
     uint at = item_fact_row(it);
     return at == NO_INDEX ? row_none() : row_at(at / MAX_ROWS, at % MAX_ROWS);
 }
-
-public float applet_level(Item it) { return item_level(it, item_row(it)); }
-public float slider_position(Item it) { return item_position(it, item_row(it)); }
 
 // ---------------------------------------------------------------------------
 // Joining by name: this file's own hash, and the two directories
