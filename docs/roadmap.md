@@ -85,6 +85,39 @@ device without the shader clock) are punchcutter's roadmap.
     `caustics-notify-watch`, which reports a notification click that reached no
     window.
 
+## Out-of-tree sidecars
+
+A sidecar that is a chip with a menu already needs no change here: it
+writes `Rows` frames under its own applet value, the tunables'
+`APPLET_OTHER` pass places it, and `bar/abi/examples/rows_demo.rs` is the
+worked example (docs/architecture.md, *Sidecars*). Three things still
+stand between that and a sidecar from another tree.
+
+12. **An additive roster.** `SIDECARS` is compiled in and `$CAUSTICS_SIDECARS`
+    *replaces* it, so adding one sidecar to an installed bar means naming
+    all of them in a unit drop-in. A variable that appends, or a directory
+    beside the set whose entries are spawned like the compiled names,
+    resolved the same way (docs/abi.md, *Lifecycle*).
+13. **The ABI pin, written down.** The bar refuses a sidecar built against
+    another ABI at its first frame (docs/abi.md, *Hello*), so a sidecar from
+    another tree pins `caustics-bar-abi` to the revision the installed set
+    was built from. That is the rule working; it needs saying in *Writing a
+    sidecar*, with the way to read the installed set's revision.
+14. **A sidecar's own look.** Everything a third-party sidecar shows is drawn
+    by `applets`: the generic chip, rows and sliders. A sidecar that wants
+    its own drawing (as the charts and the toasts have) needs a subject
+    module in the caustic, which today means editing `caustics/`. The design
+    that removes that: a sidecar ships a Slang module, the reload sidecar
+    links it into the program with the rest, and `bar_dispatch` and the
+    `Private` struct are assembled from what the modules declare instead of
+    written by hand. A wire change (a `Module` frame from a sidecar other
+    than `caustics-reload`; a module's declared kinds and scratch) and a
+    build-time generator. Its prerequisite is small and worth doing first:
+    the dock preview's dwell fields and the applets' slider drag live in the
+    top of `Private` and the dwell is written by `bar_popups`; each belongs
+    in its subject's scratch, with `bar_popups` telling the dock its popup
+    ended through `dispatch_popup_ending`, as it tells notify today.
+
 ## Named open once, not re-checked against the tree since
 
 Smaller items left by earlier work; whether later work closed them has not
