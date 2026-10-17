@@ -175,9 +175,8 @@ public StructuredBuffer<Facts> facts;
 public static const uint WAKE_SOURCES = 16u;
 
 /// What the toasts keep between dispatches (`notify.slang`): the hold on an
-/// ended toast, and the open toast's own rows. `bar_popups` reads the rows
-/// too, to tell their sidecar which were shown when the popup ends and to
-/// cap a toast row's body lines (`say_toast_shown`, `toast_index_of`).
+/// ended toast, and the open toast's own rows. Read by `notify.slang` alone:
+/// the body-line cap the layout needs rides each row (`item_body_cap`).
 public struct NotifyScratch
 {
     /// A toast the compositor dismissed or refused is not

@@ -37,37 +37,11 @@ public bool popup_live()
     return st == POPUP_ASKED || st == POPUP_UP;
 }
 
-/// A toast that was on screen is ending: tell its sidecar which rows it
-/// showed, one `ACTION_TOAST_SHOWN` per row (an `ActionBody` names one row),
-/// so the sidecar marks exactly those shown.
-/// Only a toast the compositor **mapped** showed anything — one refused, or
-/// replaced before it mapped, says nothing, and the sidecar's own clock is
-/// what retires its rows. Called from every route that ends a toast while it
-/// is still `POPUP_UP`: `close_popup` (the chip stopped asking, its rows went,
-/// a click), `request_popup` (a menu replacing it) and `CMD_POPUP_DONE` (the
-/// compositor dismissing it); the state moving on is what keeps it to once.
-public void say_toast_shown()
-{
-    if (private[0].popup_kind != POPUP_TOAST || private[0].popup_state != POPUP_UP)
-    {
-        return;
-    }
-    uint slot = private[0].notify.toast_slot;
-    uint count = min(private[0].notify.toast_count, TOAST_ROWS_CAP);
-    for (uint k = 0u; k < count; ++k)
-    {
-        Args a = args_new();
-        arg(a, slot);
-        arg(a, private[0].notify.toast_ids[k]);
-        arg(a, ACTION_TOAST_SHOWN);
-        arg(a, 0u);              // no button
-        arg2(a, float2(0.0, 0.0));
-        argf(a, 0.0);
-        arg(a, 0u);              // no token
-        push_action(ACT_SIDECAR, a);
-    }
-    witness2(WITNESS_INFO, getStringHash("toast: shown slot={0} rows={1}"), slot, count);
-}
+/// A popup that is live is ending, or being replaced by one of kind `next`
+/// (0 when it is closing): its subject's last word, said before the popup's
+/// state moves on. A link-time hook, as the subjects' kinds are: this module
+/// names no subject, and `bar_dispatch` binds it to the one the popup is.
+extern void dispatch_popup_ending(uint next);
 
 /// Ask the embassy for a popup, as one message (docs/abi.md, *The action ring*).
 ///
@@ -83,13 +57,12 @@ public void say_toast_shown()
 /// because this file has already moved on to the new one.
 public void request_popup(uint kind, float4 anchor, Id id, float2 want)
 {
-    // A toast is the one popup a grabbed menu ends without asking: the
-    // replace path below tears its surface down, since the bar has one popup.
-    if (popup_live() && private[0].popup_kind == POPUP_TOAST && kind != POPUP_TOAST)
+    // The replace path below tears the old surface down, since the bar has
+    // one popup: its subject has its last word first (a toast is the one a
+    // grabbed menu ends without asking).
+    if (popup_live())
     {
-        witness1(WITNESS_INFO, getStringHash("toast: closed ({0:s})"),
-                 kind == POPUP_MENU ? getStringHash("menu") : getStringHash("replaced"));
-        say_toast_shown();
+        dispatch_popup_ending(kind);
     }
     uint slot = id_tag(id) == ID_APPLET ? id_aux(id) : NO_INDEX;
     uint row = id_tag(id) == ID_APPLET ? id_payload(id) : 0u;
@@ -124,29 +97,9 @@ public void close_popup()
     {
         return;
     }
-    say_toast_shown();
+    dispatch_popup_ending(0u);
     private[0].popup_state = POPUP_ENDING;
     act(ACT_POPUP_CLOSE);
-}
-
-/// The open toast's index of item `it`, or NO_INDEX when it is none of its
-/// rows (or no toast is up).
-public uint toast_index_of(Item it)
-{
-    if (private[0].popup_kind != POPUP_TOAST || id_tag(it.id) != ID_APPLET
-        || id_aux(it.id) != private[0].notify.toast_slot)
-    {
-        return NO_INDEX;
-    }
-    uint count = min(private[0].notify.toast_count, TOAST_ROWS_CAP);
-    for (uint k = 0u; k < count; ++k)
-    {
-        if (private[0].notify.toast_ids[k] == id_payload(it.id))
-        {
-            return k;
-        }
-    }
-    return NO_INDEX;
 }
 
 /// A hover preview that is up when a click opens a menu instead: end its

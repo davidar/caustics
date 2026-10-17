@@ -290,10 +290,11 @@ public uint body_shown(Item it)
     if (private[0].popup_kind == POPUP_TOAST)
     {
         // A toast's row shows the lines it opened with and never more: its
-        // rect was sized for them. A re-wrap that finds
-        // fewer leaves the rest of the rect empty; one that finds more cuts.
-        uint k = toast_index_of(it);
-        cap = k == NO_INDEX ? TOAST_BODY_LINES : private[0].notify.toast_lines[k];
+        // rect was sized for them, and the row carries that cap
+        // (`item_body_cap`). A re-wrap that finds fewer leaves the rest of
+        // the rect empty; one that finds more cuts.
+        uint fixed = item_body_cap(it);
+        cap = fixed == NO_INDEX ? TOAST_BODY_LINES : fixed;
     }
     return min(item_body_line_count(it), min(cap, MAX_BODY_LINES));
 }

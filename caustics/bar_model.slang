@@ -346,7 +346,10 @@ public struct Item
     /// A menu row's **body**: how many blocks from
     /// `aux_block` on are its body, in the low byte, and BODY_MORE when the
     /// body has bytes past what was shaped. 0 for every row without one and
-    /// every other kind. Written by `bar_build`.
+    /// every other kind. Written by `bar_build`. With BODY_CAPPED, the next
+    /// byte is the body lines the row shows in the popup that fixed them when
+    /// it opened (a toast's row keeps the lines it opened with); written by
+    /// that popup's subject each frame, cleared by every build.
     public uint body_blocks;
     /// The body's wrapped lines: the first in `Private.body_lines` in the low
     /// 16 bits, the count in the next 8, and BODY_MORE when the wrap stopped
@@ -357,6 +360,21 @@ public struct Item
 
 /// `Item.body_blocks` and `Item.body_lines`: there is more body than this.
 public static const uint BODY_MORE = 1u << 31;
+/// `Item.body_blocks`: the row carries its own body-line cap, in bits 8..15.
+public static const uint BODY_CAPPED = 1u << 30;
+
+/// The body lines a row's popup fixed it to, or NO_INDEX when it fixed none.
+public uint item_body_cap(Item it)
+{
+    return (it.body_blocks & BODY_CAPPED) != 0u ? ((it.body_blocks >> 8) & 0xffu) : NO_INDEX;
+}
+
+/// `body_blocks` with the cap `lines` set, or cleared when `lines` is NO_INDEX.
+public uint body_blocks_capped(uint body_blocks, uint lines)
+{
+    uint word = body_blocks & ~(BODY_CAPPED | (0xffu << 8));
+    return lines == NO_INDEX ? word : word | BODY_CAPPED | (min(lines, 0xffu) << 8);
+}
 
 /// The body's block count, its first wrapped line and its line count.
 public uint item_body_block_count(Item it)

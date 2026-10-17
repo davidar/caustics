@@ -117,6 +117,96 @@ public bool toast_holds(uint id)
     return false;
 }
 
+/// The open toast's index of item `it`, or NO_INDEX when it is none of its
+/// rows (or no toast is up).
+uint toast_index_of(Item it)
+{
+    if (private[0].popup_kind != POPUP_TOAST || id_tag(it.id) != NOTIFY_ROW_TAG
+        || id_aux(it.id) != private[0].notify.toast_slot)
+    {
+        return NO_INDEX;
+    }
+    uint count = min(private[0].notify.toast_count, TOAST_ROWS_CAP);
+    for (uint k = 0u; k < count; ++k)
+    {
+        if (private[0].notify.toast_ids[k] == id_payload(it.id))
+        {
+            return k;
+        }
+    }
+    return NO_INDEX;
+}
+
+/// Give each of the open toast's rows the body lines it opened with, and
+/// every other row none (`item_body_cap`), so the layout and the paint cap a
+/// row's body by the row alone. While a toast is up only: in any other
+/// popup the cap is not read. Called before the layout every frame (a build
+/// clears it) and as a toast opens.
+public void notify_cap_rows()
+{
+    if (private[0].popup_kind != POPUP_TOAST)
+    {
+        return;
+    }
+    uint n = live_items();
+    for (uint i = 0u; i < n; ++i)
+    {
+        uint k = toast_index_of(private[0].items[i]);
+        uint lines = k == NO_INDEX ? NO_INDEX : private[0].notify.toast_lines[k];
+        private[0].items[i].body_blocks = body_blocks_capped(private[0].items[i].body_blocks, lines);
+    }
+}
+
+/// A toast that was on screen is ending: tell its sidecar which rows it
+/// showed, one `ACTION_TOAST_SHOWN` per row (an `ActionBody` names one row),
+/// so the sidecar marks exactly those shown.
+/// Only a toast the compositor **mapped** showed anything — one refused, or
+/// replaced before it mapped, says nothing, and the sidecar's own clock is
+/// what retires its rows. Called from every route that ends a toast while it
+/// is still `POPUP_UP`: `close_popup` (the chip stopped asking, its rows went,
+/// a click) and `request_popup` (a menu replacing it), both through
+/// `notify_popup_ending`, and `CMD_POPUP_DONE` (the compositor dismissing
+/// it); the state moving on is what keeps it to once.
+void say_toast_shown()
+{
+    if (private[0].popup_kind != POPUP_TOAST || private[0].popup_state != POPUP_UP)
+    {
+        return;
+    }
+    uint slot = private[0].notify.toast_slot;
+    uint count = min(private[0].notify.toast_count, TOAST_ROWS_CAP);
+    for (uint k = 0u; k < count; ++k)
+    {
+        Args a = args_new();
+        arg(a, slot);
+        arg(a, private[0].notify.toast_ids[k]);
+        arg(a, ACTION_TOAST_SHOWN);
+        arg(a, 0u);              // no button
+        arg2(a, float2(0.0, 0.0));
+        argf(a, 0.0);
+        arg(a, 0u);              // no token
+        push_action(ACT_SIDECAR, a);
+    }
+    witness2(WITNESS_INFO, getStringHash("toast: shown slot={0} rows={1}"), slot, count);
+}
+
+/// The toast that is up is ending (`next` 0) or being replaced by a popup of
+/// kind `next` (`request_popup`, through `bar_dispatch`). A grabbed menu
+/// replacing it is the one end this file did not ask for, so it says so.
+public void notify_popup_ending(uint next)
+{
+    if (private[0].popup_kind != POPUP_TOAST || next == POPUP_TOAST)
+    {
+        return;
+    }
+    if (next != 0u)
+    {
+        witness1(WITNESS_INFO, getStringHash("toast: closed ({0:s})"),
+                 next == POPUP_MENU ? getStringHash("menu") : getStringHash("replaced"));
+    }
+    say_toast_shown();
+}
+
 /// End the toast, saying why: the chip stopped asking, its frame went, none
 /// of its rows is left, or a row in it was clicked. (A menu replacing it says
 /// so in `request_popup`; the compositor ending it, in `CMD_POPUP_DONE`.)
@@ -272,6 +362,7 @@ public bool step_toast_pending(bool rebuild)
     private[0].notify.toast_pending = 0u;
     private[0].notify.toast_said_held = NO_INDEX;
     request_popup(POPUP_TOAST, private[0].elements[elem].rect, id, size);
+    notify_cap_rows();
     witness_toast_open(slot, count);
     return true;
 }

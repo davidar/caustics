@@ -92,7 +92,13 @@ where a pass of the bar's needed a subject's answer: the pass is split, and
 `bar.slang` calls the bar's half and `bar_dispatch` for the rest (the layout
 places the strip, then asks the popup's subject; `place` records an
 element, and its `layout:` line is said after the layout, by `bar.slang`,
-which can name it).
+which can name it). Where a bar module must give a subject its word in the
+middle of its own work, it declares the function `extern` and `bar_dispatch`
+defines it with `export`, as it binds the kinds: `close_popup` and
+`request_popup`, which every subject calls, end a toast through
+`dispatch_popup_ending`. A fact the bar's layers need about one subject's
+rows rides the rows themselves: a toast's row carries the body lines it
+opened with (`item_body_cap`), written by `notify` before the layout.
 
 `bar_tunables` imports only `bar_model`, which re-exports `bar_abi`, which
 re-exports `bar_wire`, so a tunables file reaches every constant it can name

@@ -15,6 +15,12 @@
 // link-time constants (`extern static const uint SYSMON_CHART;`), and the
 // `export`s below give them their values, which Slang folds into the
 // program as it folds any constant.
+//
+// One hook runs the other way: where a bar module must give a subject its
+// word mid-pass (a popup ending, from `close_popup` and `request_popup`,
+// which every subject calls), the module declares the function `extern`
+// and it is defined here with `export` (`dispatch_popup_ending`), as the
+// constants are bound.
 
 module bar_dispatch;
 
@@ -234,11 +240,27 @@ public bool dispatch_reshaped()
     return sysmon_reshaped();
 }
 
-/// What a subject ends of a menu level, before the layout: a calendar a
-/// reload turned off.
+/// What a subject ends of a menu level, or writes into the table, before
+/// the layout: a calendar a reload turned off; the open toast's rows given
+/// the body lines they opened with.
 public void dispatch_step_menu()
 {
     clock_step_menu();
+    notify_cap_rows();
+}
+
+/// A live popup is ending or being replaced (`bar_popups`' link-time hook,
+/// bound here): the subject it belongs to has its last word, by its kind.
+export void dispatch_popup_ending(uint next)
+{
+    switch (private[0].popup_kind)
+    {
+    case POPUP_TOAST:
+        notify_popup_ending(next);
+        break;
+    default:
+        break;
+    }
 }
 
 /// The popup that is up, laid out by the subject it belongs to: by the
