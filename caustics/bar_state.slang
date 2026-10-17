@@ -174,6 +174,38 @@ public StructuredBuffer<Facts> facts;
 /// private buffer's layout and not a tunable.
 public static const uint WAKE_SOURCES = 16u;
 
+/// What the charts keep between dispatches (`sysmon.slang`): the strip's
+/// shape, what was last witnessed of it, and the chart numbers' popup.
+public struct SysmonScratch
+{
+    /// The comparison a `CMD_ROWS` gets (`rows_shape`, below), for the chart
+    /// strip: the kinds of the samples
+    /// body's rows, hashed. A tick that carries new numbers for the same
+    /// charts is an upload and a redraw; a different chart set is a rebuild.
+    public uint chart_shape;
+    /// Charts in the last build, as last witnessed (`charts: N laid out`).
+    public uint said_charts;
+    /// The chart numbers. `numbers_dwell` is seconds the
+    /// pointer has rested on the strip with nothing up; `numbers_hold` is 1
+    /// once a numbers popup ended with the pointer still on the strip — a
+    /// second click, a dismissal — so the hover does not open it straight
+    /// back, and it lifts when the pointer leaves the strip.
+    public float numbers_dwell;
+    public uint numbers_hold;
+    /// The width the numbers popup last measured, px, and whether this open
+    /// has measured yet: an open asks for the last width, and while it is up
+    /// the width only grows, so a number gaining a digit every other second
+    /// does not move the surface every other second.
+    public float numbers_w;
+    public uint numbers_grow;
+    /// `samples[0].t`'s bits as of the last numbers build: a new tick under an
+    /// open numbers popup is an `ACT_REBUILD`, which is what keeps them live.
+    public uint numbers_t;
+    /// The first chart's item index in the build running now, which the
+    /// numbers' lines hang off; written and read inside one `bar_build`.
+    public uint build_first;
+};
+
 /// **What this file builds for itself** (docs/abi.md, *The private buffer*): the element
 /// table, the item and block tables, the scratch, the springs, the popup's
 /// want, and every value a witness is compared against.
@@ -282,22 +314,10 @@ public struct Private
     public float toast_h[TOAST_ROWS_CAP];
     public float2 toast_size;
     public uint toast_said_held;
-    /// The chart numbers. `numbers_dwell` is seconds the
-    /// pointer has rested on the strip with nothing up; `numbers_hold` is 1
-    /// once a numbers popup ended with the pointer still on the strip — a
-    /// second click, a dismissal — so the hover does not open it straight
-    /// back, and it lifts when the pointer leaves the strip.
-    public float numbers_dwell;
-    public uint numbers_hold;
-    /// The width the numbers popup last measured, px, and whether this open
-    /// has measured yet: an open asks for the last width, and while it is up
-    /// the width only grows, so a number gaining a digit every other second
-    /// does not move the surface every other second.
-    public float numbers_w;
-    public uint numbers_grow;
-    /// `samples[0].t`'s bits as of the last numbers build: a new tick under an
-    /// open numbers popup is an `ACT_REBUILD`, which is what keeps them live.
-    public uint numbers_t;
+
+    // -- the subjects' own, one struct each ---------------------------------
+    /// The charts' (`sysmon.slang`).
+    public SysmonScratch sysmon;
 
     // -- the anchor, likewise ----------------------------------------------
     /// The `(EDGE, BAR_HEIGHT)` pair last pushed as an `ACT_ANCHOR`. Zero
@@ -335,7 +355,6 @@ public struct Private
     public uint said_dock_entries;
     public uint said_dock_running;
     public uint said_applets;
-    public uint said_charts;
     public uint said_built_items;
     public uint said_built_blocks;
     public uint said_built_glyphs;
@@ -364,10 +383,6 @@ public struct Private
     /// goes so a departure witness still spells `applet-<name>` and not
     /// `applet-<name>-<row>`.
     public uint slot_first_item[MAX_SLOTS];
-    /// The same comparison for the chart strip: the kinds of the samples
-    /// body's rows, hashed. A tick that carries new numbers for the same
-    /// charts is an upload and a redraw; a different chart set is a rebuild.
-    public uint chart_shape;
 
     // -- the answers arena, indexed once per build (docs/abi.md, *The arenas*) -------------------
     //
@@ -593,7 +608,7 @@ public void ensure_private()
     private[0].said_dock_entries = NO_INDEX;
     private[0].said_dock_running = NO_INDEX;
     private[0].said_applets = NO_INDEX;
-    private[0].said_charts = NO_INDEX;
+    private[0].sysmon.said_charts = NO_INDEX;
     private[0].said_built_items = NO_INDEX;
     private[0].said_built_blocks = NO_INDEX;
     private[0].said_built_glyphs = NO_INDEX;

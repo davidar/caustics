@@ -302,22 +302,6 @@ public float4 draw_item_content(Element e, Item it, float2 p, float4 col)
     float inner = item_content_w(it);
     float dim = (it.flags & IFLAG_DISABLED) != 0u ? DISABLED_ALPHA : 1.0;
 
-    // A line of the chart numbers: the name where a menu row's label starts,
-    // the value right-aligned against the right gutter.
-    if (it.kind == ITEM_CHART_LINE)
-    {
-        float gutter = MENU_GUTTER * s;
-        float2 name = block_size(it.block);
-        float2 value = block_size(it.aux_block);
-        col = draw_block_at(it.block, float2(floor(e.rect.x + gutter),
-                                             e.rect.y + floor((e.rect.w - name.y) * 0.5)),
-                            p, col, 1.0);
-        return draw_block_at(it.aux_block,
-                             float2(floor(e.rect.x + e.rect.z - gutter - value.x),
-                                    e.rect.y + floor((e.rect.w - value.y) * 0.5)),
-                             p, col, 1.0);
-    }
-
     // A menu row's content starts after the left gutter; a slider is a menu
     // row with a track under it, so it shares the gutter and centres its
     // content in what is left above the band.
