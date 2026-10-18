@@ -33,7 +33,11 @@
 use std::path::{Path, PathBuf};
 
 fn main() {
-    let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    // Read when the script runs, not when it was compiled: a checkout that
+    // moves keeps its compiled build script, and a path baked into it would
+    // name the old place.
+    let manifest = std::env::var_os("CARGO_MANIFEST_DIR").expect("cargo sets CARGO_MANIFEST_DIR");
+    let repo = PathBuf::from(manifest).join("../..");
     let files = [
         repo.join("bar/abi/src/buffer.rs"),
         repo.join("bar/abi/src/wire.rs"),
