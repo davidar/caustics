@@ -1,7 +1,7 @@
 //! The one test that needs a session bus: the built binary, spawned the way
 //! the bar spawns it, read the way the bar reads it.
 //!
-//! `cargo test -p caustics-tray -- --ignored --nocapture` (on a host whose linker needs it, set `LIBRARY_PATH`)
+//! `cargo test -p caustics-tray -- --ignored --nocapture`
 //!
 //! It **writes nothing to the child's stdin**: no `Activate`, no dbusmenu
 //! `Event`, nothing that could reach a real application. It reads frames until

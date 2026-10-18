@@ -175,10 +175,7 @@ bar/install.sh --dropin bar/systemd/dropins/igpu-only.conf
 ```
 
 `bar/systemd/README.md` covers the unit (restarts, exit codes, the memory
-cap), the sidecars, and the journal lines worth knowing. On a host whose
-shared libraries lack their development symlinks (an immutable distribution),
-the scripts set `LIBRARY_PATH` to a Homebrew copy if one exists; a normal
-distribution needs nothing.
+cap), the sidecars, and the journal lines worth knowing.
 
 To try the bar without installing it, `cargo run -p caustics-bar` from the
 checkout works too. The bar finds its sidecars beside its own executable in

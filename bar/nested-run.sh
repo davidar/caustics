@@ -55,13 +55,6 @@ first_render_node() {
 RENDER_NODE="${CAUSTICS_NESTED_RENDER_NODE:-$(first_render_node)}"
 [[ -n "$RENDER_NODE" ]] || { echo "nested-run: no /dev/dri/renderD* node; the gate needs a GPU"; exit 2; }
 export CAUSTICS_NESTED_RENDER_NODE="$RENDER_NODE"
-# On an immutable distribution (an rpm-ostree or bootc image) the libraries
-# lack the unversioned `.so` symlinks the linker wants, and a Homebrew prefix
-# supplies them. On a normal distribution the development packages do, and
-# nothing is added.
-if [[ -d /var/home/linuxbrew/.linuxbrew/lib ]]; then
-    export LIBRARY_PATH="/var/home/linuxbrew/.linuxbrew/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-fi
 
 case "$HOST_KIND" in
     headless | desktop) ;;

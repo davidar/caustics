@@ -62,11 +62,9 @@ and `systemctl --user daemon-reload` is the whole edit cycle.
   `punchcutter-slang`, whose first build downloads the pinned Slang release
   (README.md, *Requirements*). At *run* time only `caustics-reload` compiles, in
   its own process, and needs nothing installed.
-- The Wayland client library at link time (`libwayland-dev` or your
-  distribution's equivalent). On an immutable host whose shared libraries
-  lack the development symlinks, the script points `LIBRARY_PATH` at
-  Homebrew's library directory if a Homebrew install exists; a normal
-  distribution needs nothing.
+- The Wayland client library at run time (`libwayland-client`, loaded by
+  name when the bar starts; nothing is linked against it, so no development
+  package is needed to build).
 - A Vulkan driver whose adapter supports SPIR-V passthrough. Where the
   adapter has `VK_KHR_shader_clock` the shaper holds a wall-clock deadline
   inside each run; the journal says `gpu: VK_KHR_shader_clock is on`, or

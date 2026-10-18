@@ -372,12 +372,6 @@ trap 'exit 130' INT TERM
 # --- step 1: build ----------------------------------------------------------
 
 say "1. build"
-# On an immutable distribution (an rpm-ostree or bootc image) the libraries
-# lack the unversioned `.so` symlinks the linker wants, and a Homebrew prefix
-# supplies them; a normal distribution needs nothing.
-if [[ -d /var/home/linuxbrew/.linuxbrew/lib ]]; then
-    export LIBRARY_PATH="/var/home/linuxbrew/.linuxbrew/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-fi
 # All eleven binaries (the bar spawns each sidecar from beside itself), and
 # the rows demo.
 if (cd "$REPO" &&

@@ -102,11 +102,6 @@ else
     echo "vm-run: guest $TOPAZ_TEST_ID answers ssh after $((SECONDS - t0)) s"
 fi
 
-# An immutable host lacks the unversioned `.so` symlinks the linker wants; a
-# Homebrew prefix supplies them. Elsewhere the development packages do.
-if [[ -d /var/home/linuxbrew/.linuxbrew/lib ]]; then
-    export LIBRARY_PATH="/var/home/linuxbrew/.linuxbrew/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-fi
 CAUSTICS_TARGET=vm bash "$SCRIPT" >"$LOG" 2>&1 </dev/null
 rc=$?
 echo "vm-run: $(basename "$SCRIPT") exit $rc; $((SECONDS - t0)) s in slot $TOPAZ_TEST_ID"

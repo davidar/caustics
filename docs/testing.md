@@ -118,9 +118,6 @@ could touch the developer's own bar.
 - `dbus-run-session`, `gdbus` and
   `busctl`, `flock`, and a terminal emulator for the steps that need a window
   (the first of `cosmic-term`, `kitty`, `foot`, `alacritty`, `xterm`).
-- On an immutable host whose `libwayland`/`libxkbcommon` lack the development
-  symlinks, the script sets `LIBRARY_PATH` to a Homebrew copy if that
-  directory exists; a normal distribution needs nothing.
 
 ### Reading the output
 

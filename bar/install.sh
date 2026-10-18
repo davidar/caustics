@@ -72,14 +72,6 @@ while [[ $# -gt 0 ]]; do
 done
 [[ -z "$DROPIN" || -f "$DROPIN" ]] || die "--dropin names no file: $DROPIN"
 
-# On an immutable distribution (an rpm-ostree or bootc image) the libraries
-# lack the unversioned `.so` symlinks the linker wants, and a Homebrew prefix
-# supplies them. On a normal distribution the development packages do, and
-# nothing is added.
-LINUXBREW_LIB=/var/home/linuxbrew/.linuxbrew/lib
-if [[ -d "$LINUXBREW_LIB" ]]; then
-    export LIBRARY_PATH="$LINUXBREW_LIB${LIBRARY_PATH:+:$LIBRARY_PATH}"
-fi
 
 # The unit's ExecStart is `%h/.local/bin/caustics-bar`, so only the default prefix
 # is the one systemd starts. Anywhere else is a trial install and restarting

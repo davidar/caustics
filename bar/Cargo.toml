@@ -42,8 +42,9 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # `system` exposes `Backend::display_ptr` and `ObjectId::as_ptr`, which is the
 # only way to hand a `wl_surface` to wgpu as a raw window handle (the sctk
-# wgpu example's dance). It links libwayland-client, so building needs its
-# development symlink (`libwayland-client.so`).
+# wgpu example's dance). wgpu-hal turns on wayland-sys's `dlopen`, so
+# libwayland-client is loaded by name when the bar starts and nothing links
+# against it: building needs no development symlink.
 wayland-client = { version = "0.31.15", features = ["system"] }
 wgpu = "30.0.0"
 # No zbus, tokio, image decoders: the tray, the battery and the power menu are

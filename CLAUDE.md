@@ -73,10 +73,8 @@ of the tree it was built from, `caustics/bar_tunables.slang` included.
 
 ## Host constraints
 
-- The host is an immutable image without the unversioned `.so` symlinks the
-  linker wants. `cargo check` is fine; `cargo build` and `cargo test` need
-  `LIBRARY_PATH=/var/home/linuxbrew/.linuxbrew/lib` (the gate and the
-  installer set it themselves when that directory exists).
+- The host is an immutable image (rpm-ostree) that ships gcc; `cargo build`
+  and `cargo test` need nothing set.
 - Two GPUs: the drop-in `bar/systemd/dropins/igpu-only.conf` pins the
   integrated one's driver for the unit, so the discrete GPU stays asleep.
 
