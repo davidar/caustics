@@ -91,11 +91,16 @@ fi
 # --- 1. the build -----------------------------------------------------------
 
 if [[ -z "$FROM" ]]; then
-    # One cargo at a time. Two builds share `target/`, and the loser of that
-    # race leaves a directory holding binaries from two trees — which is the
-    # shape of the failure this script exists to stop.
-    if pgrep -u "$(id -u)" -x cargo >/dev/null 2>&1; then
-        die "another cargo is running; a second build would share target/ with it"
+    # One cargo at a time in this `target/`. Two builds sharing it leave a
+    # directory holding binaries from two trees — the shape of the failure
+    # this script exists to stop. Cargo holds the build directory's lock for
+    # the whole build, so probing that lock finds a build into this tree's
+    # `target/` wherever it runs (another shell, a container with the tree
+    # mounted) and ignores a cargo building some other tree, which a scan of
+    # the process list does not.
+    lock="$REPO/target/release/.cargo-lock"
+    if [[ -e "$lock" ]] && ! flock -n "$lock" true 2>/dev/null; then
+        die "another cargo is building into target/; a second build would share it"
     fi
 
     FROM="$REPO/target/release"
