@@ -550,3 +550,13 @@ fn every_imported_module_is_watched_and_copied() {
         }
     }
 }
+
+/// A sidecar with no directory to watch waits for the bar to close the pipe
+/// rather than exiting into the bar's restart backoff: the wait is the read
+/// to end of input, and it returns when that end comes.
+#[test]
+fn idling_ends_with_the_input() {
+    let mut input = std::io::Cursor::new(b"not a frame, never read as one".to_vec());
+    idle_until_eof(&mut input);
+    assert_eq!(input.position(), input.get_ref().len() as u64);
+}

@@ -845,6 +845,12 @@ enum Input {
 
 /// Read stdin on a thread and hand the main loop the one question this sidecar
 /// answers. The loop itself is the mtime poll, which cannot block on a read.
+/// Read `input` to its end and discard it: how a sidecar with nothing to do
+/// waits for the bar to close its pipe without being restarted for exiting.
+pub fn idle_until_eof(input: &mut impl io::Read) {
+    let _ = io::copy(input, &mut io::sink());
+}
+
 fn listen(into: mpsc::Sender<Input>) {
     let stdin = io::stdin();
     let mut input = stdin.lock();
@@ -919,6 +925,12 @@ pub fn run() -> i32 {
             "no caustics directory at {}; there is nothing to watch",
             dir.display()
         ));
+        // A set installed without its source tree (a distribution image) has
+        // nothing to reload, and the bar's baked caustic is the one it runs.
+        // A sidecar that exits is restarted with a backoff for as long as the
+        // bar runs (bar/src/feeders/pipe.rs), so this one stays, idle, until
+        // the bar closes the pipe.
+        idle_until_eof(&mut io::stdin().lock());
         return 0;
     }
     if ENTRIES.len() > MAX_MODULES {

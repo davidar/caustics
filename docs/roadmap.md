@@ -29,9 +29,12 @@ CHANGELOG.md.
 
 3. **The bar as a distribution image's panel by default.** A build stage
    building the set (its Slang release pinned by `Cargo.lock`), the set under
-   `/usr/lib/caustics-bar/<hash>/`, `caustics/` at `/usr/share/caustics/`, the unit gated on the session and preset-enabled in
-   place of the previous panel and notification daemon. After the top-edge
-   default has been lived with.
+   `/usr/lib/caustics-bar/<hash>/`, the unit gated on the session and
+   preset-enabled in place of the previous panel and notification daemon. No
+   `caustics/` directory in the image: the reload sidecar has nothing to
+   watch without one and idles, and the bar's baked caustic is the one it
+   runs; whoever wants another configuration builds a set from their own
+   tree. After the top-edge default has been lived with.
 
 ## Left by the replacement of a desktop panel
 
