@@ -1,6 +1,8 @@
 # The canvas
 
-Design, not yet built. The bar's complement: where the bar is a strip along
+Steps 0 and 1 of *Order* are built: the host crate, and the canvas host
+with its wallpaper sidecar (`canvas/`, `wallpaper/`, `caustics/canvas*.slang`;
+canvas/README.md runs it). The rest is design. The bar's complement: where the bar is a strip along
 one edge, the canvas is everything else a session paints that is not a
 window. docs/architecture.md is the bar; this document borrows its model
 and says where the canvas departs from it. docs/roadmap.md, *The canvas*,
@@ -135,9 +137,20 @@ midpoint (a per-frame compound blend arrives early and stalls on small
 steps). The sidecar's command carries the fade's start and duration in
 `CLOCK_BOOTTIME`, the host writes the current boot time into the buffer
 once per frame, and the caustic computes alpha; a fade that sleeps through
-a suspend lands where the clock says. Frames are paced on the compositor's
-frame callbacks when it sends them to a covered background layer, and on a
-timer when it does not; the host draws nothing when nothing changes.
+a suspend lands where the clock says. The host draws nothing when nothing
+changes.
+
+**Pacing.** Each output is paced on its own `wl_surface.frame`, made before
+the present, as the bar's surface is. niri answers a background surface it
+shows at the output's refresh, including one only a maximised window's gaps
+leave visible; one that a fullscreen window covers entirely is answered only
+by niri's one-second fallback for surfaces it does not repaint (measured with
+`WAYLAND_DEBUG=1` under both, a 4 s fade: about 250 callbacks under the
+maximised window, 6 under the fullscreen one). So the default is the
+callbacks, with the host's 500 ms stall (`caustics_host::pacing`) as a timer
+beside them: a covered fade still advances, at about two frames a second,
+which is all a picture nobody sees needs, and when the fade is done the
+caustic stops asking and the host stops drawing.
 
 ### The prompt core
 
@@ -271,9 +284,10 @@ suspend cycle and a relogin.
 
 ## Open questions
 
-- Does the compositor send frame callbacks to a fully covered background
-  layer? A `WAYLAND_DEBUG=1` run of swaybg under a maximised window answers
-  it and decides the pacing default.
+- ~~Does the compositor send frame callbacks to a fully covered background
+  layer?~~ Answered for niri (*Time*, *Pacing*): at the refresh rate while
+  any of it shows, from a one-second fallback while a fullscreen window
+  covers it; the host paces on callbacks with its stall timer beside them.
 - Does anything on a typical machine ask for root-only polkit
   authentication (`pkaction --verbose`)? Decides whether the identity
   picker is needed before the first release.

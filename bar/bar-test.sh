@@ -4150,7 +4150,234 @@ else
     park_pointer
 fi
 
-say "26. verdict"
+# --- the canvas -----------------------------------------------------------
+#
+# The canvas host (docs/canvas.md) as a fixture beside the bar, with its two
+# sidecars, on an empty workspace so that the background layer is what a
+# screenshot sees below the bar. Last, so that nothing it does reaches the
+# bar's steps, and torn down at the end. Its log is a file of its own, read
+# through the target like the bar's journal.
+
+canvas_log() { on_target 10 'cat "$T_HOME/canvas.log" 2>/dev/null'; }
+canvas_count() { canvas_log | grep -cF -- "$1"; }
+canvas_more() { [[ "$(canvas_count "$1")" -gt "$2" ]]; }
+# A fade's last line, which is the only one that ends so.
+canvas_dones() { canvas_log | grep -cE 'canvas: fade [0-9]+ done$'; }
+canvas_last() { canvas_log | grep -F -- "$1" | tail -1; }
+# Like wait_for_journal_more, for the canvas's log, polled every tenth of a
+# second: the fade's midpoint is a moment, and a screenshot half a second
+# after it is a quarter of the fade later.
+canvas_wait_more() { # canvas_wait_more <pattern> <seconds> <before>
+    local deadline=$((SECONDS + $2)) t0
+    t0=$(now_us)
+    until canvas_more "$1" "$3"; do
+        ((SECONDS < deadline)) || { wait_charge "$t0" 1 "$1" "$2"; return 1; }
+        sleep 0.1
+    done
+    wait_charge "$t0" 0
+}
+# Solid 64x40 PNGs, written here and copied to the target: the sidecar fits
+# nothing up, and the caustic covers the output with them.
+canvas_png() { # canvas_png <name> <r> <g> <b>
+    python3 - "$SHOTS/$1" "$2" "$3" "$4" <<'PY'
+import struct, sys, zlib
+path, rgb = sys.argv[1], bytes(int(v) for v in sys.argv[2:5])
+raw = b"".join(b"\x00" + rgb * 64 for _ in range(40))
+def chunk(tag, body):
+    return struct.pack(">I", len(body)) + tag + body + struct.pack(">I", zlib.crc32(tag + body) & 0xffffffff)
+open(path, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 64, 40, 8, 2, 0, 0, 0))
+    + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+PY
+    to_target "$SHOTS/$1" "$1"
+}
+canvasctl() { on_target 60 "\"\$T_BIN/caustics-canvasctl\" $*"; }
+# The rectangle the steps read: below the bar, inside the output.
+CANVAS_RECT=(200 200 880 400)
+canvas_mean() { png_mean "$SHOTS/$1" "${CANVAS_RECT[@]}"; }
+within() { # within <got> <want> <tolerance>
+    python3 -c "import sys; sys.exit(0 if abs($1 - $2) <= $3 else 1)"
+}
+
+say "27. the canvas comes up on the output and paints its dim colour"
+CANVAS_RUN=0
+if [[ "$T_NAME" == vm ]]; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas is not in the guest's set yet"
+    SKIPS=$((SKIPS + 1))
+else
+    CANVAS_RUN=1
+    # An empty workspace: niri keeps one below the last that has a window.
+    for _ in 1 2 3 4 5; do
+        [[ "$(niri_msg --json focused-window 2>/dev/null)" == null ]] && break
+        niri_msg action focus-workspace-down >/dev/null 2>&1
+    done
+    if [[ "$(niri_msg --json focused-window 2>/dev/null)" == null ]]; then
+        pass "an empty workspace is focused; the background shows below the bar"
+    else
+        fail "no empty workspace to look at the background through"
+    fi
+    on_target 10 'rm -f "$T_HOME/canvas.log"; cp "$T_CAUSTICS/canvas_tunables.slang" "$T_HOME/canvas_tunables.slang.orig"' >/dev/null
+    canvas_png canvas-red.png 255 0 0
+    canvas_png canvas-blue.png 0 0 255
+    bar_swaps_before=$(journal_count "$SWAPPED")
+    # From the home dir, as the bar's supervisor starts the bar: caustics-reload
+    # looks for a `caustics/` in its working directory before `$CAUSTICS_DIR`,
+    # and from the checkout it would watch the checkout's.
+    fixture_start canvas 'bash -c '"'"'cd "$1" && exec env CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload" RUST_LOG=info "$2/caustics-canvas" 2>>"$1/canvas.log"'"'"' canvas "$T_HOME" "$T_BIN"'
+    if wait_until "canvas: no picture yet" 60 'canvas_more "canvas: no picture yet" 0'; then
+        pass "$(canvas_last 'canvas: no picture yet' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the canvas never drew its first frame: $(canvas_log | tail -5 | tr '\n' '|' | cut -c1-500)"
+    fi
+    surfaces=$(canvas_count "a background surface")
+    if [[ "$surfaces" -eq 1 ]] && canvas_log | jgrep -F "background surface configured"; then
+        pass "one background surface, on the one output, configured"
+    else
+        fail "$surfaces background surfaces"
+    fi
+    if canvas_log | jgrep -E 'output [^ ]+: 1280x800 px at scale 240/120'; then
+        pass "drawn at the output's own pixels: 1280x800 at scale 240/120, through the viewport"
+    else
+        fail "not drawn at 1280x800, scale 240/120: $(canvas_log | grep -E 'px at scale|scale' | tail -2 | tr '\n' '|')"
+    fi
+    shot canvas-blank.png
+    dim=$(sed -n 's/^public static const float3 DIM_COLOUR = float3(\(.*\));.*/\1/p' \
+        "$REPO/caustics/canvas_tunables.slang" | tr -d ' ')
+    want=($(python3 -c "print(' '.join(str(round(float(v) * 255)) for v in '$dim'.split(',')))"))
+    got=($(canvas_mean canvas-blank.png))
+    if [[ ${#want[@]} -eq 3 ]] && within "${got[0]}" "${want[0]}" 6 && within "${got[1]}" "${want[1]}" 6 &&
+        within "${got[2]}" "${want[2]}" 6; then
+        pass "the canvas is the dim colour: mean ${got[*]}, DIM_COLOUR ${want[*]}"
+    else
+        fail "the canvas is ${got[*]}, not the dim colour ${want[*]:-?}"
+    fi
+fi
+
+say "28. a shown picture covers the output"
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    shows_before=$(canvas_count "canvas: show ")
+    reply=$(canvasctl show '"$T_HOME/canvas-red.png"' 2>&1)
+    if [[ $? -eq 0 ]]; then
+        pass "caustics-canvasctl show exited 0"
+    else
+        fail "caustics-canvasctl show: $reply"
+    fi
+    if wait_until "canvas: show" 30 "canvas_more 'canvas: show ' $shows_before"; then
+        pass "$(canvas_last 'canvas: show ' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the caustic never saw the show"
+    fi
+    shot canvas-red.png
+    got=($(canvas_mean canvas-red.png))
+    if ((got[0] >= 240 && got[1] <= 15 && got[2] <= 15)); then
+        pass "the output is red: mean ${got[*]}"
+    else
+        fail "the output is ${got[*]}, not red"
+    fi
+fi
+
+say "29. a four-second fade is purple at its midpoint"
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    mids_before=$(canvas_count "midpoint")
+    dones_before=$(canvas_dones)
+    canvasctl show '"$T_HOME/canvas-blue.png"' fade 4 >/dev/null 2>&1 ||
+        fail "caustics-canvasctl show … fade 4 failed"
+    if canvas_wait_more midpoint 30 "$mids_before"; then
+        shot canvas-mid.png
+        pass "$(canvas_last midpoint | sed -n 's/.*INFO [a-z_:]*: //p')"
+        got=($(canvas_mean canvas-mid.png))
+        if ((got[0] >= 40 && got[0] <= 215 && got[2] >= 40 && got[2] <= 215 && got[1] <= 30)); then
+            pass "the output is purple at the midpoint: mean ${got[*]}"
+        else
+            fail "the output is ${got[*]} at the midpoint, not purple"
+        fi
+    else
+        fail "no midpoint witness within 30 s of a 4 s fade"
+    fi
+    status=$(canvasctl status 2>&1)
+    assert_contains "status names the picture" "$status" "canvas-blue.png"
+    if wait_until "canvas: fade done" 30 "[[ \$(canvas_dones) -gt $dones_before ]]"; then
+        pass "$(canvas_log | grep -E 'canvas: fade [0-9]+ done$' | tail -1 | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the fade never said it was done"
+    fi
+    shot canvas-blue.png
+    got=($(canvas_mean canvas-blue.png))
+    if ((got[2] >= 240 && got[0] <= 15 && got[1] <= 15)); then
+        pass "and then blue: mean ${got[*]}"
+    else
+        fail "the output is ${got[*]} after the fade, not blue"
+    fi
+fi
+
+say "30. a canvas tunables edit hot-reloads the canvas and not the bar"
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    swaps_before=$(canvas_count "modules, swapped")
+    on_target 20 'cp "$T_CAUSTICS/canvas_tunables.slang" "$T_CAUSTICS/canvas_tunables.slang.new"
+        sed -i -e "s/^public static const float3 DIM_COLOUR = .*/public static const float3 DIM_COLOUR = float3(0.30, 0.10, 0.10);/" \
+            "$T_CAUSTICS/canvas_tunables.slang.new"
+        mv -f "$T_CAUSTICS/canvas_tunables.slang.new" "$T_CAUSTICS/canvas_tunables.slang"' >/dev/null
+    if wait_until "canvas swap" 90 "canvas_more 'modules, swapped' $swaps_before"; then
+        pass "$(canvas_last 'modules, swapped' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "no canvas swap within 90 s of saving canvas_tunables.slang"
+    fi
+    swaps_before=$(canvas_count "modules, swapped")
+    on_target 20 'cp "$T_HOME/canvas_tunables.slang.orig" "$T_CAUSTICS/canvas_tunables.slang.new"
+        mv -f "$T_CAUSTICS/canvas_tunables.slang.new" "$T_CAUSTICS/canvas_tunables.slang"' >/dev/null
+    if wait_until "canvas swap back" 90 "canvas_more 'modules, swapped' $swaps_before"; then
+        pass "restoring the shipped canvas tunables swapped again"
+    else
+        fail "no canvas swap after restoring canvas_tunables.slang"
+    fi
+    if [[ "$(journal_count "$SWAPPED")" -eq "$bar_swaps_before" ]]; then
+        pass "the bar's caustic did not reload for the canvas's files"
+    else
+        fail "the bar swapped its caustic while only canvas files changed"
+    fi
+fi
+
+say "31. a killed wallpaper sidecar restarts, and the picture stays"
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    canvas_pid=$(canvas_last "set: " | sed -n 's/.*, pid \([0-9]*\)$/\1/p')
+    wall_pid=$(canvas_last "sidecar caustics-wallpaper: started pid=" | grep -oE '[0-9]+$')
+    parent=$(on_target 10 "awk '{print \$4}' /proc/${wall_pid:-0}/stat 2>/dev/null")
+    if [[ -n "$wall_pid" && -n "$canvas_pid" && "$parent" == "$canvas_pid" ]]; then
+        starts_before=$(canvas_count "sidecar caustics-wallpaper: started pid=")
+        on_target 10 "kill $wall_pid" >/dev/null
+        if wait_until "wallpaper restart" 30 "canvas_more 'sidecar caustics-wallpaper: started pid=' $starts_before"; then
+            pass "$(canvas_last 'sidecar caustics-wallpaper: exited' | sed -n 's/.*INFO [a-z_:]*: //p;s/.*WARN [a-z_:]*: //p')"
+            pass "$(canvas_last 'sidecar caustics-wallpaper: started pid=' | sed -n 's/.*INFO [a-z_:]*: //p')"
+        else
+            fail "the canvas did not restart caustics-wallpaper within 30 s"
+        fi
+        if wait_until "the session's picture again" 30 "canvas_more 'the session last showed' 0"; then
+            pass "the new sidecar shows the session's picture again"
+        else
+            fail "the restarted sidecar did not show the last picture"
+        fi
+        reply=$(on_target 20 'for i in $(seq 40); do "$T_BIN/caustics-canvasctl" status && break; sleep 0.25; done' 2>&1)
+        assert_contains "its socket answers again" "$reply" "canvas-blue.png"
+        shot canvas-after-restart.png
+        got=($(canvas_mean canvas-after-restart.png))
+        if ((got[2] >= 240 && got[0] <= 15 && got[1] <= 15)); then
+            pass "the picture stayed blue: mean ${got[*]}"
+        else
+            fail "the picture is ${got[*]} after the sidecar's restart"
+        fi
+    else
+        fail "no wallpaper pid that is the canvas's child (pid ${wall_pid:-?}, parent ${parent:-?}, canvas ${canvas_pid:-?})"
+    fi
+    # Torn down: the host, and with it its sidecars and the socket.
+    fixture_stop canvas
+    if wait_until "the canvas gone" 20 "! on_target 5 '[ -S \"\$XDG_RUNTIME_DIR/caustics-canvas.sock\" ] || kill -0 ${canvas_pid:-0} 2>/dev/null'"; then
+        pass "the canvas stopped, and its sidecar took its socket with it"
+    else
+        fail "the canvas or its socket outlived the fixture"
+    fi
+    niri_msg action focus-workspace-up >/dev/null 2>&1
+fi
+
+say "32. verdict"
 journal > "$SHOTS/journal-full.txt"
 note "full journal: $SHOTS/journal-full.txt"
 ls -1 "$SHOTS"/*.png 2>/dev/null | while read -r png; do note "$png"; done

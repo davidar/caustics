@@ -219,6 +219,16 @@ nothing in the steps knows which target it is on:
 | `fixture_start/stop`, `client_spawn` | `setsid`, tracked by pid |
 | `T_HOME T_CONFIG T_STATE T_CACHE T_BIN T_CAUSTICS …` | the run's scratch tree, `target/debug`, the copy of `caustics/` |
 
+**The canvas's steps** (27 to 31) run last: the canvas host as a fixture
+with `CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload"`, its log in
+`$T_HOME/canvas.log`, on an empty workspace so a screenshot below the bar is
+the background layer. They check its first frame against the tunables' dim
+colour, a shown picture, the midpoint of a four-second fade, a hot reload
+of `canvas_tunables.slang` that the bar does not follow, and a killed
+wallpaper sidecar coming back with the picture unchanged, then stop it. The
+canvas's own alpha(t) is tested on a device beside the bar's oracle:
+`CAUSTICS_CANVAS_ORACLE=1 cargo test -p caustics-canvas -- --test-threads=1`.
+
 ### Adding a step
 
 1. **Decide the tier first.** If what you want to prove is a property of the
