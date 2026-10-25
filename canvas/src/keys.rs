@@ -70,7 +70,6 @@ impl Typed {
         })
     }
 
-    #[cfg_attr(not(test), allow(dead_code))]
     fn as_bytes(&self) -> &[u8] {
         &self.bytes[..self.len]
     }
@@ -133,7 +132,6 @@ pub fn key_of_code(code: u32) -> Option<Key> {
 
 /// What has been typed for one ask. See the module's notes; its `Debug`
 /// says nothing about its contents.
-#[cfg_attr(not(test), allow(dead_code))]
 pub struct Entry {
     bytes: Zeroizing<Vec<u8>>,
 }
@@ -144,7 +142,6 @@ impl Default for Entry {
     }
 }
 
-#[cfg_attr(not(test), allow(dead_code))]
 impl Entry {
     /// Empty, with all `MAX_ANSWER_LEN` bytes reserved: a push never moves
     /// what is there and leaves a copy behind.

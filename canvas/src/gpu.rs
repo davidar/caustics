@@ -588,9 +588,13 @@ impl Gpu {
     /// The prompt's text, whole: what `facts.prompt`'s ranges name. At most
     /// `PROMPT_TEXT_BYTES`, which the caller's arena keeps to. Never a
     /// secret (docs/abi.md, *The canvas's buffer*).
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// The same text again writes nothing and shapes nothing: a key typed
+    /// into an echo-off ask changes a count, not the text.
     pub fn write_prompt_text(&mut self, bytes: &[u8]) {
         let bytes = &bytes[..bytes.len().min(PROMPT_TEXT_BYTES)];
+        if bytes == self.prompt_copy.as_slice() {
+            return;
+        }
         let mut padded = bytes.to_vec();
         while padded.len() % 4 != 0 {
             padded.push(0);

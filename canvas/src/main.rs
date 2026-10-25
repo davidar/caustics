@@ -2,9 +2,10 @@
 //! a Slang caustic and cross-faded on command (docs/canvas.md).
 //!
 //! The bar process's shape, for a second caustic: a small process that owns
-//! the Wayland objects (one background layer surface per output, and one
-//! overlay per output while a dim is up), the seat's input, the device and
-//! its sidecars' pipes, and decides nothing. `caustics-wallpaper` sends the
+//! the Wayland objects (one background layer surface per output, one overlay
+//! per output while a dim is up, one prompt pane per output while a prompt
+//! is), the seat's input, the device, its sidecars' pipes and the one buffer
+//! a typed answer passes through, and decides nothing. `caustics-wallpaper` sends the
 //! pictures and the commands, `caustics-reload` the caustic as it is saved,
 //! and the caustic says how far a fade or a dim is and whether it wants
 //! another frame. The mechanism is `caustics-host`'s, which the bar runs on
@@ -19,6 +20,7 @@ mod clock;
 mod dim;
 mod gpu;
 mod keys;
+mod prompt;
 mod role;
 mod sidecars;
 mod slots;

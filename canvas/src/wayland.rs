@@ -18,6 +18,9 @@
 //! **overlay** pane too: made for every output when a `CANVAS_DIM` arrives
 //! and for an output that appears mid-dim, and destroyed on `CANVAS_UNDIM`,
 //! on input, and when the dim's sidecar goes (docs/canvas.md, *Surfaces*).
+//! While a prompt is up it has a **top** pane too: made for every output at a
+//! conversation's first ask (`prompt.rs`) and for an output that appears
+//! mid-prompt, and destroyed when the conversation ends or is dismissed.
 //! Each pane has its own swapchain, frame pacing, `wp_fractional_scale_v1`
 //! and `wp_viewport` from its first commit: the buffer is the logical size
 //! times the scale the compositor prefers, and the viewport's destination is
@@ -39,6 +42,10 @@
 //! cursor is hidden there and only a motion to somewhere else cancels. The
 //! keymap the seat sends is compiled by libxkbcommon (`keys`), for the
 //! prompt's sake; a cancel needs only the fact of a key.
+//!
+//! **While a prompt is up, its keys are its own**: they go to the prompt
+//! core, and neither a key nor the pointer nor a touch cancels a dim that is
+//! also up, which stays as it was when the prompt closes.
 //!
 //! # The frames
 //!
@@ -106,7 +113,8 @@ use wayland_client::{
 
 use crate::dim::Dims;
 use crate::gpu::{self, Gpu};
-use crate::keys::{self, Key, xkb::Xkb};
+use crate::keys::{self, xkb::Xkb};
+use crate::prompt::{Effect, Prompts};
 use crate::role::Role;
 use crate::sidecars::{self, GLYPHS, RELOAD, WALLPAPER};
 use crate::slots::{Applied, Slots};
@@ -195,6 +203,11 @@ pub struct Canvas {
     slots: Slots,
     /// The dim up now, whose it is and what it has been told.
     dims: Dims,
+    /// The prompt core: the conversation held or up, and its typed answer.
+    prompts: Prompts,
+    /// Whether a prompt's text being cut to its buffer has been said, for
+    /// the conversation up.
+    prompt_cut_said: bool,
     /// The seat's devices, as it offers them.
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -278,6 +291,8 @@ impl Canvas {
             printer: Printer::new(Caustic::Canvas),
             slots: Slots::new(),
             dims: Dims::new(),
+            prompts: Prompts::new(),
+            prompt_cut_said: false,
             pointer: None,
             keyboard: None,
             touch: None,
@@ -325,19 +340,29 @@ impl Canvas {
         self.pipes.iter().find(|pipe| pipe.name() == name)
     }
 
-    /// What the caustic reads in `facts`: the slots' picture and dim, the
-    /// literal pool's size, and the prompt.
-    fn facts(&self) -> CanvasFacts {
-        CanvasFacts {
-            literal_count: self.literal_count,
-            ..*self.slots.facts()
+    /// `facts`, written whole, when there is a device to write it to: the
+    /// slots' picture and dim, the literal pool's size, and the prompt, with
+    /// the prompt's text written into its buffer first.
+    fn push_facts(&mut self) {
+        let (prompt, text, cut) = self.prompts.facts();
+        if !cut {
+            self.prompt_cut_said = false;
+        } else if !std::mem::replace(&mut self.prompt_cut_said, true) {
+            tracing::warn!(
+                "prompt: conversation {}'s text is past the {} bytes of its buffer; its end \
+                 is not drawn",
+                prompt.id,
+                caustics_bar_abi::canvas::PROMPT_TEXT_BYTES
+            );
         }
-    }
-
-    /// `facts`, written whole, when there is a device to write it to.
-    fn push_facts(&self) {
-        if let Some(gpu) = self.gpu.as_ref() {
-            gpu.write_facts(&self.facts());
+        let facts = CanvasFacts {
+            literal_count: self.literal_count,
+            prompt,
+            ..*self.slots.facts()
+        };
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.write_prompt_text(&text);
+            gpu.write_facts(&facts);
         }
     }
 
@@ -466,6 +491,26 @@ impl Canvas {
             .collect();
         for output in outputs {
             self.add_pane(&output, Role::Overlay);
+        }
+    }
+
+    /// The prompt's pane on every output the canvas has a background on.
+    fn raise_prompts(&mut self) {
+        let outputs: Vec<wl_output::WlOutput> = self
+            .panes
+            .iter()
+            .filter(|pane| pane.role == Role::Background)
+            .map(|pane| pane.output.clone())
+            .collect();
+        for output in outputs {
+            self.add_pane(&output, Role::Top);
+        }
+    }
+
+    /// Every prompt pane down, and the keyboard with them.
+    fn drop_prompts(&mut self) {
+        while let Some(index) = self.panes.iter().position(|pane| pane.role == Role::Top) {
+            self.remove_pane(index);
         }
     }
 
@@ -823,11 +868,63 @@ impl Canvas {
     /// keymap's; what is done with it is the dim's: any key is a user who is
     /// back.
     fn key_pressed(&mut self, code: u32) {
-        let _key: Option<Key> = match self.xkb.as_mut().filter(|xkb| xkb.ready()) {
+        let key = match self.xkb.as_mut().filter(|xkb| xkb.ready()) {
             Some(xkb) => xkb.press(code),
             None => keys::key_of_code(code),
         };
+        // While a prompt is up its keys are its own, and a dim also up stays
+        // as it is.
+        if self.prompts.takes_keys() {
+            if let Some(key) = key {
+                let effects = self.prompts.key(key);
+                self.apply_prompt(effects);
+            }
+            return;
+        }
         self.input("a key");
+    }
+
+    // -- the prompt --------------------------------------------------------
+
+    /// What the prompt core said to do (`prompt::Effect`): answers down the
+    /// asking sidecar's pipe, the panes up or down, `facts` written again.
+    fn apply_prompt(&mut self, effects: Vec<Effect>) {
+        let mut changed = false;
+        for effect in effects {
+            match effect {
+                Effect::Answer { sidecar, answer } => {
+                    let id = answer.id();
+                    match self.pipe(&sidecar) {
+                        // The frame owns the answer and drops with this
+                        // statement, and its bytes are zeroed with it.
+                        Some(pipe) => {
+                            pipe.send_frame(
+                                &Frame::Answer(answer),
+                                &format!("conversation {id}'s answer"),
+                            );
+                        }
+                        None => tracing::warn!(
+                            "prompt: no pipe to {sidecar} for conversation {id}'s answer"
+                        ),
+                    }
+                }
+                Effect::Raise => {
+                    self.raise_prompts();
+                    // An overlay stands aside while a prompt is up.
+                    self.mark_dirty(Role::Overlay);
+                }
+                Effect::Lower => {
+                    self.drop_prompts();
+                    self.mark_dirty(Role::Overlay);
+                }
+                Effect::Changed => changed = true,
+                Effect::Note(line) => tracing::info!("{line}"),
+            }
+        }
+        if changed {
+            self.push_facts();
+            self.mark_dirty(Role::Top);
+        }
     }
 
     // -- the sidecars ------------------------------------------------------
@@ -854,11 +951,17 @@ impl Canvas {
                     tracing::info!("sidecar {name}: gone; {:?} was never shown", image.key);
                 }
                 self.dim_owner_gone(&name);
+                let effects = self.prompts.gone(&name);
+                self.apply_prompt(effects);
             }
             // An ordinary exit, before the restart: the picture stays (it is
             // the host's), a waiting image stays for the show that may still
-            // come, and the dim goes.
-            Event::Exited(name) => self.dim_owner_gone(&name),
+            // come, and the dim and the prompt go.
+            Event::Exited(name) => {
+                self.dim_owner_gone(&name);
+                let effects = self.prompts.gone(&name);
+                self.apply_prompt(effects);
+            }
             Event::Frame { sidecar, frame } => self.apply_frame(&sidecar, frame),
         }
     }
@@ -881,6 +984,12 @@ impl Canvas {
                 }
             }
             Frame::Canvas(command) => self.apply_command(sidecar, &command),
+            // A sink asking for a typed answer, or showing a line, or ending
+            // its conversation (docs/abi.md, *Prompt*).
+            Frame::Prompt(prompt) => {
+                let effects = self.prompts.frame(sidecar, &prompt);
+                self.apply_prompt(effects);
+            }
             // A run of the text engine's buffers: copied, never read
             // (docs/abi.md, *Bytes*).
             Frame::Bytes(bytes) => match self.gpu.as_mut() {
@@ -1210,9 +1319,13 @@ impl OutputHandler for Canvas {
 
     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
         self.add_pane(&output, Role::Background);
-        // An output that appears mid-dim is dimmed too.
+        // An output that appears mid-dim is dimmed too, and one that appears
+        // mid-prompt is given the prompt.
         if self.dims.is_up() {
             self.add_pane(&output, Role::Overlay);
+        }
+        if self.prompts.raised() {
+            self.add_pane(&output, Role::Top);
         }
     }
 
@@ -1310,10 +1423,19 @@ impl PointerHandler for Canvas {
         events: &[PointerEvent],
     ) {
         let mut cancel = None;
+        // While a prompt is up the pointer cancels nothing: a dim also up
+        // stays as it is.
+        let prompting = self.prompts.raised();
         for event in events {
-            let on_overlay = self
-                .role_of_surface(&event.surface)
-                .is_some_and(Role::input_cancels);
+            let role = self.role_of_surface(&event.surface);
+            if prompting
+                && role == Some(Role::Top)
+                && let PointerEventKind::Enter { serial } = event.kind
+            {
+                // No cursor over the prompt either: it takes no clicks.
+                pointer.set_cursor(serial, None, 0, 0);
+            }
+            let on_overlay = !prompting && role.is_some_and(Role::input_cancels);
             if !on_overlay {
                 continue;
             }
@@ -1377,7 +1499,19 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for Canvas {
                 state: WEnum::Value(wl_keyboard::KeyState::Pressed),
                 ..
             } => canvas.key_pressed(key),
-            // Enter, leave, releases and the repeat rate mean nothing here:
+            // The keyboard arriving on a prompt's pane is when typing can
+            // begin: said, once each time.
+            wl_keyboard::Event::Enter { surface, .. } => {
+                if let Some(index) = canvas.pane_of_surface(&surface)
+                    && canvas.panes[index].role == Role::Top
+                {
+                    tracing::info!(
+                        "seat: the keyboard is on the prompt (output {})",
+                        canvas.panes[index].name
+                    );
+                }
+            }
+            // Leave, releases and the repeat rate mean nothing here:
             // the keyboard is only ever on the canvas's own surfaces, and a
             // held key is one key.
             _ => {}
@@ -1395,6 +1529,7 @@ impl Dispatch<wl_touch::WlTouch, ()> for Canvas {
         _: &QueueHandle<Canvas>,
     ) {
         if let wl_touch::Event::Down { surface, .. } = event
+            && !canvas.prompts.raised()
             && canvas
                 .role_of_surface(&surface)
                 .is_some_and(Role::input_cancels)

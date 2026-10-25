@@ -4764,6 +4764,224 @@ else
     fi
 fi
 
+say "35c. a polkit prompt rises on the canvas, over the darkened wallpaper, and takes the keyboard"
+# The canvas again, now with its glyphs sidecar and `caustics-polkit` in its
+# set, the sink in the dry run 35b uses (the agent on the run's session bus,
+# no system bus, `polkit/tests/fake-helper.sh` as the helper). The canvas
+# host is the one answering now: these steps play polkitd with `busctl` and
+# the user with the keyboard. Each helper run takes one answer, so a wrong
+# secret fails its call and the right one is a second call. Both secrets are
+# this run's own, and no log may hold either.
+PROMPT_RUN=0
+if [[ "$CANVAS_RUN" -ne 1 ]]; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas is not in the guest's set yet"
+    SKIPS=$((SKIPS + 1))
+else
+    PROMPT_RUN=1
+    prompt_secret="gate-$RANDOM$RANDOM-$RANDOM"
+    prompt_wrong="nope-$RANDOM$RANDOM-$RANDOM"
+    for _ in 1 2 3 4 5; do
+        [[ "$(niri_msg --json focused-window 2>/dev/null)" == null ]] && break
+        niri_msg action focus-workspace-down >/dev/null 2>&1
+    done
+    to_target "$REPO/polkit/tests/fake-helper.sh" prompt-fake-helper.sh
+    on_target 10 'chmod +x "$T_HOME/prompt-fake-helper.sh"
+        rm -f "$T_HOME/canvas.log" "$T_HOME/prompt-record" "$T_HOME/prompt-cookies"' >/dev/null
+    fixture_start prompt 'bash -c '"'"'cd "$1" && exec env \
+        CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload caustics-glyphs caustics-polkit" \
+        CAUSTICS_POLKIT_DRY_RUN=1 CAUSTICS_POLKIT_HELPER="$1/prompt-fake-helper.sh" \
+        DBUS_SYSTEM_BUS_ADDRESS="unix:path=$1/no-system-bus" \
+        FAKE_HELPER_SECRET="$3" FAKE_HELPER_RECORD="$1/prompt-record" \
+        FAKE_HELPER_COOKIES="$1/prompt-cookies" \
+        RUST_LOG=info "$2/caustics-canvas" 2>>"$1/canvas.log"'"'"' prompt "$T_HOME" "$T_BIN" '"$prompt_secret"
+    prompt_dest=""
+    if wait_until "the canvas's polkit sink" 60 'canvas_log | jgrep -F "dry run: the agent is at"'; then
+        prompt_dest=$(canvas_log | sed -n 's/.*dry run: the agent is at \([^ ]*\) .*/\1/p' | tail -1)
+        pass "the canvas started caustics-polkit in its dry run, at $prompt_dest"
+    else
+        fail "the canvas's caustics-polkit never said where its agent is: $(canvas_log | tail -4 | tr '\n' '|' | cut -c1-400)"
+        PROMPT_RUN=0
+    fi
+    if wait_until "the canvas's font" 30 'canvas_log | jgrep -F "font: "'; then
+        pass "$(canvas_last 'font: ' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the canvas's caustics-glyphs never sent a font"
+    fi
+    shows_before=$(canvas_count "canvas: show ")
+    canvasctl show '"$T_HOME/canvas-blue.png"' >/dev/null 2>&1 || fail "caustics-canvasctl show failed"
+    wait_until "the prompt step's picture" 30 "canvas_more 'canvas: show ' $shows_before" ||
+        fail "the canvas never showed the picture"
+fi
+# prompt_call <n> <message>: BeginAuthentication as polkitd makes it, in the
+# background; busctl's output and exit status land in `$SHOTS/prompt-call-<n>`
+# when the conversation ends.
+prompt_call() {
+    rm -f "$SHOTS/prompt-call-$1"
+    (
+        out=$(on_target 60 "busctl --user call --timeout=45 '$prompt_dest' \
+            /org/freedesktop/PolicyKit1/AuthenticationAgent \
+            org.freedesktop.PolicyKit1.AuthenticationAgent BeginAuthentication \
+            'sssa{ss}sa(sa{sv})' org.caustics.test.prompt '$2' '' 0 'prompt-cookie-$1' \
+            1 unix-user 1 uid u \$(id -u) 2>&1; echo \"exit=\$?\"")
+        printf '%s\n' "$out" >"$SHOTS/prompt-call-$1.tmp" && mv -f "$SHOTS/prompt-call-$1.tmp" "$SHOTS/prompt-call-$1"
+    ) &
+}
+prompt_reply() { cat "$SHOTS/prompt-call-$1" 2>/dev/null; }
+# No prompt pane remains: as many gone as made.
+prompt_panes_gone() {
+    [[ "$(canvas_count "a prompt surface")" -eq "$(canvas_count "its prompt surface is gone")" ]]
+}
+# Typing waits for the keyboard to be on the prompt's pane: keys sent before
+# would go to whatever had the focus.
+prompt_focused() { # prompt_focused <before>
+    wait_until "the keyboard on the prompt" 15 "canvas_more 'seat: the keyboard is on the prompt' $1"
+}
+if [[ "$PROMPT_RUN" -eq 1 ]]; then
+    panes_before=$(canvas_count "prompt surface configured")
+    focus_before=$(canvas_count "seat: the keyboard is on the prompt")
+    prompt_call 1 "The nested gate asks the canvas"
+    if wait_until "the prompt asking" 30 'canvas_log | jgrep -F "prompt: conversation 1 from caustics-polkit began"' &&
+        wait_until "the prompt's pane" 15 "canvas_more 'prompt surface configured' $panes_before" &&
+        wait_until "the prompt drawn" 15 'canvas_log | jgrep -E "canvas[a-z_:]*: prompt: conversation 1 asking \(echo 0, attempts 0\)"'; then
+        pass "$(canvas_last 'prompt surface configured' | sed -n 's/.*INFO [a-z_:]*: //p' | cut -c1-120)"
+        pass "the caustic drew conversation 1 asking, echo off, no attempts yet"
+    else
+        fail "no prompt pane for conversation 1: $(canvas_log | grep -F 'prompt' | tail -4 | tr '\n' '|' | cut -c1-400)"
+    fi
+    # The rectangles: one inside the panel (PROMPT_WIDTH wide, centred, at
+    # least a title, a row and a field tall), one in a corner of the output
+    # outside it, which is the wallpaper darkened towards DIM_COLOUR by
+    # PROMPT_DARKEN.
+    sleep 0.5
+    shot prompt-up.png
+    darken=$(sed -n 's/^public static const float PROMPT_DARKEN = \([0-9.]*\);.*/\1/p' \
+        "$REPO/caustics/canvas_tunables.slang")
+    dim=$(sed -n 's/^public static const float3 DIM_COLOUR = float3(\(.*\));.*/\1/p' \
+        "$REPO/caustics/canvas_tunables.slang" | tr -d ' ')
+    want=($(python3 -c "
+d = [float(v) * 255 for v in '$dim'.split(',')]
+print(' '.join(str(round(p + (q - p) * $darken)) for p, q in zip((0, 0, 255), d)))"))
+    outside=($(png_mean "$SHOTS/prompt-up.png" 40 680 160 80))
+    inside=($(png_mean "$SHOTS/prompt-up.png" 300 390 680 20))
+    if [[ ${#want[@]} -eq 3 ]] && within "${outside[0]}" "${want[0]}" 6 &&
+        within "${outside[1]}" "${want[1]}" 6 && within "${outside[2]}" "${want[2]}" 6; then
+        pass "outside the panel the output is the wallpaper darkened by $darken: mean ${outside[*]}, want ${want[*]}"
+    else
+        fail "outside the panel the output is ${outside[*]}, not the wallpaper darkened by ${darken:-?} (${want[*]:-?})"
+    fi
+    if [[ ${#inside[@]} -eq 3 ]] && ! within "${inside[2]}" "${want[2]}" 30; then
+        pass "inside the panel it is not the darkened wallpaper: mean ${inside[*]}"
+    else
+        fail "inside the panel the output is ${inside[*]}, the darkened wallpaper's ${want[*]:-?}: no panel"
+    fi
+fi
+
+say "35d. a wrong secret typed into the canvas fails its call, and the panel goes"
+if [[ "$PROMPT_RUN" -eq 1 ]]; then
+    if prompt_focused "$focus_before"; then
+        pass "$(canvas_last 'seat: the keyboard is on the prompt' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the keyboard never came to the prompt's pane"
+    fi
+    keys "$prompt_wrong"
+    key Return
+    if wait_until "the wrong answer's error line" 20 'canvas_log | jgrep -F "prompt: conversation 1: an error line after the answer (attempts 1)"'; then
+        pass "the helper's error line came back after the answer: attempts 1"
+    else
+        fail "no error line after conversation 1's answer: $(canvas_log | grep -F 'prompt' | tail -4 | tr '\n' '|' | cut -c1-400)"
+    fi
+    if wait_until "the failed call" 30 '[[ -s "$SHOTS/prompt-call-1" ]]' && [[ "$(prompt_reply 1)" != *"exit=0"* ]]; then
+        pass "the wrong secret failed BeginAuthentication: $(prompt_reply 1 | head -1 | cut -c1-100)"
+    else
+        fail "the wrong secret's call: $(prompt_reply 1 | tr '\n' '|' | cut -c1-200)"
+    fi
+    assert_contains "and the conversation ended as a failure" "$(canvas_log)" "prompt: conversation 1 done, failure"
+    if wait_until "the panel gone" 10 prompt_panes_gone; then
+        pass "no prompt pane remains ($(canvas_count 'a prompt surface') made, as many gone)"
+    else
+        fail "$(canvas_count 'a prompt surface') prompt panes made, $(canvas_count 'its prompt surface is gone') gone"
+    fi
+fi
+
+say "35e. the right secret typed into the canvas authorizes, and reaches the helper alone"
+if [[ "$PROMPT_RUN" -eq 1 ]]; then
+    panes_before=$(canvas_count "prompt surface configured")
+    focus_before=$(canvas_count "seat: the keyboard is on the prompt")
+    prompt_call 2 "The nested gate asks again"
+    if wait_until "the second prompt" 30 "canvas_log | jgrep -F 'prompt: conversation 2 asking'" &&
+        wait_until "its pane" 15 "canvas_more 'prompt surface configured' $panes_before" &&
+        prompt_focused "$focus_before"; then
+        keys "$prompt_secret"
+        key Return
+    else
+        fail "no prompt for conversation 2"
+    fi
+    if wait_until "the authorized call" 30 '[[ -s "$SHOTS/prompt-call-2" ]]' && [[ "$(prompt_reply 2)" == *"exit=0"* ]]; then
+        pass "BeginAuthentication returned: the canvas's answer authorized it"
+    else
+        fail "the right secret's call: $(prompt_reply 2 | tr '\n' '|' | cut -c1-200)"
+    fi
+    assert_contains "PROMPT_DONE said success" "$(canvas_log)" "prompt: conversation 2 done, success"
+    wait_until "the panel gone" 10 prompt_panes_gone || fail "a prompt pane outlived conversation 2"
+    record=$(on_target 10 'cat "$T_HOME/prompt-record" 2>/dev/null')
+    if [[ "$record" == "$prompt_wrong"$'\n'"$prompt_secret" ]]; then
+        pass "the fake helper read exactly the wrong secret, then the right one, and nothing else"
+    else
+        fail "the fake helper's record is ${#record} bytes, not the wrong then the right secret"
+    fi
+fi
+
+say "35f. Escape dismisses the canvas's prompt, and the call fails as dismissed"
+if [[ "$PROMPT_RUN" -eq 1 ]]; then
+    panes_before=$(canvas_count "prompt surface configured")
+    focus_before=$(canvas_count "seat: the keyboard is on the prompt")
+    prompt_call 3 "The nested gate asks a third time"
+    if wait_until "the third prompt" 30 "canvas_log | jgrep -F 'prompt: conversation 3 asking'" &&
+        wait_until "its pane" 15 "canvas_more 'prompt surface configured' $panes_before" &&
+        prompt_focused "$focus_before"; then
+        keys "x"
+        key Escape
+    else
+        fail "no prompt for conversation 3"
+    fi
+    if wait_until "the dismissed call" 30 '[[ -s "$SHOTS/prompt-call-3" ]]' &&
+        [[ "$(prompt_reply 3)" != *"exit=0"* && "$(prompt_reply 3)" == *"dismissed"* ]]; then
+        pass "a dismissed prompt fails the call: $(prompt_reply 3 | head -1 | cut -c1-100)"
+    else
+        fail "the dismissed call: $(prompt_reply 3 | tr '\n' '|' | cut -c1-200)"
+    fi
+    assert_contains "the host dismissed it" "$(canvas_log)" "prompt: conversation 3 dismissed; told to caustics-polkit"
+    if wait_until "the panel gone" 10 prompt_panes_gone; then
+        pass "no prompt pane remains after the dismissal"
+    else
+        fail "a prompt pane outlived the dismissal"
+    fi
+    record=$(on_target 10 'cat "$T_HOME/prompt-record" 2>/dev/null')
+    [[ "$record" == "$prompt_wrong"$'\n'"$prompt_secret" ]] ||
+        fail "the dismissed helper read an answer: the record is ${#record} bytes"
+fi
+
+say "35g. neither secret is in the canvas's log, the sink's lines or the journal"
+if [[ "$PROMPT_RUN" -eq 1 ]]; then
+    leaks=$(on_target 10 "grep -cF -e '$prompt_secret' -e '$prompt_wrong' \"\$T_HOME/canvas.log\"")
+    if [[ "${leaks:-1}" -eq 0 ]] && ! journal | jgrep -F -e "$prompt_secret" -e "$prompt_wrong"; then
+        pass "no host line, no witness, no sidecar line and no bar line holds either secret"
+    else
+        fail "a secret is in ${leaks:-?} lines of the canvas's log, or in the bar's journal"
+    fi
+fi
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    # Torn down, as step 35 left the canvas: gone, with its sidecars.
+    prompt_canvas=$(canvas_last "set: " | sed -n 's/.*, pid \([0-9]*\)$/\1/p')
+    fixture_stop prompt
+    if wait_until "the prompt's canvas gone" 20 "! on_target 5 'kill -0 ${prompt_canvas:-0} 2>/dev/null'"; then
+        pass "the canvas stopped, and its polkit sink with it"
+    else
+        fail "the prompt step's canvas outlived its fixture"
+    fi
+    niri_msg action focus-workspace-up >/dev/null 2>&1
+fi
+
 say "36. verdict"
 journal > "$SHOTS/journal-full.txt"
 note "full journal: $SHOTS/journal-full.txt"
