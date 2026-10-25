@@ -85,6 +85,7 @@ use crate::health::{self, Health};
 use crate::model::{Action, Model, Update, Updates};
 use caustics_host::images::Images;
 use caustics_host::modules::{Collected, Modules};
+use caustics_host::pacing::Pacing;
 use caustics_host::witness::Printer;
 
 /// Which screen edge the bar takes. `FrameInputs::edge` carries it to the
@@ -150,11 +151,6 @@ pub const BAR_HEIGHT: u32 = 32;
 /// file's three compiled-in numbers and the caustic's from drifting apart.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const ICON_LOGICAL: u32 = 20;
-
-/// How long a frame request may stay unanswered before the bar draws on an
-/// event anyway. Longer than any real frame interval, shorter than a human
-/// noticing a click was dropped.
-const FRAME_STALL: std::time::Duration = std::time::Duration::from_millis(500);
 
 /// The layer-shell namespace, and the name a compositor rule would match on.
 const NAMESPACE: &str = "caustics-bar";
@@ -378,16 +374,10 @@ pub struct Bar {
     pub gpu: Option<Gpu>,
     commands: Vec<Command>,
     dirty: bool,
-    /// A `wl_surface.frame` request rode the last commit and has not come
-    /// back. While it is out, dirt waits: events coalesce into one frame per
-    /// compositor repaint instead of one frame per pointer motion, which is
-    /// the whole of docs/architecture.md's "render on events" under Mailbox.
-    frame_pending: bool,
-    /// When the pending frame request was made, for the stall fallback.
-    frame_requested_at: Instant,
-    /// The last mirror said `wants_redraw`: a spring is in flight, or the
-    /// dwell clock is running, and the next frame callback is a frame.
-    animating: bool,
+    /// The `wl_surface.frame` request in flight and the last mirror's
+    /// `wants_redraw` (`caustics_host::pacing`): dirt waits while a request
+    /// is out, and an animating caustic draws on every answer.
+    pacing: Pacing,
     started: Instant,
     last_frame: Instant,
     frames: u64,
@@ -557,9 +547,7 @@ impl Bar {
             gpu: None,
             commands: Vec::new(),
             dirty: false,
-            frame_pending: false,
-            frame_requested_at: now,
-            animating: false,
+            pacing: Pacing::new(now),
             started: now,
             last_frame: now,
             frames: 0,
@@ -1099,19 +1087,10 @@ impl Bar {
         self.service_surfaces()?;
         self.service_preview();
         self.arm_capture();
-        if self.dirty && self.frame_allowed() {
+        if self.dirty && self.pacing.allowed() {
             self.render()?;
         }
         Ok(())
-    }
-
-    /// May a dirty bar draw right now? Yes when no frame request is out;
-    /// otherwise the frame callback is the pacer — with one escape: a
-    /// compositor that stops answering frame callbacks (an occluded surface,
-    /// a compositor bug) must not freeze the bar's *input* handling, so a
-    /// request older than [`FRAME_STALL`] is treated as answered.
-    fn frame_allowed(&self) -> bool {
-        !self.frame_pending || self.frame_requested_at.elapsed() >= FRAME_STALL
     }
 
     /// The one timer the bar arms on a feeder's behalf. The capture feeder
@@ -1877,8 +1856,7 @@ impl Bar {
         // as Mesa's commit, so there is no race with it.
         let wl_surface = self.layer.wl_surface();
         wl_surface.frame(&self.qh, wl_surface.clone());
-        self.frame_pending = true;
-        self.frame_requested_at = now;
+        self.pacing.requested(now);
 
         let bar_size = gpu.bar_size();
         let popup_size = gpu.popup_size();
@@ -1923,7 +1901,7 @@ impl Bar {
         self.commands.clear();
         self.frames += 1;
         self.dirty = false;
-        self.animating = mirror.surface.wants_redraw != 0;
+        self.pacing.set_animating(mirror.surface.wants_redraw != 0);
         // **In this order**: the witnesses first, so a `layout:` line and the
         // `action:` line the same click produced read in the order they
         // happened; then the actions, which may open a popup or ask for a
@@ -1956,7 +1934,7 @@ impl Bar {
     /// a `CMD_DUMP_STALL`; the caustic's `stall:` lines follow on the next
     /// frame, one per element still moving, with the numbers it holds.
     fn watch_redraw(&mut self) {
-        let redraw = self.animating;
+        let redraw = self.pacing.animating();
         self.logged_redraw = redraw;
         let Some(stretch) = self.health.observe_redraw(redraw, Instant::now()) else {
             return;
@@ -2453,10 +2431,9 @@ impl CompositorHandler for Bar {
         if surface != self.layer.wl_surface() {
             return;
         }
-        self.frame_pending = false;
         // A spring in flight is a frame per repaint; a settled bar draws
         // nothing until an event dirties it.
-        if self.animating {
+        if self.pacing.answered() {
             self.dirty = true;
         }
     }

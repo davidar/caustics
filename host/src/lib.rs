@@ -30,6 +30,7 @@
 
 pub mod images;
 pub mod modules;
+pub mod pacing;
 pub mod pipe;
 pub mod proc;
 pub mod strings;
