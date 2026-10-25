@@ -132,3 +132,23 @@ fn a_gone_sidecar_takes_its_waiting_image() {
     assert_eq!(slots.forget_waiting().map(|i| i.key), Some("w".to_owned()));
     assert!(slots.apply(&show("w", 0, 0)).is_err());
 }
+
+/// A dim that ends without an undim (input, or its sidecar gone) leaves the
+/// facts saying what an undim would, and the picture where it was.
+#[test]
+fn a_dim_cleared_by_the_host_reads_as_an_undim() {
+    let mut slots = Slots::new();
+    slots.hold(image("x"));
+    slots.apply(&show("x", 7, 0)).expect("arrived");
+    slots
+        .apply(&Canvas::Dim {
+            id: 2,
+            alpha_milli: 1000,
+            start_ms: 0,
+            duration_ms: 0,
+        })
+        .expect("a dim");
+    slots.clear_dim();
+    assert_eq!(slots.facts().dim, Canvas::Undim.body());
+    assert_eq!(slots.facts().to_slot, SLOT_A);
+}

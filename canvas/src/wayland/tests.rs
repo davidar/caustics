@@ -15,3 +15,16 @@ fn a_buffer_is_the_logical_size_times_the_scale() {
     assert_eq!(buffer_px(3, 180), 5);
     assert_eq!(buffer_px(0, 240), 1);
 }
+
+/// A motion is movement only when it goes somewhere: the first one with no
+/// enter before it is, one to the enter's own position (a compositor
+/// refocusing the overlay under a pointer at rest) is not, and half a
+/// logical pixel either way is.
+#[test]
+fn a_motion_to_where_the_pointer_already_is_is_not_input() {
+    assert!(moved(None, (10.0, 10.0)));
+    assert!(!moved(Some((10.0, 10.0)), (10.0, 10.0)));
+    assert!(!moved(Some((10.0, 10.0)), (10.2, 9.9)));
+    assert!(moved(Some((10.0, 10.0)), (10.5, 10.0)));
+    assert!(moved(Some((10.0, 10.0)), (10.0, 300.0)));
+}

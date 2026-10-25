@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use super::*;
-use caustics_bar_abi::canvas::STRUCTS;
+use caustics_bar_abi::canvas::{STRUCTS, TARGET_BACKGROUND, TARGET_OVERLAY};
 use caustics_bar_abi::wire::{CANVAS_SHOW, Canvas};
 use punchcutter_slang::Options;
 
@@ -81,7 +81,13 @@ fn every_baked_binding_is_one_the_host_binds() {
 fn the_baked_literals_carry_the_fade_s_witnesses() {
     let strings = caustics_host::strings::Strings::baked(BAKED_REFLECTION);
     let all: Vec<&str> = strings.iter().map(|(_, text)| text).collect();
-    for want in ["midpoint", "fading over", "no picture yet", "done"] {
+    for want in [
+        "midpoint",
+        "fading over",
+        "no picture yet",
+        "done",
+        "reached",
+    ] {
         assert!(
             all.iter().any(|text| text.contains(want)),
             "no literal with {want:?}: {all:?}"
@@ -138,10 +144,19 @@ fn fading(start: u64, duration: u32) -> Gpu {
     gpu
 }
 
-/// One frame at `now` on an offscreen image: the stamp it was drawn under,
-/// and its centre texel.
+/// One frame of the background at `now` on an offscreen image: the stamp it
+/// was drawn under, and its centre texel.
 fn frame_at(gpu: &mut Gpu, now: u64) -> (u32, [u8; 4]) {
+    frame_on(gpu, now, TARGET_BACKGROUND)
+}
+
+/// One frame at `now` of the surface `role` names (`TARGET_*`).
+fn frame_on(gpu: &mut Gpu, now: u64, role: u32) -> (u32, [u8; 4]) {
     let target = gpu.configure(None, SIDE, SIDE);
+    assert!(
+        target.ids.is_none(),
+        "the canvas's surfaces make no ids texture"
+    );
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("canvas-test-dst"),
         size: wgpu::Extent3d {
@@ -158,7 +173,7 @@ fn frame_at(gpu: &mut Gpu, now: u64) -> (u32, [u8; 4]) {
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let (lo, hi) = clock::words(now);
-    gpu.write_params(&target.params, SIDE, SIDE, 120, lo, hi);
+    gpu.write_params(&target.params, SIDE, SIDE, 120, lo, hi, role);
     gpu.encode(&target.params, &view, SIDE, SIDE);
     let stamp = gpu.finish().expect("the frame completes");
 
@@ -338,4 +353,110 @@ fn before_a_picture_the_canvas_is_the_dim_colour() {
     let (_, end) = frame_at(&mut gpu, 2_000);
     assert_eq!(end, [255, 0, 0, 255]);
     assert_eq!(CANVAS_SHOW, 1);
+}
+
+// -- On a device: the dim, on the overlay ---------------------------------------
+
+/// A canvas showing red in slot A, with a dim towards `alpha_milli` from
+/// `start` over `duration` ms under `id`.
+fn dimming(start: u64, duration: u32, alpha_milli: u32, id: u32) -> Gpu {
+    let mut gpu = Gpu::headless().expect("a Vulkan adapter (lavapipe will do)");
+    gpu.upload(SLOT_A, &solid("red", [255, 0, 0, 255]))
+        .expect("uploads");
+    gpu.write_facts(&CanvasFacts {
+        show: Canvas::Show {
+            key: "red".into(),
+            fade_start_ms: 0,
+            fade_duration_ms: 0,
+        }
+        .body(),
+        dim: Canvas::Dim {
+            id,
+            alpha_milli,
+            start_ms: start,
+            duration_ms: duration,
+        }
+        .body(),
+        from_slot: NO_INDEX,
+        to_slot: SLOT_A,
+        shows: 1,
+        ..CanvasFacts::default()
+    });
+    gpu
+}
+
+/// `dim_now` on the overlay: nothing at the start, half the depth at the
+/// midpoint of the time, the depth after it, and premultiplied, so its
+/// colour is never more than its alpha. The overlay asks for frames while
+/// its alpha moves and stops when it is there, and the state says when.
+#[test]
+fn the_overlay_dims_to_its_depth_over_its_time() {
+    if !gated() {
+        return;
+    }
+    let mut gpu = dimming(10_000, 4_000, 1000, 7);
+    let (_, start) = frame_on(&mut gpu, 10_000, TARGET_OVERLAY);
+    assert_eq!(start, [0, 0, 0, 0], "at the start: transparent");
+    assert!(close(private_f32(&gpu, "dim"), 0.0));
+    assert_eq!(gpu.mirror().wants_redraw, 1, "a dim on its way");
+    assert_eq!(gpu.mirror().dim_reached, 0);
+
+    let (_, mid) = frame_on(&mut gpu, 12_000, TARGET_OVERLAY);
+    assert!(close(private_f32(&gpu, "dim"), 0.5));
+    assert!(
+        mid[3].abs_diff(128) <= 1,
+        "half the depth at the midpoint: {mid:?}"
+    );
+    assert!(
+        mid[..3].iter().all(|c| *c <= mid[3]),
+        "premultiplied: {mid:?}"
+    );
+    assert_eq!(gpu.mirror().dim_reached, 0);
+
+    let (stamp, end) = frame_on(&mut gpu, 15_000, TARGET_OVERLAY);
+    assert_eq!(end[3], 255, "at its depth, all dim colour: {end:?}");
+    assert!(close(private_f32(&gpu, "dim"), 1.0));
+    assert_eq!(
+        gpu.mirror().wants_redraw,
+        0,
+        "a dim at its depth asks for nothing"
+    );
+    assert_eq!((gpu.mirror().dim_reached, gpu.mirror().dim_id), (1, 7));
+    let strings = caustics_host::strings::Strings::baked(BAKED_REFLECTION);
+    assert!(
+        gpu.mirror().witnesses_of(stamp).iter().any(|note| strings
+            .get(note.head)
+            .is_some_and(|text| text.contains("reached"))),
+        "the depth is witnessed on the frame that reaches it"
+    );
+    // A completed dim stays at its depth.
+    let (_, later) = frame_on(&mut gpu, 3_600_000, TARGET_OVERLAY);
+    assert_eq!(later, end);
+    assert_eq!(gpu.mirror().dim_reached, 1);
+}
+
+/// The background no longer carries the dim: mid-dim and at its depth it is
+/// the picture, and it asks for no frames for the dim's sake.
+#[test]
+fn the_background_never_darkens() {
+    if !gated() {
+        return;
+    }
+    let mut gpu = dimming(10_000, 4_000, 1000, 1);
+    for now in [12_000, 20_000] {
+        let (_, texel) = frame_at(&mut gpu, now);
+        assert_eq!(texel, [255, 0, 0, 255], "the background at {now} ms");
+        assert_eq!(gpu.mirror().wants_redraw, 0, "the background's own word");
+    }
+    // An undim, and the overlay is nothing at all.
+    gpu.write_facts(&CanvasFacts {
+        dim: Canvas::Undim.body(),
+        to_slot: SLOT_A,
+        from_slot: NO_INDEX,
+        shows: 1,
+        ..CanvasFacts::default()
+    });
+    let (_, overlay) = frame_on(&mut gpu, 20_000, TARGET_OVERLAY);
+    assert_eq!(overlay, [0, 0, 0, 0]);
+    assert_eq!(gpu.mirror().dim_reached, 0);
 }

@@ -2,11 +2,13 @@
 //! a Slang caustic and cross-faded on command (docs/canvas.md).
 //!
 //! The bar process's shape, for a second caustic: a small process that owns
-//! the Wayland objects (one background layer surface per output), the device
-//! and its sidecars' pipes, and decides nothing. `caustics-wallpaper` sends
-//! the pictures and the commands, `caustics-reload` the caustic as it is
-//! saved, and the caustic says how far a fade is and whether it wants another
-//! frame. The mechanism is `caustics-host`'s, which the bar runs on too.
+//! the Wayland objects (one background layer surface per output, and one
+//! overlay per output while a dim is up), the seat's input, the device and
+//! its sidecars' pipes, and decides nothing. `caustics-wallpaper` sends the
+//! pictures and the commands, `caustics-reload` the caustic as it is saved,
+//! and the caustic says how far a fade or a dim is and whether it wants
+//! another frame. The mechanism is `caustics-host`'s, which the bar runs on
+//! too.
 //!
 //! Exit codes, as the bar's: 0 a clean stop, 1 a protocol error or a fatal
 //! dispatch or frame failure, 2 a refusal (a bad argument, a discrete GPU),
@@ -14,7 +16,9 @@
 //! The canvas's unit restarts on all of them (canvas/README.md).
 
 mod clock;
+mod dim;
 mod gpu;
+mod role;
 mod sidecars;
 mod slots;
 mod wayland;

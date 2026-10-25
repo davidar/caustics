@@ -1,36 +1,55 @@
-//! The canvas's Wayland side: one background surface per output, and the
-//! meeting point of everything else the host is made of.
+//! The canvas's Wayland side: an output's surfaces, one per role, the seat's
+//! input, and the meeting point of everything else the host is made of.
 //!
 //! Everything here passes the membership test the bar's process does
 //! (docs/architecture.md, *The bar process*): it owns a Wayland object, sits
 //! on a configure round trip, or routes a sidecar's frame to where its bytes
 //! go. Nothing here decides what the canvas looks like: a picture is copied
 //! into a slot when its show arrives, a command's head is copied into
-//! `facts`, and the caustic says how far a fade is and whether it wants
-//! another frame (docs/abi.md, *The canvas's buffer*).
+//! `facts`, and the caustic says how far a fade or a dim is and whether it
+//! wants another frame (docs/abi.md, *The canvas's buffer*).
 //!
 //! # The surfaces
 //!
-//! One `zwlr_layer_shell_v1` surface per output on the **background** layer,
-//! anchored to all four edges, exclusive zone −1 (it never moves another
-//! surface), no keyboard, namespace `caustics-canvas`: made when the output
-//! appears and gone when it goes. Each has a `wp_fractional_scale_v1` and a
-//! `wp_viewport` from its first commit (docs/canvas.md, *Surfaces*): the
-//! buffer is the logical size times the scale the compositor prefers, and the
-//! viewport's destination is the logical size, so a 1.5 output gets a buffer
-//! of its own pixels rather than a 2× one scaled down. A compositor without
-//! the fractional-scale global gets the integer scale, said in one line.
+//! A **pane** is one output's `zwlr_layer_shell_v1` surface in one [`Role`]
+//! (`role.rs` holds what differs between roles: the layer, the keyboard, the
+//! namespace, the draw target). Every output has its **background** pane from
+//! the moment it appears until it goes. While a dim is up it has an
+//! **overlay** pane too: made for every output when a `CANVAS_DIM` arrives
+//! and for an output that appears mid-dim, and destroyed on `CANVAS_UNDIM`,
+//! on input, and when the dim's sidecar goes (docs/canvas.md, *Surfaces*).
+//! Each pane has its own swapchain, frame pacing, `wp_fractional_scale_v1`
+//! and `wp_viewport` from its first commit: the buffer is the logical size
+//! times the scale the compositor prefers, and the viewport's destination is
+//! the logical size, so a 1.5 output gets a buffer of its own pixels rather
+//! than a 2× one scaled down. A compositor without the fractional-scale
+//! global gets the integer scale, said in one line.
+//!
+//! # Input
+//!
+//! The seat's pointer, keyboard and touch are bound as the seat offers them.
+//! While a dim is up, **input is a cancel**, as chayang's is: the pointer
+//! moving over an overlay, a button or a scroll on one, any key pressed (the
+//! overlay holds the keyboard exclusively, so every key the compositor sends
+//! is one pressed on it), a touch going down on one. The host writes
+//! `CANVAS_EVENT_INPUT` to the dim's sidecar, takes every overlay down, and
+//! the outputs are the plain wallpaper again (docs/abi.md, *Canvas event*).
+//! The pointer *entering* an overlay is not input: the compositor sends an
+//! enter when the overlay maps under a pointer that has not moved, so the
+//! cursor is hidden there and only a motion to somewhere else cancels. No
+//! keymap is read: the fact of a key is all a cancel needs.
 //!
 //! # The frames
 //!
-//! A frame is one output's. It is drawn when that output is dirty (a
-//! configure, a command, a reload) or the caustic said `wants_redraw`, and
-//! its frame request is answered or [`FRAME_STALL`] old: each output is paced
-//! on its own `wl_surface.frame`, made before the present so it rides the
-//! commit (docs/architecture.md, *The frame*). A compositor that sends no
-//! callbacks to a surface it does not repaint still gets a frame every
-//! stall, from a timer: that is the pacing default docs/canvas.md, *Time*,
-//! asks for.
+//! A frame is one pane's. It is drawn when that pane is dirty (a configure, a
+//! command, a reload) or the caustic said `wants_redraw` for it, and its frame
+//! request is answered or [`FRAME_STALL`] old: each pane is paced on its own
+//! `wl_surface.frame`, made before the present so it rides the commit
+//! (docs/architecture.md, *The frame*). A compositor that sends no callbacks
+//! to a surface it does not repaint still gets a frame every stall, from a
+//! timer: that is the pacing default docs/canvas.md, *Time*, asks for. After
+//! each frame the host reads whether the dim is at its depth
+//! (`CanvasState::dim_reached`) and tells the dim's sidecar once.
 //!
 //! [`FRAME_STALL`]: caustics_host::pacing::FRAME_STALL
 
@@ -39,7 +58,8 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use caustics_bar_abi::wire::{
-    self, Frame, Module, PROGRAM_CANVAS, REQ_OUTPUT_SIZE, REQ_PROGRAM, Request,
+    self, CANVAS_EVENT_DIMMED, CANVAS_EVENT_INPUT, Canvas as Command, CanvasEventBody, Frame,
+    Module, PROGRAM_CANVAS, REQ_OUTPUT_SIZE, REQ_PROGRAM, Request,
 };
 use caustics_bar_abi::{CANVAS_ENTRIES, wire::Image};
 use caustics_host::modules::{Collected, Modules};
@@ -57,7 +77,8 @@ use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
-    delegate_compositor, delegate_layer, delegate_output, delegate_registry,
+    delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
+    delegate_seat,
     output::{OutputHandler, OutputState},
     reexports::calloop::{
         LoopHandle, RegistrationToken,
@@ -65,27 +86,26 @@ use smithay_client_toolkit::{
     },
     registry::{ProvidesRegistryState, RegistryState},
     registry_handlers,
+    seat::{
+        Capability, SeatHandler, SeatState,
+        pointer::{PointerEvent, PointerEventKind, PointerHandler},
+    },
     shell::{
         WaylandSurface,
-        wlr_layer::{
-            Anchor, KeyboardInteractivity, Layer, LayerShell, LayerShellHandler, LayerSurface,
-            LayerSurfaceConfigure,
-        },
+        wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
     },
 };
 use wayland_client::{
-    Connection, Dispatch, Proxy, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle, WEnum,
     globals::GlobalList,
-    protocol::{wl_output, wl_surface},
+    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch},
 };
 
+use crate::dim::Dims;
 use crate::gpu::{self, Gpu};
+use crate::role::Role;
 use crate::sidecars::{self, RELOAD, WALLPAPER};
 use crate::slots::{Applied, Slots};
-
-/// The layer surfaces' namespace: what a compositor's rules and `niri msg
-/// layers` call the canvas.
-pub const NAMESPACE: &str = "caustics-canvas";
 
 /// `wp_fractional_scale_v1`'s unit: a scale of 1.0 is 120.
 const SCALE_ONE: u32 = 120;
@@ -106,10 +126,22 @@ pub fn buffer_px(logical: u32, scale: u32) -> u32 {
         .max(1) as u32
 }
 
-/// One output and its background surface.
-struct Screen {
+/// Whether a pointer motion to `to` is movement, from where the pointer last
+/// was on the overlay (`from`, the enter's or the last motion's position).
+/// A motion to where the pointer already is, which a compositor may send
+/// when it refocuses a surface, is not.
+pub fn moved(from: Option<(f64, f64)>, to: (f64, f64)) -> bool {
+    match from {
+        Some(from) => (from.0 - to.0).abs() >= 0.5 || (from.1 - to.1).abs() >= 0.5,
+        None => true,
+    }
+}
+
+/// One output's surface in one role.
+struct Pane {
     /// Dropped first, before the surface its raw pointers name.
     target: Option<Surface>,
+    role: Role,
     output: wl_output::WlOutput,
     /// The output's name, for the journal.
     name: String,
@@ -123,12 +155,12 @@ struct Screen {
     configured: bool,
     /// A size or a scale that the swapchain has not caught up with.
     pending: bool,
-    /// Something changed that this output has not drawn.
+    /// Something changed that this pane has not drawn.
     dirty: bool,
     pacing: Pacing,
 }
 
-impl Screen {
+impl Pane {
     fn buffer(&self) -> (u32, u32) {
         (
             buffer_px(self.logical.0, self.scale),
@@ -141,21 +173,31 @@ impl Screen {
 pub struct Canvas {
     registry_state: RegistryState,
     output_state: OutputState,
+    seat_state: SeatState,
     compositor: CompositorState,
     layer_shell: LayerShell,
     fractional: Option<WpFractionalScaleManagerV1>,
     viewporter: Option<WpViewporter>,
     conn: Connection,
     qh: QueueHandle<Canvas>,
-    screens: Vec<Screen>,
-    /// The device, once the first output has been configured. Dropped after
-    /// every screen's target (declared after `screens`).
+    panes: Vec<Pane>,
+    /// The device, once the first pane has been configured. Dropped after
+    /// every pane's target (declared after `panes`).
     gpu: Option<Gpu>,
     pipes: Vec<Pipe>,
     modules: Modules,
     strings: Strings,
     printer: Printer,
     slots: Slots,
+    /// The dim up now, whose it is and what it has been told.
+    dims: Dims,
+    /// The seat's devices, as it offers them.
+    pointer: Option<wl_pointer::WlPointer>,
+    keyboard: Option<wl_keyboard::WlKeyboard>,
+    touch: Option<wl_touch::WlTouch>,
+    /// Where the pointer last was on an overlay, surface-local: what a
+    /// motion is measured from.
+    pointer_at: Option<(f64, f64)>,
     /// Pictures placed before the device existed, by slot.
     unplaced: [Option<Image>; 2],
     /// The size last told the wallpaper sidecar, and how many sizes have been.
@@ -204,19 +246,25 @@ impl Canvas {
         Ok(Canvas {
             registry_state: RegistryState::new(globals),
             output_state: OutputState::new(globals, &qh),
+            seat_state: SeatState::new(globals, &qh),
             compositor,
             layer_shell,
             fractional,
             viewporter,
             conn,
             qh,
-            screens: Vec::new(),
+            panes: Vec::new(),
             gpu: None,
             pipes,
             modules: Modules::new(&CANVAS_ENTRIES),
             strings,
             printer: Printer::new(Caustic::Canvas),
             slots: Slots::new(),
+            dims: Dims::new(),
+            pointer: None,
+            keyboard: None,
+            touch: None,
+            pointer_at: None,
             unplaced: [None, None],
             told: None,
             sizes: 0,
@@ -233,14 +281,14 @@ impl Canvas {
         self.loop_handle = Some(handle);
     }
 
-    /// True until the first output's configure has brought the device up.
+    /// True until the first pane's configure has brought the device up.
     pub fn awaiting_device(&self) -> bool {
         self.gpu.is_none() && self.exit.is_none()
     }
 
     /// Whether any output has a surface yet.
     pub fn has_screens(&self) -> bool {
-        !self.screens.is_empty()
+        !self.panes.is_empty()
     }
 
     pub fn frames(&self) -> u64 {
@@ -255,18 +303,31 @@ impl Canvas {
         self.pipes.iter().find(|pipe| pipe.name() == name)
     }
 
+    fn mark_dirty(&mut self, role: Role) {
+        for pane in self.panes.iter_mut().filter(|pane| pane.role == role) {
+            pane.dirty = true;
+        }
+    }
+
     fn mark_all_dirty(&mut self) {
-        for screen in &mut self.screens {
-            screen.dirty = true;
+        for pane in &mut self.panes {
+            pane.dirty = true;
         }
     }
 
     // -- the surfaces ----------------------------------------------------
 
-    /// A background surface for a new output, committed with nothing
-    /// attached so the compositor configures it.
-    fn add_screen(&mut self, output: wl_output::WlOutput) {
-        let info = self.output_state.info(&output);
+    /// A pane for an output, in a role, committed with nothing attached so
+    /// the compositor configures it.
+    fn add_pane(&mut self, output: &wl_output::WlOutput, role: Role) {
+        if self
+            .panes
+            .iter()
+            .any(|pane| pane.role == role && pane.output == *output)
+        {
+            return;
+        }
+        let info = self.output_state.info(output);
         let name = info
             .as_ref()
             .and_then(|info| info.name.clone())
@@ -276,13 +337,13 @@ impl Canvas {
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
             surface,
-            Layer::Background,
-            Some(NAMESPACE),
-            Some(&output),
+            role.layer(),
+            Some(role.namespace()),
+            Some(output),
         );
-        layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
-        layer.set_exclusive_zone(-1);
-        layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        layer.set_anchor(role.anchor());
+        layer.set_exclusive_zone(role.exclusive_zone());
+        layer.set_keyboard_interactivity(role.keyboard());
         layer.set_size(0, 0);
         let (fractional, viewport) = if self.uses_fractional() {
             let wl_surface = layer.wl_surface();
@@ -300,12 +361,15 @@ impl Canvas {
         };
         layer.commit();
         tracing::info!(
-            "output {name}: a background surface (integer scale {integer} until the compositor \
-             says otherwise)"
+            "output {name}: a{} {} surface (integer scale {integer} until the compositor \
+             says otherwise)",
+            if role == Role::Overlay { "n" } else { "" },
+            role.name()
         );
-        self.screens.push(Screen {
+        self.panes.push(Pane {
             target: None,
-            output,
+            role,
+            output: output.clone(),
             name,
             layer,
             fractional,
@@ -319,43 +383,81 @@ impl Canvas {
         });
     }
 
-    /// The output went, or the compositor closed its surface: the swapchain
-    /// first, then the objects it points at.
-    fn remove_screen(&mut self, index: usize) {
-        let mut screen = self.screens.remove(index);
-        screen.target = None;
-        if let Some(viewport) = screen.viewport.take() {
+    /// The output went, or the compositor closed the surface, or the dim is
+    /// over: the swapchain first, then the objects it points at, then the
+    /// layer surface (destroyed as it drops).
+    fn remove_pane(&mut self, index: usize) {
+        let mut pane = self.panes.remove(index);
+        pane.target = None;
+        if let Some(viewport) = pane.viewport.take() {
             viewport.destroy();
         }
-        if let Some(fractional) = screen.fractional.take() {
+        if let Some(fractional) = pane.fractional.take() {
             fractional.destroy();
         }
-        tracing::info!("output {}: its surface is gone", screen.name);
-        drop(screen);
-        self.tell_size();
+        tracing::info!(
+            "output {}: its {} surface is gone",
+            pane.name,
+            pane.role.name()
+        );
+        let sized = pane.role.sizes_the_picture();
+        drop(pane);
+        if sized {
+            self.tell_size();
+        }
     }
 
-    fn screen_of_surface(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
-        self.screens
+    fn pane_of_surface(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
+        self.panes
             .iter()
-            .position(|screen| screen.layer.wl_surface() == surface)
+            .position(|pane| pane.layer.wl_surface() == surface)
     }
 
-    /// Bring the device up, or give an output its swapchain, or resize one,
-    /// for whatever the last configures and scales asked — **outside** the
+    fn role_of_surface(&self, surface: &wl_surface::WlSurface) -> Option<Role> {
+        self.pane_of_surface(surface)
+            .map(|index| self.panes[index].role)
+    }
+
+    /// An overlay on every output the canvas has a background on.
+    fn raise_overlays(&mut self) {
+        let outputs: Vec<wl_output::WlOutput> = self
+            .panes
+            .iter()
+            .filter(|pane| pane.role == Role::Background)
+            .map(|pane| pane.output.clone())
+            .collect();
+        for output in outputs {
+            self.add_pane(&output, Role::Overlay);
+        }
+    }
+
+    /// Every overlay down: the outputs are the plain wallpaper again.
+    fn drop_overlays(&mut self) {
+        while let Some(index) = self
+            .panes
+            .iter()
+            .position(|pane| pane.role == Role::Overlay)
+        {
+            self.remove_pane(index);
+        }
+        self.pointer_at = None;
+    }
+
+    /// Bring the device up, or give a pane its swapchain, or resize one, for
+    /// whatever the last configures and scales asked — **outside** the
     /// dispatch that delivered them, as the bar does (Mesa's WSI makes a
     /// round trip of its own while a surface is created).
     pub fn service(&mut self) -> Result<()> {
-        let mut changed = false;
-        for index in 0..self.screens.len() {
-            let screen = &mut self.screens[index];
-            if !screen.configured || !screen.pending {
+        let mut sized = false;
+        for index in 0..self.panes.len() {
+            let pane = &mut self.panes[index];
+            if !pane.configured || !pane.pending {
                 continue;
             }
-            screen.pending = false;
-            screen.dirty = true;
-            changed = true;
-            let (width, height) = screen.buffer();
+            pane.pending = false;
+            pane.dirty = true;
+            sized |= pane.role.sizes_the_picture();
+            let (width, height) = pane.buffer();
             if self.gpu.is_none() {
                 if let Err(err) = self.bring_up(index) {
                     self.exit = Some(Exit::Fault(format!("the device did not come up: {err:#}")));
@@ -364,53 +466,60 @@ impl Canvas {
                 continue;
             }
             let gpu = self.gpu.as_ref().expect("checked above");
-            let screen = &mut self.screens[index];
-            match screen.target.as_mut() {
+            let pane = &mut self.panes[index];
+            match pane.target.as_mut() {
                 Some(target) => {
                     if gpu.resize(target, width, height) {
-                        tracing::info!("output {}: {width}x{height} px", screen.name);
+                        tracing::info!(
+                            "output {}: {} {width}x{height} px",
+                            pane.name,
+                            pane.role.name()
+                        );
                     }
                 }
                 None => {
-                    let (display, surface) = handles(&self.conn, &screen.layer)?;
+                    let (display, surface) = handles(&self.conn, &pane.layer)?;
                     // SAFETY: the connection and the layer surface outlive
-                    // the target, which `remove_screen` drops first.
+                    // the target, which `remove_pane` drops first.
                     match unsafe { gpu.attach(display, surface, width, height) } {
                         Ok(target) => {
                             tracing::info!(
-                                "output {}: {width}x{height} px at scale {}/120",
-                                screen.name,
-                                screen.scale
+                                "output {}: {} {width}x{height} px at scale {}/120",
+                                pane.name,
+                                pane.role.name(),
+                                pane.scale
                             );
-                            screen.target = Some(target);
+                            pane.target = Some(target);
                         }
                         Err(err) => tracing::error!(
-                            "output {}: no swapchain ({err:#}); nothing is drawn there",
-                            screen.name
+                            "output {}: no swapchain for the {} ({err:#}); nothing is drawn there",
+                            pane.name,
+                            pane.role.name()
                         ),
                     }
                 }
             }
         }
-        if changed {
+        if sized {
             self.tell_size();
         }
         Ok(())
     }
 
-    /// The device, on the first configured output's surface; then what was
+    /// The device, on the first configured pane's surface; then what was
     /// waiting for it, and the two requests only a device can make.
     fn bring_up(&mut self, index: usize) -> Result<()> {
-        let screen = &self.screens[index];
-        let (width, height) = screen.buffer();
-        let (display, surface) = handles(&self.conn, &screen.layer)?;
+        let pane = &self.panes[index];
+        let (width, height) = pane.buffer();
+        let (display, surface) = handles(&self.conn, &pane.layer)?;
         // SAFETY: as in `service`: the connection and the layer surface
         // outlive the target, and the device is dropped after every target.
         let (mut gpu, target) = unsafe { Gpu::new(display, surface, width, height) }?;
         tracing::info!(
-            "output {}: {width}x{height} px at scale {}/120; the device is up",
-            screen.name,
-            screen.scale
+            "output {}: {} {width}x{height} px at scale {}/120; the device is up",
+            pane.name,
+            pane.role.name(),
+            pane.scale
         );
         for slot in 0..2u32 {
             if let Some(image) = self.unplaced[slot as usize].take() {
@@ -433,20 +542,21 @@ impl Canvas {
                 "the canvas's program",
             );
         }
-        self.screens[index].target = Some(target);
+        self.panes[index].target = Some(target);
         self.gpu = Some(gpu);
         Ok(())
     }
 
     /// Tell the wallpaper sidecar the largest output's buffer size when it
     /// changes: the size it fits the next picture to (docs/abi.md,
-    /// *Request*, `REQ_OUTPUT_SIZE`).
+    /// *Request*, `REQ_OUTPUT_SIZE`). Only the backgrounds count: the
+    /// picture is drawn there.
     fn tell_size(&mut self) {
         let largest = self
-            .screens
+            .panes
             .iter()
-            .filter(|screen| screen.configured)
-            .map(Screen::buffer)
+            .filter(|pane| pane.configured && pane.role.sizes_the_picture())
+            .map(Pane::buffer)
             .max_by_key(|(w, h)| u64::from(*w) * u64::from(*h));
         let Some((width, height)) = largest else {
             return;
@@ -471,7 +581,7 @@ impl Canvas {
 
     // -- the frames --------------------------------------------------------
 
-    /// After every dispatch: the surfaces, then every output that has
+    /// After every dispatch: the surfaces, then every pane that has
     /// something to draw and may, then the stall timer.
     pub fn after_dispatch(&mut self) -> Result<()> {
         if self.exit.is_some() {
@@ -482,10 +592,10 @@ impl Canvas {
             return Ok(());
         }
         let now = Instant::now();
-        for index in 0..self.screens.len() {
-            let screen = &self.screens[index];
-            let wants = screen.dirty || screen.pacing.animating();
-            if screen.target.is_some() && wants && screen.pacing.allowed_at(now) {
+        for index in 0..self.panes.len() {
+            let pane = &self.panes[index];
+            let wants = pane.dirty || pane.pacing.animating();
+            if pane.target.is_some() && wants && pane.pacing.allowed_at(now) {
                 self.render(index)?;
             }
         }
@@ -497,43 +607,48 @@ impl Canvas {
         let Some(gpu) = self.gpu.as_mut() else {
             return Ok(());
         };
-        let screen = &mut self.screens[index];
-        let Some(target) = screen.target.as_mut() else {
+        let pane = &mut self.panes[index];
+        let Some(target) = pane.target.as_mut() else {
             return Ok(());
         };
         let Some(frame) = gpu.acquire(target)? else {
             // Nothing to draw into: the next configure or the stall tries
             // again.
-            screen.dirty = true;
+            pane.dirty = true;
             return Ok(());
         };
         // The frame request rides the commit the present makes.
-        let wl_surface = screen.layer.wl_surface();
+        let wl_surface = pane.layer.wl_surface();
         wl_surface.frame(&self.qh, wl_surface.clone());
-        screen.pacing.requested(Instant::now());
-        let stamp = gpu.draw(target, frame, screen.scale)?;
-        screen.dirty = false;
+        pane.pacing.requested(Instant::now());
+        let stamp = gpu.draw(target, frame, pane.scale, pane.role.target())?;
+        pane.dirty = false;
         self.frames += 1;
         let mirror = gpu.mirror();
-        screen.pacing.set_animating(mirror.wants_redraw != 0);
+        pane.pacing.set_animating(mirror.wants_redraw != 0);
         for note in mirror.witnesses_of(stamp) {
             self.printer.print(note, &self.strings, &[]);
         }
         if mirror.witness_lost > 0 && mirror.witness_frame == stamp {
             tracing::warn!("witness: {} lines lost this frame", mirror.witness_lost);
         }
+        let (reached, id) = (mirror.dim_reached, mirror.dim_id);
+        if let Some((sidecar, id)) = self.dims.reached(reached, id) {
+            self.tell(&sidecar, CANVAS_EVENT_DIMMED, id);
+            tracing::info!("dim {id}: at its depth, told to {sidecar}");
+        }
         Ok(())
     }
 
-    /// A frame is owed on an output whose request is out and unanswered: wake
+    /// A frame is owed on a pane whose request is out and unanswered: wake
     /// when the request stops holding it, since a compositor that does not
     /// repaint a covered surface sends nothing else.
     fn arm_stall(&mut self) {
         let deadline = self
-            .screens
+            .panes
             .iter()
-            .filter(|screen| screen.target.is_some() && (screen.dirty || screen.pacing.animating()))
-            .filter_map(|screen| screen.pacing.stall_deadline())
+            .filter(|pane| pane.target.is_some() && (pane.dirty || pane.pacing.animating()))
+            .filter_map(|pane| pane.pacing.stall_deadline())
             .min();
         if deadline == self.stall_at {
             return;
@@ -564,6 +679,49 @@ impl Canvas {
         }
     }
 
+    // -- the dim -----------------------------------------------------------
+
+    /// One `CanvasEvent` down the stdin of the sidecar whose dim it is about.
+    fn tell(&self, sidecar: &str, event: u32, id: u32) {
+        let Some(pipe) = self.pipe(sidecar) else {
+            tracing::warn!("dim {id}: no pipe to {sidecar} for its event");
+            return;
+        };
+        pipe.send_frame(
+            &Frame::CanvasEvent(CanvasEventBody {
+                event,
+                id,
+                ..CanvasEventBody::default()
+            }),
+            &format!("dim {id}'s event"),
+        );
+    }
+
+    /// The dim is over without an undim: `facts` says so, and every overlay
+    /// goes.
+    fn end_dim(&mut self) {
+        self.slots.clear_dim();
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.write_facts(self.slots.facts());
+        }
+        self.drop_overlays();
+    }
+
+    /// Input while a dim is up: tell its sidecar, and take the overlays down.
+    /// Nothing while no dim is up, so a burst of events cancels once.
+    fn input(&mut self, what: &str) {
+        let Some(dim) = self.dims.cancel() else {
+            return;
+        };
+        self.tell(&dim.sidecar, CANVAS_EVENT_INPUT, dim.id);
+        tracing::info!(
+            "dim {}: cancelled by {what}; told to {}, the overlays go",
+            dim.id,
+            dim.sidecar
+        );
+        self.end_dim();
+    }
+
     // -- the sidecars ------------------------------------------------------
 
     /// One event from a sidecar's pipe.
@@ -577,6 +735,12 @@ impl Canvas {
                     && let Some(image) = self.slots.forget_waiting()
                 {
                     tracing::info!("sidecar {name}: gone; {:?} was never shown", image.key);
+                }
+                // A dim without its owner is undone: a crashed sidecar never
+                // leaves a dark screen.
+                if let Some(dim) = self.dims.gone(&name) {
+                    tracing::info!("sidecar {name}: gone mid-dim; dim {} goes with it", dim.id);
+                    self.end_dim();
                 }
             }
             Event::Frame { sidecar, frame } => self.apply_frame(&sidecar, frame),
@@ -609,7 +773,7 @@ impl Canvas {
         }
     }
 
-    fn apply_command(&mut self, sidecar: &str, command: &wire::Canvas) {
+    fn apply_command(&mut self, sidecar: &str, command: &Command) {
         match self.slots.apply(command) {
             Ok(Applied::Upload { slot, image }) => {
                 let body = command.body();
@@ -643,7 +807,20 @@ impl Canvas {
         if let Some(gpu) = self.gpu.as_ref() {
             gpu.write_facts(self.slots.facts());
         }
-        self.mark_all_dirty();
+        match command {
+            Command::Show { .. } => self.mark_dirty(Role::Background),
+            Command::Dim { id, .. } => {
+                if let Some(replaced) = self.dims.begin(sidecar, *id) {
+                    tracing::info!("dim {}: replaced by dim {id}", replaced.id);
+                }
+                self.raise_overlays();
+                self.mark_dirty(Role::Overlay);
+            }
+            Command::Undim => {
+                self.dims.end();
+                self.drop_overlays();
+            }
+        }
     }
 
     /// One entry point of a fresh compile, and the swap when it completes a
@@ -705,17 +882,16 @@ fn handles(
 
 impl LayerShellHandler for Canvas {
     fn closed(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface) {
-        if let Some(index) = self
-            .screens
-            .iter()
-            .position(|screen| screen.layer.wl_surface() == layer.wl_surface())
-        {
-            tracing::info!(
-                "output {}: the compositor closed its surface",
-                self.screens[index].name
-            );
-            self.remove_screen(index);
-        }
+        let Some(index) = self.pane_of_surface(layer.wl_surface()) else {
+            return;
+        };
+        let role = self.panes[index].role;
+        tracing::info!(
+            "output {}: the compositor closed its {} surface",
+            self.panes[index].name,
+            role.name()
+        );
+        self.remove_pane(index);
     }
 
     fn configure(
@@ -726,27 +902,28 @@ impl LayerShellHandler for Canvas {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        let Some(index) = self.screen_of_surface(layer.wl_surface()) else {
+        let Some(index) = self.pane_of_surface(layer.wl_surface()) else {
             return;
         };
-        let screen = &mut self.screens[index];
+        let pane = &mut self.panes[index];
         let (width, height) = (configure.new_size.0.max(1), configure.new_size.1.max(1));
-        let first = !screen.configured;
-        screen.configured = true;
-        if screen.logical != (width, height) || first {
-            screen.logical = (width, height);
-            screen.pending = true;
+        let first = !pane.configured;
+        pane.configured = true;
+        if pane.logical != (width, height) || first {
+            pane.logical = (width, height);
+            pane.pending = true;
         }
-        if let Some(viewport) = &screen.viewport {
+        if let Some(viewport) = &pane.viewport {
             viewport.set_destination(width as i32, height as i32);
         }
-        screen.dirty = true;
+        pane.dirty = true;
         tracing::info!(
             logical = format!("{width}x{height}"),
-            scale = screen.scale,
+            scale = pane.scale,
             first,
-            "output {}: background surface configured",
-            screen.name
+            "output {}: {} surface configured",
+            pane.name,
+            pane.role.name()
         );
     }
 }
@@ -763,19 +940,20 @@ impl Dispatch<WpFractionalScaleV1, wl_surface::WlSurface> for Canvas {
         let wp_fractional_scale_v1::Event::PreferredScale { scale } = event else {
             return;
         };
-        let Some(index) = canvas.screen_of_surface(surface) else {
+        let Some(index) = canvas.pane_of_surface(surface) else {
             return;
         };
-        let screen = &mut canvas.screens[index];
-        if screen.scale != scale {
+        let pane = &mut canvas.panes[index];
+        if pane.scale != scale {
             tracing::info!(
-                "output {}: preferred scale {scale}/120 (was {})",
-                screen.name,
-                screen.scale
+                "output {}: {} preferred scale {scale}/120 (was {})",
+                pane.name,
+                pane.role.name(),
+                pane.scale
             );
-            screen.scale = scale.max(1);
-            screen.pending = true;
-            screen.dirty = true;
+            pane.scale = scale.max(1);
+            pane.pending = true;
+            pane.dirty = true;
         }
     }
 }
@@ -829,19 +1007,16 @@ impl CompositorHandler for Canvas {
         if self.uses_fractional() {
             return;
         }
-        let Some(index) = self.screen_of_surface(surface) else {
+        let Some(index) = self.pane_of_surface(surface) else {
             return;
         };
         let scale = new_factor.max(1) as u32 * SCALE_ONE;
-        let screen = &mut self.screens[index];
-        if screen.scale != scale {
-            screen
-                .layer
-                .wl_surface()
-                .set_buffer_scale(new_factor.max(1));
-            screen.scale = scale;
-            screen.pending = true;
-            screen.dirty = true;
+        let pane = &mut self.panes[index];
+        if pane.scale != scale {
+            pane.layer.wl_surface().set_buffer_scale(new_factor.max(1));
+            pane.scale = scale;
+            pane.pending = true;
+            pane.dirty = true;
         }
     }
 
@@ -861,14 +1036,14 @@ impl CompositorHandler for Canvas {
         surface: &wl_surface::WlSurface,
         _: u32,
     ) {
-        let Some(index) = self.screen_of_surface(surface) else {
+        let Some(index) = self.pane_of_surface(surface) else {
             return;
         };
-        let screen = &mut self.screens[index];
-        // A fade in progress is a frame per repaint; a settled canvas draws
-        // nothing until something changes.
-        if screen.pacing.answered() {
-            screen.dirty = true;
+        let pane = &mut self.panes[index];
+        // A fade or a dim in progress is a frame per repaint; a settled
+        // surface draws nothing until something changes.
+        if pane.pacing.answered() {
+            pane.dirty = true;
         }
     }
 
@@ -897,7 +1072,11 @@ impl OutputHandler for Canvas {
     }
 
     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
-        self.add_screen(output);
+        self.add_pane(&output, Role::Background);
+        // An output that appears mid-dim is dimmed too.
+        if self.dims.is_up() {
+            self.add_pane(&output, Role::Overlay);
+        }
     }
 
     fn update_output(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_output::WlOutput) {}
@@ -908,12 +1087,164 @@ impl OutputHandler for Canvas {
         _: &QueueHandle<Self>,
         output: wl_output::WlOutput,
     ) {
-        if let Some(index) = self
-            .screens
-            .iter()
-            .position(|screen| screen.output == output)
+        while let Some(index) = self.panes.iter().position(|pane| pane.output == output) {
+            self.remove_pane(index);
+        }
+    }
+}
+
+// -- the seat -----------------------------------------------------------------
+
+impl SeatHandler for Canvas {
+    fn seat_state(&mut self) -> &mut SeatState {
+        &mut self.seat_state
+    }
+
+    fn new_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+
+    fn new_capability(
+        &mut self,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+        seat: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Pointer if self.pointer.is_none() => {
+                match self.seat_state.get_pointer(qh, &seat) {
+                    Ok(pointer) => {
+                        tracing::info!("seat: pointer bound");
+                        self.pointer = Some(pointer);
+                    }
+                    Err(err) => tracing::warn!("seat: could not get the pointer: {err}"),
+                }
+            }
+            // Bound plainly: the fact of a key is all the canvas reads, so
+            // there is no keymap to compile and no xkbcommon.
+            Capability::Keyboard if self.keyboard.is_none() => {
+                tracing::info!("seat: keyboard bound");
+                self.keyboard = Some(seat.get_keyboard(qh, ()));
+            }
+            Capability::Touch if self.touch.is_none() => {
+                tracing::info!("seat: touch bound");
+                self.touch = Some(seat.get_touch(qh, ()));
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_capability(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        _: wl_seat::WlSeat,
+        capability: Capability,
+    ) {
+        match capability {
+            Capability::Pointer => {
+                if let Some(pointer) = self.pointer.take() {
+                    pointer.release();
+                }
+            }
+            Capability::Keyboard => {
+                if let Some(keyboard) = self.keyboard.take() {
+                    keyboard.release();
+                }
+            }
+            Capability::Touch => {
+                if let Some(touch) = self.touch.take() {
+                    touch.release();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn remove_seat(&mut self, _: &Connection, _: &QueueHandle<Self>, _: wl_seat::WlSeat) {}
+}
+
+impl PointerHandler for Canvas {
+    fn pointer_frame(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        pointer: &wl_pointer::WlPointer,
+        events: &[PointerEvent],
+    ) {
+        let mut cancel = None;
+        for event in events {
+            let on_overlay = self
+                .role_of_surface(&event.surface)
+                .is_some_and(Role::input_cancels);
+            if !on_overlay {
+                continue;
+            }
+            match event.kind {
+                PointerEventKind::Enter { serial } => {
+                    // No cursor over the dim, as chayang's; and arriving is
+                    // not moving.
+                    pointer.set_cursor(serial, None, 0, 0);
+                    self.pointer_at = Some(event.position);
+                }
+                PointerEventKind::Leave { .. } => self.pointer_at = None,
+                PointerEventKind::Motion { .. } => {
+                    if moved(self.pointer_at, event.position) {
+                        cancel.get_or_insert("the pointer moving");
+                    }
+                    self.pointer_at = Some(event.position);
+                }
+                PointerEventKind::Press { .. } => {
+                    cancel.get_or_insert("a button");
+                }
+                PointerEventKind::Release { .. } => {}
+                PointerEventKind::Axis { .. } => {
+                    cancel.get_or_insert("a scroll");
+                }
+            }
+        }
+        if let Some(what) = cancel {
+            self.input(what);
+        }
+    }
+}
+
+impl Dispatch<wl_keyboard::WlKeyboard, ()> for Canvas {
+    fn event(
+        canvas: &mut Canvas,
+        _: &wl_keyboard::WlKeyboard,
+        event: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Canvas>,
+    ) {
+        // The keymap's fd closes as the event drops; enter, leave, the
+        // modifiers and releases mean nothing here. Only the overlay takes
+        // the keyboard, so a key pressed is a key pressed on the dim.
+        if let wl_keyboard::Event::Key {
+            state: WEnum::Value(wl_keyboard::KeyState::Pressed),
+            ..
+        } = event
         {
-            self.remove_screen(index);
+            canvas.input("a key");
+        }
+    }
+}
+
+impl Dispatch<wl_touch::WlTouch, ()> for Canvas {
+    fn event(
+        canvas: &mut Canvas,
+        _: &wl_touch::WlTouch,
+        event: wl_touch::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Canvas>,
+    ) {
+        if let wl_touch::Event::Down { surface, .. } = event
+            && canvas
+                .role_of_surface(&surface)
+                .is_some_and(Role::input_cancels)
+        {
+            canvas.input("a touch");
         }
     }
 }
@@ -922,13 +1253,15 @@ impl ProvidesRegistryState for Canvas {
     fn registry(&mut self) -> &mut RegistryState {
         &mut self.registry_state
     }
-    registry_handlers![OutputState];
+    registry_handlers![OutputState, SeatState];
 }
 
 delegate_compositor!(Canvas);
 delegate_output!(Canvas);
 delegate_layer!(Canvas);
 delegate_registry!(Canvas);
+delegate_seat!(Canvas);
+delegate_pointer!(Canvas);
 
 #[cfg(test)]
 mod tests;

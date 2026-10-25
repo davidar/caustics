@@ -34,8 +34,8 @@ public static const uint FIT_CONTAIN = 1u;
 // ---------------------------------------------------------------------------
 
 /// What the canvas is before any picture has arrived, what a first picture
-/// fades in from, what a transparent picture is laid over, and what a dim
-/// goes towards.
+/// fades in from, what a transparent picture is laid over, and the colour of
+/// the dim the overlay lays over every window (at the dim's alpha).
 public static const float3 DIM_COLOUR = float3(0.07, 0.08, 0.10);
 
 /// The shape of a cross-fade between two pictures.

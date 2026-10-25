@@ -16,11 +16,13 @@ __exported import canvas_abi;
 // from its module, which Vulkan permits.
 // ---------------------------------------------------------------------------
 
-/// The one buffer the host reads back: `wants_redraw` and the witness ring.
+/// The one buffer the host reads back: `wants_redraw`, the dim's depth and
+/// the witness ring.
 [[vk::binding(0, 0)]]
 public RWStructuredBuffer<CanvasState> state;
 
-/// This output's size, its scale, the frame stamp and the time.
+/// This surface's size, its scale, the frame stamp, the time, and which of
+/// the output's surfaces it is (`TARGET_*`).
 [[vk::binding(1, 0)]]
 public ConstantBuffer<CanvasParams> params;
 
@@ -57,7 +59,7 @@ public struct CanvasPrivate
     /// The cross-fade's alpha this frame, curved: 0 is the old picture, 1
     /// the new. Written by `canvas_apply`, read by `canvas_draw`.
     public float alpha;
-    /// How much of the dim colour is laid over the picture this frame, 0..1.
+    /// How much of the dim colour the overlay is this frame, 0..1.
     public float dim;
     /// `facts.shows` as of the last apply: a new value is a new fade.
     public uint shows_seen;
@@ -71,6 +73,11 @@ public struct CanvasPrivate
     public float progress;
     /// Whether the blank canvas has been said.
     public uint said_blank;
+    /// The dim head's id as of the last apply: with its command and start,
+    /// what makes a dim new.
+    public uint dim_id;
+    /// Whether this dim's reaching its depth has been said.
+    public uint said_dim_reached;
 };
 
 [[vk::binding(7, 0)]]

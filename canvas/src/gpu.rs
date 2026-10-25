@@ -9,10 +9,10 @@
 //! reflected name (docs/abi.md, *The canvas's buffer*), its two entry points
 //! and the order they run in, and the two image slots.
 //!
-//! A frame is one output's: `canvas_apply` once, `canvas_draw` over that
-//! output's swapchain image, one copy of `state` back, one wait. Every output
-//! is paced on its own frame callbacks, so a frame never waits for another
-//! output's.
+//! A frame is one surface's (an output's background, or its overlay while a
+//! dim is up): `canvas_apply` once, `canvas_draw` over that surface's
+//! swapchain image, one copy of `state` back, one wait. Every surface is
+//! paced on its own frame callbacks, so a frame never waits for another's.
 
 use std::ptr::NonNull;
 
@@ -395,16 +395,22 @@ impl Gpu {
         }
     }
 
-    /// Draw one frame on one output into the image [`Gpu::acquire`] gave,
-    /// present it and read the state back. Returns the frame stamp the
-    /// witness ring carries.
-    pub fn draw(&mut self, target: &mut Surface, frame: surface::Frame, scale: u32) -> Result<u32> {
+    /// Draw one frame on one surface into the image [`Gpu::acquire`] gave,
+    /// as `role` (`TARGET_*`: the background or the overlay), present it and
+    /// read the state back. Returns the frame stamp the witness ring carries.
+    pub fn draw(
+        &mut self,
+        target: &mut Surface,
+        frame: surface::Frame,
+        scale: u32,
+        role: u32,
+    ) -> Result<u32> {
         let view = frame
             .texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let (width, height) = target.size();
-        self.dispatch(&target.params, &view, width, height, scale);
+        self.dispatch(&target.params, &view, width, height, scale, role);
         self.queue.present(frame.texture);
         if frame.suboptimal {
             target.refit_once(&self.device);
@@ -420,12 +426,14 @@ impl Gpu {
         width: u32,
         height: u32,
         scale: u32,
+        role: u32,
     ) {
         let (now_lo, now_hi) = clock::words(clock::boottime_ms());
-        self.write_params(params, width, height, scale, now_lo, now_hi);
+        self.write_params(params, width, height, scale, now_lo, now_hi, role);
         self.encode(params, dst, width, height);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn write_params(
         &self,
         params: &wgpu::Buffer,
@@ -434,6 +442,7 @@ impl Gpu {
         scale: u32,
         now_lo: u32,
         now_hi: u32,
+        role: u32,
     ) {
         let words = CanvasParams {
             width,
@@ -442,6 +451,7 @@ impl Gpu {
             frame: self.frame,
             now_lo,
             now_hi,
+            target: role,
             ..CanvasParams::default()
         };
         self.queue.write_buffer(params, 0, as_bytes(&words));

@@ -82,6 +82,13 @@ impl Slots {
         self.waiting.take()
     }
 
+    /// The dim ended without an undim from its sidecar (input cancelled it,
+    /// or its sidecar is gone): `facts` says what an undim would have, so
+    /// the caustic's dim and the host's agree.
+    pub fn clear_dim(&mut self) {
+        self.facts.dim = Canvas::Undim.body();
+    }
+
     /// A command. A show of the waiting image places it; a show of the
     /// picture already on screen restarts nothing and moves nothing; a show
     /// of anything else is refused, and the reason is the caller's witness.
