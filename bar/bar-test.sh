@@ -5332,6 +5332,10 @@ if [[ "$LOCK_RUN" -eq 1 ]]; then
     wait_until "the old lock sidecar's socket gone" 20 "! on_target 5 '[ -S \"\$XDG_RUNTIME_DIR/caustics-lock.sock\" ]'" ||
         note "the old lock sidecar's socket outlived it"
     listening_before=$(canvas_count "caustics-lock: listening on")
+    # The killed host never said its lock surface was gone: the restarted
+    # host's surfaces are counted from here.
+    made_before=$(canvas_count "a lock surface")
+    gone_before=$(canvas_count "its lock surface is gone")
     canvas_lock_start
     if wait_until "the restarted lock sidecar" 60 "canvas_more 'caustics-lock: listening on' $listening_before"; then
         pass "the canvas restarted, and its lock sidecar listens"
@@ -5370,7 +5374,13 @@ if [[ "$LOCK_RUN" -eq 1 ]]; then
     else
         fail "the session did not unlock after the restart: $(canvas_log | grep -E 'lock|prompt' | tail -4 | tr '\n' '|' | cut -c1-400)"
     fi
-    lock_panes_gone || fail "a lock surface outlived the restarted host's unlock"
+    made=$(($(canvas_count "a lock surface") - made_before))
+    gone=$(($(canvas_count "its lock surface is gone") - gone_before))
+    if [[ "$made" -eq 1 && "$gone" -eq 1 ]]; then
+        pass "the restarted host made one lock surface, and it went with the unlock"
+    else
+        fail "the restarted host made $made lock surfaces and $gone went"
+    fi
     leaks=0
     for secret in "$canvas_right" "$canvas_wrong"; do
         n=$(on_target 10 "cat \"\$T_HOME/canvas.log\" \"\$T_HOME\"/lock-wait-*.out 2>/dev/null | grep -cF -- '$secret'")
