@@ -262,6 +262,16 @@ no prompt pane left after each; and neither secret in the canvas's log (the
 sink's lines included) or the bar's journal. The canvas is stopped at the
 end, as step 35 left it.
 
+**The lock sidecar's step** (35h) runs `caustics-lock` in its dry run with no
+system bus, so there is no logind and the socket is its only trigger, under
+the same fake host, which confirms each lock and unlock as the host will and
+answers a wrong secret and then the right one. The step waits in
+`caustics-canvasctl lock --wait` and checks its exit and its `locked`, the
+frames in order (the lock, the title, the ask, PAM's error and a failed end,
+a fresh ask, a successful end, the unlock), `status`'s `attempts=1` and
+`locked=no`, the witness of no logind, that no log holds either secret, and
+that the sidecar leaves with its host and takes its socket.
+
 ### Adding a step
 
 1. **Decide the tier first.** If what you want to prove is a property of the

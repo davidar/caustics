@@ -5,7 +5,9 @@ wallpaper sidecar (`canvas/`, `wallpaper/`, `caustics/canvas*.slang`;
 canvas/README.md runs it), the fade on its overlay, and the prompt core with
 its polkit sink (`polkit/`, docs/abi.md, *Prompt*, *Answer*). The sink is
 not in the canvas's default set yet; canvas/README.md says how to add it and
-why the default waits. The rest is design. The bar's complement: where the bar is a strip along
+why the default waits. Of step 4, the lock sidecar and the wire it locks
+over are built (`lock/`, docs/abi.md, *Lock*); the lock surfaces are not,
+so nothing starts it yet. The rest is design. The bar's complement: where the bar is a strip along
 one edge, the canvas is everything else a session paints that is not a
 window. docs/architecture.md is the bar; this document borrows its model
 and says where the canvas departs from it. docs/roadmap.md, *The canvas*,
@@ -298,8 +300,8 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   `SetLockedHint(true)` when the host reports `locked`, clearing it on
   unlock. On start the sidecar reads `LockedHint` and, if it is set,
   requests the lock before the host has painted a frame. `caustics-canvasctl
-  lock --wait` returns when `LockedHint` is true, which is the before-sleep
-  hold. Nothing unlocks but a sink success: not a signal, not a reload, not
+  lock --wait` returns when the host has said `locked`, the moment the hint
+  is set, which is the before-sleep hold. Nothing unlocks but a sink success: not a signal, not a reload, not
   a compositor event.
 - **greet**: the display manager's `default_session.command` runs the host
   as the greeter user inside the compositor it starts, with

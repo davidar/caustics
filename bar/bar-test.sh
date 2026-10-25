@@ -384,14 +384,15 @@ trap 'exit 130' INT TERM
 # --- step 1: build ----------------------------------------------------------
 
 say "1. build"
-# All fifteen binaries (the bar spawns each sidecar from beside itself, and
+# All sixteen binaries (the bar spawns each sidecar from beside itself, and
 # the canvas its own), the rows demo, and the sink sidecars' fake host.
 if (cd "$REPO" &&
     cargo build --offline -p caustics-bar -p caustics-sysmon -p caustics-tray -p caustics-power \
         -p caustics-audio -p caustics-network -p caustics-bluetooth -p caustics-notify -p caustics-apps -p caustics-glyphs \
-        -p caustics-reload -p caustics-canvas -p caustics-wallpaper -p caustics-polkit &&
+        -p caustics-reload -p caustics-canvas -p caustics-wallpaper -p caustics-polkit \
+        -p caustics-lock &&
     cargo build --offline -p caustics-bar-abi --example rows_demo --example fake_host); then
-    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit sink, the rows_demo example and the fake host"
+    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit and lock sinks, the rows_demo example and the fake host"
 else
     fail "cargo build of the set, the rows_demo example or the fake host"
     exit 1
@@ -3886,7 +3887,7 @@ restart_bar "the compiled-in sidecar set restored"
 say "25d. install.sh installs a whole set, and a bar started through it runs that set"
 # VM only: on a nested run it would install into the developer's home.
 if vm_only "the install script runs only in the guest; on the nested target it would install into the developer's home"; then
-# `--from` mode (the guest has no cargo): the set's name, the fifteen installs,
+# `--from` mode (the guest has no cargo): the set's name, the sixteen installs,
 # the symlink, and a bar started through it finding its own set's sidecars.
 GUEST_HOME=$(gssh 20 'printf %s "$HOME"')
 gscp "$REPO/bar/install.sh" tester@127.0.0.1:install.sh >/dev/null
@@ -3894,15 +3895,15 @@ gssh 20 'chmod +x ~/install.sh; rm -rf ~/caustics-install-test' >/dev/null
 install_out=$(gssh 120 '$HOME/install.sh --from $HOME/.local/bin --prefix $HOME/caustics-install-test 2>&1')
 note "$(printf '%s' "$install_out" | tail -5)"
 assert_contains "the script named the set" "$install_out" "set $BAR_HASH"
-assert_contains "and installed fifteen binaries" "$install_out" "installed 15 of 15 into"
+assert_contains "and installed sixteen binaries" "$install_out" "installed 16 of 16 into"
 assert_contains "and did not restart a unit it does not point at" \
     "$install_out" "not restarting caustics-bar"
 
 installed=$(gssh 20 "ls \$HOME/caustics-install-test/lib/caustics-bar/$BAR_HASH | wc -l")
-if [[ "${installed:-0}" -eq 15 ]]; then
-    pass "fifteen binaries in the set directory"
+if [[ "${installed:-0}" -eq 16 ]]; then
+    pass "sixteen binaries in the set directory"
 else
-    fail "the set directory holds ${installed:-0} binaries, not fifteen"
+    fail "the set directory holds ${installed:-0} binaries, not sixteen"
 fi
 link=$(gssh 20 'readlink $HOME/caustics-install-test/bin/caustics-bar')
 assert_contains "the symlink points into the set" "$link" "/lib/caustics-bar/$BAR_HASH/caustics-bar"
@@ -4979,6 +4980,119 @@ if [[ "$CANVAS_RUN" -eq 1 ]]; then
         fail "the prompt step's canvas outlived its fixture"
     fi
     niri_msg action focus-workspace-up >/dev/null 2>&1
+fi
+
+say "35h. the lock sidecar locks on its socket, and only the right answer unlocks"
+# `caustics-lock` in its dry run (lock/README.md) with no system bus at all
+# (its address names a socket that does not exist), so there is no logind and
+# the socket's `lock` is the only trigger; `bar/abi/examples/fake_host.rs` on
+# its pipes plays the canvas host, confirms each lock and unlock as the host
+# will once it has lock surfaces, and answers the first ask with a wrong
+# secret and the second with the right one. Both secrets are this run's own,
+# and no log may hold either.
+if [[ "$T_NAME" == vm ]]; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the lock sidecar and its fake host are not in the guest's set yet"
+    SKIPS=$((SKIPS + 1))
+else
+    lock_right="gate-right-$RANDOM$RANDOM-$RANDOM"
+    lock_wrong="gate-wrong-$RANDOM$RANDOM-$RANDOM"
+    lock_log() { on_target 10 'cat "$T_HOME/lock.log" 2>/dev/null'; }
+    # in_order <text> <fixed pattern>…: each pattern on a line after the
+    # last one's; prints the first that is missing.
+    in_order() {
+        local text="$1" at=0 n p
+        shift
+        for p in "$@"; do
+            n=$(tail -n +$((at + 1)) <<<"$text" | grep -nF -m1 -- "$p" | cut -d: -f1)
+            [[ -n "$n" ]] || { printf '%s' "$p"; return 1; }
+            at=$((at + n))
+        done
+    }
+    on_target 10 'rm -f "$T_HOME/lock.log" "$T_HOME/lock-wait.out"' >/dev/null
+    fixture_start lock 'bash -c '"'"'cd "$1" && exec env CAUSTICS_LOCK_DRY_RUN_SECRET="$3" \
+        DBUS_SYSTEM_BUS_ADDRESS="unix:path=$1/no-system-bus" \
+        FAKE_HOST_SECRET="$3" FAKE_HOST_WRONG="$4" FAKE_HOST_SCRIPT="text:FAKE_HOST_WRONG text" \
+        FAKE_HOST_EVENTS="locked unlocked" \
+        "$2/examples/fake_host" "$2/caustics-lock" >>"$1/lock.log" 2>&1'"'"' lock "$T_HOME" "$T_BIN" '"$lock_right $lock_wrong"
+    if wait_until "the lock sidecar's socket" 30 'lock_log | jgrep -F "listening on"'; then
+        pass "$(lock_log | grep -F 'no logind' | tail -1 | sed 's/^caustics-lock: //' | cut -c1-140)"
+    else
+        fail "caustics-lock never listened: $(lock_log | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    # The before-sleep hold, in the background: it returns when the host
+    # says locked, which the fake host does as soon as the lock arrives.
+    on_target 40 '"$T_BIN/caustics-canvasctl" lock --wait >"$T_HOME/lock-wait.out" 2>&1
+        echo "exit=$?" >>"$T_HOME/lock-wait.out"' >/dev/null 2>&1 &
+    lock_waiter=$!
+    if wait_until "lock --wait returned" 30 'on_target 5 "grep -q ^exit= \"\$T_HOME/lock-wait.out\""'; then
+        waited=$(on_target 5 'cat "$T_HOME/lock-wait.out"')
+        if [[ "$waited" == *"locked"* && "$waited" == *"exit=0"* ]]; then
+            pass "caustics-canvasctl lock --wait returned 0 with 'locked'"
+        else
+            fail "caustics-canvasctl lock --wait: $(tr '\n' '|' <<<"$waited" | cut -c1-200)"
+        fi
+    else
+        fail "caustics-canvasctl lock --wait never returned"
+    fi
+    wait "$lock_waiter" 2>/dev/null
+    if wait_until "the lock's unlock" 30 'lock_log | jgrep -F "fake-host: sent unlocked"'; then
+        log=$(lock_log)
+        missing=$(in_order "$log" \
+            "fake-host: lock command=lock" "fake-host: sent locked" \
+            'prompt id=1 kind=title arg=1' 'prompt id=1 kind=secret arg=0 message="Password: "' \
+            "answered id=1 with text:FAKE_HOST_WRONG" \
+            'prompt id=1 kind=error arg=0 message="Authentication failure"' \
+            'prompt id=1 kind=done arg=0' \
+            'prompt id=2 kind=title arg=1' 'prompt id=2 kind=secret arg=0 message="Password: "' \
+            "answered id=2 with text" 'prompt id=2 kind=done arg=1' \
+            "fake-host: lock command=unlock" "fake-host: sent unlocked")
+        if [[ -z "$missing" ]]; then
+            pass "lock, locked, a title and an ask, the wrong secret's error and failed end, a fresh ask, success, unlock, unlocked: in that order"
+        else
+            fail "the lock's frames are not in order, from: $missing"
+        fi
+        if [[ "$(grep -c 'lock command=unlock' <<<"$log")" -eq 1 ]]; then
+            pass "one unlock, after the right answer and only then"
+        else
+            fail "$(grep -c 'lock command=unlock' <<<"$log") unlocks"
+        fi
+    else
+        fail "the fake host never confirmed an unlock: $(lock_log | tail -4 | tr '\n' '|' | cut -c1-300)"
+    fi
+    # `status` asks the wallpaper (gone with the canvas fixture, so the exit
+    # is 1) and the lock, whose line is printed either way.
+    lock_status() { on_target 5 '"$T_BIN/caustics-canvasctl" status 2>/dev/null'; }
+    if wait_until "the lock's status unlocked" 20 '[[ "$(lock_status)" == *"locked=no attempts=1"* ]]'; then
+        pass "caustics-canvasctl status: $(grep -F 'locked=' <<<"$(lock_status)")"
+    else
+        fail "the lock's status: $(on_target 5 '"$T_BIN/caustics-canvasctl" status 2>&1' | tr '\n' '|' | cut -c1-200)"
+    fi
+    if lock_log | jgrep -F "LockedHint of session"; then
+        fail "the dry run with no system bus spoke to logind"
+    else
+        pass "no logind: no signals and no hint"
+    fi
+    leaks=0
+    for secret in "$lock_right" "$lock_wrong"; do
+        n=$(on_target 10 "cat \"\$T_HOME/lock.log\" \"\$T_HOME/lock-wait.out\" 2>/dev/null | grep -cF -- '$secret'")
+        leaks=$((leaks + ${n:-1}))
+        journal | jgrep -F -- "$secret" && leaks=$((leaks + 1))
+        grep -qF -- "$secret" "$RUN/fixture-lock.log" 2>/dev/null && leaks=$((leaks + 1))
+    done
+    if [[ "$leaks" -eq 0 ]]; then
+        pass "no witness, no host line, no client line and no bar line holds either secret"
+    else
+        fail "a secret is in $leaks lines of the lock's logs or the bar's journal"
+    fi
+    # The fake host goes, and the sidecar leaves with it, taking its socket.
+    lock_pid=$(lock_log | sed -n 's/^fake-host: started .* as pid \([0-9]*\)$/\1/p' | tail -1)
+    fixture_stop lock
+    if [[ -n "$lock_pid" ]] &&
+        wait_until "the lock sidecar gone" 20 "! on_target 5 'kill -0 $lock_pid 2>/dev/null || [ -S \"\$XDG_RUNTIME_DIR/caustics-lock.sock\" ]'"; then
+        pass "the sidecar exited when its host went, and took its socket: $(lock_log | grep -F 'stdin closed' | tail -1 | sed 's/^caustics-lock: //')"
+    else
+        fail "caustics-lock (pid ${lock_pid:-?}) or its socket outlived its host"
+    fi
 fi
 
 say "36. verdict"

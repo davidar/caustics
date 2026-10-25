@@ -26,8 +26,8 @@ and checked against Slang's reflection; and the wire between the bar and its
 sidecars, length-prefixed binary frames read by a reader that skips what it
 does not know. One hash over both, carried by every binary and checked on a
 sidecar's first frame. `bar/install.sh` installs the bar, its ten sidecars,
-the canvas host, its sidecar, its client and its polkit sink as one set
-named by that hash.
+the canvas host, its sidecar, its client, its polkit sink and its lock
+sidecar as one set named by that hash.
 Every payload crosses as one frame: a compiled entry point, an output-sized
 picture and a font's buffer each go whole, with nothing cut into pieces and
 put back together. The reader takes a body in bounded steps as it arrives, so
@@ -103,6 +103,19 @@ cover requests and the shape watchdog moved from the bar into
 in the canvas's default set yet (canvas/README.md says how to add it). The
 canvas's buffer contract and entry list grew, which moved the ABI hash, so
 the set is rebuilt and installed together.
+
+**The canvas's lock sidecar** (`caustics-lock`, lock/README.md). The
+session's lock without its surfaces: it locks on logind's `Lock` signal or
+`caustics-canvasctl lock`, sets `LockedHint` when the canvas host says the
+compositor locked, holds each attempt as one PAM transaction turned into a
+prompt conversation, and asks the host to unlock only after a success; a
+failure or an Escape starts a fresh attempt at once, and logind's `Unlock`
+is ignored. A hint already set at start re-locks before anything else.
+`caustics-canvasctl lock --wait` is the before-sleep hold. A dry run
+replaces PAM with one ask, for the tests. A new wire kind, `Lock`, and two
+canvas events, `locked` and `unlocked`, moved the ABI hash, so the whole
+set (now sixteen binaries) is rebuilt and installed together; the canvas
+does not start the sidecar until it has lock surfaces.
 
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout
