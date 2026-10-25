@@ -34,6 +34,9 @@ draw over each other.
   refusal (an argument, a discrete GPU), 3 the device gone.
 - `RUST_LOG=info`; the journal gets stdout and stderr, the sidecars' lines
   included.
+- `MemoryMax=1G`, the bar's backstop for the bar's reason (bar/systemd/README.md):
+  a hot reload's compile runs inside the unit and peaks near 400 MB; the
+  canvas's own pictures are tens of megabytes.
 - **The iGPU-only drop-in applies the same way.** On a laptop with a discrete
   GPU, copy `bar/systemd/dropins/igpu-only.conf` into
   `~/.config/systemd/user/caustics-canvas.service.d/` and

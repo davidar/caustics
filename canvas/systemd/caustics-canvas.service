@@ -21,6 +21,12 @@ StandardError=journal
 # when it is needed (docs/canvas.md, *Constraints that survive*).
 Restart=always
 RestartSec=1
+# The bar's backstop, for the bar's reason: `caustics-reload` compiles inside
+# this unit's cgroup and one compile peaks at about 400 MB, so a smaller cap
+# kills a hot reload; the canvas's own CPU-side allocations are two output-
+# sized pictures in the wallpaper sidecar, tens of megabytes, so anything
+# near a gigabyte is a leak and better restarted than left to grow.
+MemoryMax=1G
 
 [Install]
 WantedBy=graphical-session.target
