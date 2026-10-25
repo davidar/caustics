@@ -2,8 +2,9 @@
 
 caustics-canvas is the canvas host (docs/canvas.md): the wallpaper on every
 output, drawn by a caustic (`caustics/canvas.slang`) and cross-faded on
-command. It is a layer-shell client on the **background** layer and replaces
-swaybg. In a session it runs as a **systemd user unit**,
+command, and the idle fade over every window. It is a layer-shell client on
+the **background** layer, and on the **overlay** layer while a dim is up, and
+replaces swaybg and chayang. In a session it runs as a **systemd user unit**,
 `caustics-canvas.service`, which restarts it whatever it exits with and sends
 its log to the journal.
 
@@ -53,7 +54,9 @@ caustics-canvasctl show ~/Pictures/sea.jpg              # a cut
 caustics-canvasctl show ~/Pictures/dusk.png fade 4      # a four-second dissolve
 caustics-canvasctl show ~/Pictures/night.jxl fade 7200  # a two-hour fade
 caustics-canvasctl status   # fade=fading progress=0.37 duration=4.000 image=…
+caustics-canvasctl status   # dim=none fade=done image=…
 caustics-canvasctl dim 0.6 over 10
+caustics-canvasctl dim 1 over 10 --wait && systemctl suspend
 caustics-canvasctl undim
 ```
 
@@ -62,8 +65,22 @@ its wallpapers in; the sidecar knows each by its first bytes, whatever the
 file is called; one it cannot decode is an `error` reply with the decoder's
 reason.
 
-`caustics-canvasctl` exits 0 when the canvas answered `ok` and 1 otherwise
-(2 is kept for a dim that input cancels, which the overlay will report). Before any picture
+A dim is drawn on an overlay over every window, the bar included, and any
+input ends it: the pointer moving, a button, a scroll, a touch, a key. It
+goes on an `undim` too, and with the sidecar if that dies. A dim that has
+reached its depth stays there until one of those. `status` begins with
+`dim=none`, `dim=dimming progress=0.42` or `dim=dimmed`.
+
+`caustics-canvasctl` exits 0 when the canvas answered `ok` and 1 otherwise.
+`dim … --wait` is chayang's contract, for an idle daemon's warning stage:
+
+| exit | the dim |
+|---|---|
+| 0 | reached its depth |
+| 2 | was cancelled by input (the user is back), or ended first by an `undim` or a newer `dim` |
+| 1 | could not be asked for, or the canvas went away before it was over |
+
+Before any picture
 the canvas is the dim colour; the path last shown is kept in
 `$XDG_RUNTIME_DIR/caustics-canvas.last`, so a restarted canvas shows it
 again. The look (the dim colour, the fade's curve, cover or contain) is
@@ -75,7 +92,11 @@ again. The look (the dim colour, the fade's curve, cover or contain) is
 canvas: show 3 into slot 0, fading over 4000 ms     a fade began
 canvas: fade 3 midpoint (t=0.5)                      its midpoint, said once
 canvas: fade 3 done
+canvas: dim 2 to 1000/1000 over 10000 ms             a dim began
+canvas: dim 2 reached 1000/1000                      at its depth, said once
+dim 2: cancelled by a key; told to caustics-wallpaper, the overlays go
 output winit: background surface configured …       one per output
+output winit: overlay surface configured …          one per output, while a dim is up
 output size: 2880x1800 px, told to caustics-wallpaper
 sidecar caustics-reload: generation 2, 2 modules, swapped …   a tunables save
 ```

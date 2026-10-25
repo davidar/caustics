@@ -157,12 +157,13 @@ clock's words, the springs, the shape watchdog) is read by the caustic alone.
 ## The canvas
 
 The directory holds a second caustic: the canvas's (docs/canvas.md), which
-draws the wallpaper on every output and cross-fades between two pictures. It
-is three files, all named `canvas*`, and imports nothing above:
+draws the wallpaper on every output, cross-fades between two pictures, and
+draws the idle dim on the overlay the host puts over every window while a dim
+is up. It is three files, all named `canvas*`, and imports nothing above:
 
 | file | what it is |
 |---|---|
-| `canvas.slang` | the two entry points (`canvas_apply`, once per frame: the fade's alpha and the dim from the last show, the last dim and the time, and the witnesses; `canvas_draw`, over one output: the two source pictures at that alpha, the dim over them) |
+| `canvas.slang` | the two entry points (`canvas_apply`, once per frame: the fade's alpha and the dim's from the last show, the last dim and the time, the witnesses, `wants_redraw` for the surface drawn and whether the dim is at its depth; `canvas_draw`, over one surface by `params.target`: on the background the two source pictures at that alpha, opaque; on the overlay the dim colour at the dim's alpha, premultiplied) |
 | `canvas_state.slang` | the canvas's bindings (`state`, `params`, `facts`, `dst`, `image_a`, `image_b`, `tex_sampler`, `private`), `CanvasPrivate`, the witness ring, the two-word time arithmetic |
 | `canvas_tunables.slang` | **the canvas's configuration**: the dim colour, the fade's curve, how a picture is fitted to an output |
 

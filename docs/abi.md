@@ -648,20 +648,21 @@ the same Rust declarations, and `CanvasBody` is the wire's `WIRE_CANVAS` head
 
 | binding (set 0, by name) | struct / bytes | writer | reader |
 |---|---|---|---|
-| `params` | `CanvasParams`, 32 B, one per output | the host, before every frame it draws on that output | both entries |
-| `facts` | `CanvasFacts`, 80 B | the host, whole, when a `Canvas` frame lands | both entries |
-| `state` | `CanvasState`: `wants_redraw` and a witness ring, 1552 B | the caustic | the host, one frame late (the only readback) |
+| `params` | `CanvasParams`, 32 B, one per surface (an output's background, and its overlay while a dim is up) | the host, before every frame it draws on that surface | both entries |
+| `facts` | `CanvasFacts`, 80 B | the host, whole, when a `Canvas` frame lands, and when a dim ends without an undim | both entries |
+| `state` | `CanvasState`: `wants_redraw`, the dim's depth and a witness ring, 1568 B | the caustic | the host, after every frame (the only readback) |
 | `private` | the caustic's own, stride from reflection | the caustic | the caustic; tests by reflection |
 | `image_a`, `image_b`, `tex_sampler` | two textures of straight RGBA8, each the size of the image in it | the host (`write_texture`) | `canvas_draw` |
 | `dst` | storage texture, the output's swapchain image | `canvas_draw` | the swapchain |
 
 ```
-struct CanvasParams {   // 32 B — one output's frame facts
-    uint width, height; // 0   the output's buffer, px
+struct CanvasParams {   // 32 B — one surface's frame facts
+    uint width, height; // 0   the surface's buffer, px
     uint scale;         // 8   the output's scale in 120ths (240 at scale 2)
     uint frame;         // 12  ≥ 1, the witness ring's stamp (rule 1)
     uint now_lo, now_hi;// 16  CLOCK_BOOTTIME ms when the frame is drawn
-    uint _pad0, _pad1;  // 24
+    uint target;        // 24  TARGET_BACKGROUND 0 or TARGET_OVERLAY 1: which surface this is
+    uint _pad1;         // 28
 }
 struct CanvasFacts {    // 80 B — what the host was told
     CanvasBody show;    // 0   the last CANVAS_SHOW, as it crossed the wire; zero before one
@@ -671,10 +672,13 @@ struct CanvasFacts {    // 80 B — what the host was told
     uint shows;         // 72  shows applied: a new value is a new fade
     uint _pad0;         // 76
 }
-struct CanvasState {    // 1552 B — read back
-    uint wants_redraw;  // 0   a fade or a dim is in progress
+struct CanvasState {    // 1568 B — read back
+    uint wants_redraw;  // 0   the surface just drawn has more to show: its fade, or its dim on the way
     uint witness_frame, witness_count, witness_lost; // 4
-    Note witnesses[MAX_CANVAS_WITNESSES];            // 16  32 of them
+    uint dim_reached;   // 16  facts.dim is a CANVAS_DIM at its depth
+    uint dim_id;        // 20  the id of the dim dim_reached is about
+    uint _pad0, _pad1;  // 24
+    Note witnesses[MAX_CANVAS_WITNESSES];            // 32  32 of them
 }
 ```
 
@@ -682,11 +686,21 @@ struct CanvasState {    // 1552 B — read back
 `CANVAS_SHOW` that names it arrives, then copied into whichever slot the
 picture on screen is not in; `from_slot` becomes the slot that was showing,
 `to_slot` the new one, and the show's head is copied into `facts.show`. A
-dim's head is copied into `facts.dim`. When the fade is, how far along it is
-and what it looks like are the caustic's, from the heads' times and
-`params.now`; so is `wants_redraw`, the host's only reason to draw a frame
-that no event asked for. `CANVAS_ENTRIES` (`bar/abi/src/entries.rs`) are
-`canvas_apply`, once per frame, and `canvas_draw` over the output drawn.
+dim's head is copied into `facts.dim`; the host puts an overlay up on
+every output for it and takes them down on an undim, on input or when the
+dim's sidecar goes, and in the last two cases writes `facts.dim` as an
+undim's head itself, so the caustic and the host agree there is no dim.
+When the fade is, how far along it is and what it looks like are the
+caustic's, from the heads' times and `params.now`; so is the dim's alpha,
+and whether it is at its depth, which the host reads back in
+`dim_reached` and `dim_id` to tell the dim's sidecar once (*Canvas
+event*). `wants_redraw` is the host's only reason to draw a frame that no
+event asked for, and it is the drawn surface's own: the background's while
+its fade runs, the overlay's while its alpha moves. `canvas_draw` reads
+`params.target`: on the background, the pictures, opaque, and no dim; on
+the overlay, `DIM_COLOUR` at the dim's alpha, premultiplied, transparent
+where the alpha is 0. `CANVAS_ENTRIES` (`bar/abi/src/entries.rs`) are
+`canvas_apply`, once per frame, and `canvas_draw` over the surface drawn.
 
 ## The wire
 
@@ -702,7 +716,8 @@ a named buffer untouched. `Pixmap` (*Pixmap*) is pixels for a texture, `Font`
 (*Module*) is SPIR-V for the device, and `Action`/`Request` (*Action*, *Request*) are
 what the process writes. The canvas host reads two kinds the bar never sees:
 `Image` (*Image*), pixels for one of its two textures, and `Canvas`
-(*Canvas*), whose head it copies into its caustic's `facts`.
+(*Canvas*), whose head it copies into its caustic's `facts`; and it writes
+one, `CanvasEvent` (*Canvas event*), to the sidecar whose dim it is.
 
 ### Framing
 
@@ -721,7 +736,8 @@ struct WireHeader {     // 12 B
 `WIRE_BYTES` 4 (*Bytes*), `WIRE_FONT` 5 (*Font*), `WIRE_GLYPH` 6 (*Glyph*),
 `WIRE_REQUEST` 7 (*Request*, the bar → a sidecar), `WIRE_APP` 8 (*App*),
 `WIRE_PIXMAP` 9 (*Pixmap*), `WIRE_MODULE` 10 (*Module*), `WIRE_HELLO` 11 (*Hello*),
-`WIRE_IMAGE` 12 (*Image*), `WIRE_CANVAS` 13 (*Canvas*).
+`WIRE_IMAGE` 12 (*Image*), `WIRE_CANVAS` 13 (*Canvas*), `WIRE_CANVAS_EVENT`
+14 (*Canvas event*, the canvas host → a sidecar).
 
 **Every payload is one frame.** A whole compiled entry point is one `Module`,
 a whole picture one `Image`, a whole run of a GPU buffer one `Bytes`, and
@@ -1163,8 +1179,8 @@ asks once per name and remembers (*Request*).
 
 ### Request: `WIRE_REQUEST`
 
-**The bar → a sidecar**, on its stdin, beside `Action` (*Action*): resolve this
-name. The bar never waits. The answer is a `Glyph`, an `App` or a `Pixmap` on
+**The bar → a sidecar**, on its stdin, beside `Action` (*Action*) and, from
+the canvas host, `CanvasEvent` (*Canvas event*): resolve this name. The bar never waits. The answer is a `Glyph`, an `App` or a `Pixmap` on
 the sidecar's stdout like any other frame, and until it arrives the bar draws
 without it.
 
@@ -1442,7 +1458,8 @@ struct CanvasBody {     // 32 B
     uint start_hi;      // 12  high word
     uint duration_ms;   // 16  how long it takes; 0 is at once
     uint alpha_milli;   // 20  CANVAS_DIM: how far, 0..=DIM_MAX_MILLI (1000) of the dim colour
-    uint _rsvd0, _rsvd1;// 24
+    uint id;            // 24  CANVAS_DIM: the sidecar's counter for this dim; 0 for the others
+    uint _rsvd1;        // 28
 }
 // then `key_len` bytes of key
 ```
@@ -1450,17 +1467,60 @@ struct CanvasBody {     // 32 B
 | `CANVAS_*` | | means |
 |---|---|---|
 | 1 | `CANVAS_SHOW` | cross-fade from the picture on screen to the `Image` the key names, sent before it by the same sidecar, from `start` over `duration_ms` |
-| 2 | `CANVAS_DIM` | dim towards `alpha_milli` of the dim colour, from `start` over `duration_ms` |
-| 3 | `CANVAS_UNDIM` | no dim, now |
+| 2 | `CANVAS_DIM` | dim towards `alpha_milli` of the dim colour, from `start` over `duration_ms`, on an overlay over every window that any input cancels; a newer dim replaces it |
+| 3 | `CANVAS_UNDIM` | no dim, now: the overlays go |
 
 A fade interpolates between the two **source** pictures at alpha(t), never a
 compound of the last frame (docs/canvas.md, *Time*); how alpha(t) is shaped
 and what the dim colour is are `canvas_tunables.slang`'s. A show whose key
 names no image the host holds is one witness and nothing on screen.
 
+**`id`** was `_rsvd0`, which is what a reserved word is for: a dim needed a
+name that its events could carry back, and the word was there, written zero
+by every older writer. It is the sidecar's own counter, one more per dim; the
+host copies it with the head and echoes it in every `CanvasEvent` about that
+dim, so an event that arrives after a newer dim replaced the one it is about
+is told apart and changes nothing. Giving the word a meaning changed the ABI
+hash, and a set is built and installed whole (*The ABI hash*).
+
 Reader rules: `command` 0 or past `CANVAS_LAST` → skip (body); a show with no
 key, a dim or an undim with one, or a dim past `DIM_MAX_MILLI` → skip (body);
 key bytes the head does not count → skip (length).
+
+### Canvas event: `WIRE_CANVAS_EVENT`
+
+**The canvas host → the sidecar whose dim it is**, on that sidecar's stdin,
+as the bar writes an `Action` (*Action*): what became of the dim. Fixed
+size, 16 B.
+
+```
+struct CanvasEventBody { // 16 B
+    uint event;          // 0   CANVAS_EVENT_*
+    uint id;             // 4   the dim's CanvasBody.id, as the sidecar sent it
+    uint _rsvd0, _rsvd1; // 8
+}
+```
+
+| `CANVAS_EVENT_*` | | means |
+|---|---|---|
+| 1 | `CANVAS_EVENT_INPUT` | input cancelled the dim: the pointer moved over an overlay, a button, a scroll or a touch on one, or a key. The host has taken the overlays down already; the sidecar answers with a `CANVAS_UNDIM`, so the two ends agree the dim is over |
+| 2 | `CANVAS_EVENT_DIMMED` | the dim reached its depth, said once a dim; it stays there until an undim or input |
+
+The host learns the dim reached its depth from the caustic's readback
+(`CanvasState::dim_reached` for the head's `id`, *The canvas's buffer*), not
+from the witness line the caustic writes for the same moment. A dim that a
+newer dim replaces, or an undim ends, gets no event: the sidecar sent the
+command that ended it. A dim whose sidecar's pipe closes is undone without
+one, since there is nobody to tell. `caustics-wallpaper` turns the two into
+the replies a waiting client gets (`done` and `cancelled`), and
+`caustics-canvasctl` into the exit codes 0 and 2 (docs/canvas.md, *How each
+job is wired*).
+
+Written under `Action`'s rules: one non-blocking write of 28 bytes, under
+`PIPE_BUF`, never a wait; a child not reading is one witness and the event dropped.
+Reader rules: a body other than 16 bytes → skip (length); `event` 0 or past
+`CANVAS_EVENT_LAST` → skip (body). The writer refuses what the reader would
+skip.
 
 ### The ABI hash
 

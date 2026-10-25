@@ -1,8 +1,8 @@
 # The canvas
 
-Steps 0 and 1 of *Order* are built: the host crate, and the canvas host
-with its wallpaper sidecar (`canvas/`, `wallpaper/`, `caustics/canvas*.slang`;
-canvas/README.md runs it). The rest is design. The bar's complement: where the bar is a strip along
+Steps 0 to 2 of *Order* are built: the host crate, the canvas host with its
+wallpaper sidecar (`canvas/`, `wallpaper/`, `caustics/canvas*.slang`;
+canvas/README.md runs it), and the fade on its overlay. The rest is design. The bar's complement: where the bar is a strip along
 one edge, the canvas is everything else a session paints that is not a
 window. docs/architecture.md is the bar; this document borrows its model
 and says where the canvas departs from it. docs/roadmap.md, *The canvas*,
@@ -115,8 +115,15 @@ neither can be added later.
 - **Background** (`zwlr_layer_shell_v1`, anchored to all edges, exclusive
   zone −1, no keyboard): the wallpaper. A compositor may pull this layer
   into its overview backdrop.
-- **Overlay**: the idle fade. During a dim the overlay takes pointer and
-  keyboard, as chayang's does, so that any input cancels the fade.
+- **Overlay** (`zwlr_layer_shell_v1` on the overlay layer, anchored to all
+  edges, exclusive zone −1, exclusive keyboard): the idle fade, over every
+  window and panel. It exists only while a dim is up: made on every output
+  when the dim arrives and on an output that appears mid-dim, gone on an
+  undim, on input, or when the sidecar that asked for the dim goes. It
+  takes the pointer and the keyboard, as chayang's does, so that any input
+  cancels the fade: the pointer moving (arriving under a pointer at rest is
+  not moving, and the cursor is hidden there), a button, a scroll, a touch,
+  any key. Only the fact of a key is read; there is no keymap.
 - **Top**, with exclusive keyboard interactivity: the polkit prompt's
   panel, over the dimmed wallpaper the host already holds.
 - **`ext-session-lock-v1`**: `lock`, then one lock surface per output, each
@@ -194,10 +201,24 @@ enforces them. Failed attempts are counted, never described, in any log.
   `caustics-wallpaper`'s socket, with the duration the schedule names:
   seconds for a dissolve, hours for a real slow fade. `caustics-canvasctl`
   is the client for scripts.
-- **fade**: the idle timer's warning stage runs `caustics-canvasctl dim
-  --over <warn> --wait` and, on resume, `undim`. The client keeps chayang's
-  exit contract (0 completed, 2 cancelled by input, 1 could not run), so a
-  broken fade still fails toward a locked screen.
+- **fade**: the idle timer's warning stage runs
+
+  ```sh
+  caustics-canvasctl dim 1 over 10 --wait && systemctl suspend
+  ```
+
+  and, on resume, `caustics-canvasctl undim`. The client keeps chayang's exit
+  contract: **0** when the dim reached its depth, **2** when input cancelled
+  it (the user came back, and the stage should not suspend or lock), **1**
+  when it could not run or the canvas went away mid-dim, so a broken fade
+  still fails toward a locked screen. A newer dim, or an undim, ends a waited
+  one with 2 as well. A completed dim stays at its depth until undim or
+  input, which is what a suspend hook wants: the screen stays dark while the
+  machine goes down. Underneath, the wallpaper sidecar sends a `CANVAS_DIM`
+  under an id of its own, and the host answers on the sidecar's stdin with a
+  `CanvasEvent` for that id: dimmed once, or cancelled by input, after which
+  the sidecar undims (docs/abi.md, *Canvas event*). The background never
+  darkens: one dim, on the overlay, with one owner.
 - **polkit**: register `org.freedesktop.PolicyKit1.AuthenticationAgent` on
   the session bus at `/org/freedesktop/PolicyKit1/AuthenticationAgent`, call
   `Authority.RegisterAuthenticationAgent(unix-session subject, locale, path)`
@@ -249,7 +270,8 @@ process holding a secret is the canvas host, and the bar is not it.
 | the host | unlocked | the compositor's backdrop shows; the unit restarts it; it paints the dim colour until the wallpaper sidecar re-sends the picture |
 | the host | locked | the compositor stays locked and blank; the unit restarts the host; the lock sidecar reads `LockedHint` and re-locks before the first frame |
 | `caustics-wallpaper` | any time | the last picture stays; the host restarts it with backoff; the scheduler's next `show` lands |
-| a fade | mid-fade | the waiting client exits 1; the idle stage locks anyway |
+| `caustics-wallpaper` | mid-dim | the overlay goes with it (a dim without its owner is undone, so a crashed sidecar never leaves a dark screen); the picture stays; the host restarts it, and it comes back with no dim |
+| a fade | mid-fade | the waiting client gets EOF on the socket and exits 1; the idle stage locks anyway |
 | `caustics-lock` | locked | the host stays locked (it never unlocks on its own); the sidecar restarts, reads `LockedHint`, resumes the conversation |
 | `caustics-polkit` | mid-prompt | polkitd times out the request; the caller sees "not authorized"; the sidecar restarts and re-registers |
 | the host | greeting | the display manager restarts it; nothing was logged in |
