@@ -4996,9 +4996,9 @@ say "35h. the lock sidecar locks on its socket, and only the right answer unlock
 # `caustics-lock` in its dry run (lock/README.md) with no system bus at all
 # (its address names a socket that does not exist), so there is no logind and
 # the socket's `lock` is the only trigger; `bar/abi/examples/fake_host.rs` on
-# its pipes plays the canvas host, confirms each lock and unlock as the host
-# will once it has lock surfaces, and answers the first ask with a wrong
-# secret and the second with the right one. Both secrets are this run's own,
+# its pipes plays the canvas host, confirms each lock and unlock as the real
+# host does once its lock surfaces are up, and answers the first ask with a
+# wrong secret and the second with the right one. Both secrets are this run's own,
 # and no log may hold either.
 if [[ "$T_NAME" == vm ]]; then
     printf '  SKIP  %s  %s\n' "$(stamp)" "the lock sidecar and its fake host are not in the guest's set yet"
