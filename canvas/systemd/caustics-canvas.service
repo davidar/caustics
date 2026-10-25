@@ -1,0 +1,26 @@
+[Unit]
+Description=caustics-canvas
+PartOf=graphical-session.target
+After=graphical-session.target
+# The bar's limit: ten starts a minute, so a canvas that cannot start at all
+# does not spin.
+StartLimitIntervalSec=60
+StartLimitBurst=10
+
+[Service]
+ExecStart=%h/.local/bin/caustics-canvas
+# As the bar's unit: no Vulkan driver is pinned here, and the bar's iGPU-only
+# drop-in (bar/systemd/dropins/igpu-only.conf) pins this unit the same way
+# when it is copied into ~/.config/systemd/user/caustics-canvas.service.d/.
+Environment=RUST_LOG=info
+StandardOutput=journal
+StandardError=journal
+# Restart on everything, a lost device (exit 3) included, unlike the bar's
+# unit: the canvas is where the lock screen will be drawn, a session must
+# always get its canvas back, and a device lost after a resume is exactly
+# when it is needed (docs/canvas.md, *Constraints that survive*).
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=graphical-session.target

@@ -40,3 +40,19 @@ fn an_animating_caustic_draws_on_every_answer() {
     pacing.requested(t0);
     assert!(!pacing.answered());
 }
+
+/// The stall has a deadline only while a request is out, and it is the
+/// moment `allowed_at` turns: what a host arms its wake-up timer for.
+#[test]
+fn the_stall_deadline_is_when_an_unanswered_request_lets_go() {
+    let t0 = Instant::now();
+    let mut pacing = Pacing::new(t0);
+    assert_eq!(pacing.stall_deadline(), None);
+    pacing.requested(t0);
+    let deadline = pacing.stall_deadline().expect("a request is out");
+    assert_eq!(deadline, t0 + FRAME_STALL);
+    assert!(!pacing.allowed_at(deadline - Duration::from_millis(1)));
+    assert!(pacing.allowed_at(deadline));
+    pacing.answered();
+    assert_eq!(pacing.stall_deadline(), None);
+}

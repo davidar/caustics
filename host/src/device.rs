@@ -79,7 +79,7 @@ impl Device {
                     compatible_surface: Some(surface),
                     ..Default::default()
                 }))
-                .context("no Vulkan adapter can present to the bar's layer surface")?
+                .context("no Vulkan adapter can present to the host's surface")?
             }
             // A CPU adapter is taken for the same reason the discrete one is
             // refused: a software rasteriser cannot be the dGPU, which is what
@@ -123,7 +123,7 @@ impl Device {
         {
             tracing::error!(
                 adapter = %info.name,
-                "refusing to run the bar on a discrete GPU: it would keep the dGPU awake for \
+                "refusing to run a caustic on a discrete GPU: it would keep the dGPU awake for \
                  the life of the session. Pin VK_DRIVER_FILES at the integrated ICD, or set \
                  CAUSTICS_BAR_ALLOW_DGPU=1 to override."
             );
@@ -136,8 +136,8 @@ impl Device {
             .contains(wgpu::Features::PASSTHROUGH_SHADERS)
         {
             bail!(
-                "adapter '{}' lacks PASSTHROUGH_SHADERS; the bar's Slang->SPIR-V caustic \
-                 cannot be loaded here",
+                "adapter '{}' lacks PASSTHROUGH_SHADERS; a caustic compiled from Slang to \
+                 SPIR-V cannot be loaded here",
                 info.name
             );
         }
@@ -207,13 +207,12 @@ impl Device {
                 return;
             }
             tracing::error!(
-                "gpu: the device is gone ({reason:?}): {message}. Exiting; this bar is not \
-                 coming back on its own (exit 3; the unit does not restart it)."
+                "gpu: the device is gone ({reason:?}): {message}. Exiting with status 3."
             );
             std::process::exit(EXIT_DEVICE);
         });
         device.on_uncaptured_error(std::sync::Arc::new(|error| {
-            tracing::error!("gpu: {error}. Exiting (exit 3; the unit does not restart it).");
+            tracing::error!("gpu: {error}. Exiting with status 3.");
             std::process::exit(EXIT_DEVICE);
         }));
 
@@ -279,7 +278,7 @@ impl Presentation {
         let caps = surface.get_capabilities(adapter);
         if !caps.usages.contains(wgpu::TextureUsages::STORAGE_BINDING) {
             bail!(
-                "the layer surface does not support STORAGE_BINDING (usages: {:?}); the bar \
+                "the surface does not support STORAGE_BINDING (usages: {:?}); a caustic \
                  draws the swapchain from a compute pass and has no fallback",
                 caps.usages
             );
@@ -316,8 +315,8 @@ impl Presentation {
             tracing::warn!(
                 offered = ?caps.alpha_modes,
                 chosen = ?fallback,
-                "the surface does not offer PreMultiplied alpha; the translucent slab will \
-                 composite wrong, but the bar still runs"
+                "the surface does not offer PreMultiplied alpha; anything translucent will \
+                 composite wrong, but the caustic still runs"
             );
             fallback
         };

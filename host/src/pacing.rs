@@ -69,6 +69,16 @@ impl Pacing {
         !self.pending || now.saturating_duration_since(self.requested_at) >= FRAME_STALL
     }
 
+    /// When the request out stops holding a frame back ([`FRAME_STALL`]
+    /// after it was made), or `None` when none is out.
+    ///
+    /// A host whose next frame waits on an animation and not on an event has
+    /// nothing else to wake it if the compositor never answers (a surface it
+    /// does not repaint), so it arms a timer for this.
+    pub fn stall_deadline(&self) -> Option<Instant> {
+        self.pending.then(|| self.requested_at + FRAME_STALL)
+    }
+
     /// What the last mirror said about `wants_redraw`.
     pub fn set_animating(&mut self, animating: bool) {
         self.animating = animating;

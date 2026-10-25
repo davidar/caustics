@@ -268,6 +268,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "caustics-canvas"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "caustics-bar-abi",
+ "caustics-host",
+ "libc",
+ "punchcutter-core",
+ "punchcutter-slang",
+ "smithay-client-toolkit",
+ "tracing",
+ "tracing-subscriber",
+ "wayland-client",
+ "wgpu",
+]
+
+[[package]]
 name = "caustics-glyphs"
 version = "0.1.0"
 dependencies = [

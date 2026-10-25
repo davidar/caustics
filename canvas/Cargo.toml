@@ -1,0 +1,47 @@
+[package]
+name = "caustics-canvas"
+version = "0.1.0"
+edition.workspace = true
+description = "The canvas host: the wallpaper on every output, drawn by a Slang caustic and cross-faded on command, with its pictures from a sidecar"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow = "1.0.104"
+# The contracts: the wire its sidecars speak, the canvas's buffer layouts,
+# `CANVAS_ENTRIES` and `DstFormat`.
+caustics-bar-abi = { path = "../bar/abi" }
+# The mechanism this host is a client of: the device and its refusals, the
+# caustic's pipelines and their reload, one swapchain per output, the frame
+# pacing, the sidecar supervisor, the literal table and the witness printer
+# (docs/architecture.md, *The bar process*; this host is its second client).
+caustics-host = { path = "../host" }
+# `clock_gettime(CLOCK_BOOTTIME)`: the time a fade is measured in.
+libc = "0.2.189"
+# The `Plain` byte views a buffer is written and read back through.
+punchcutter-core = { workspace = true, features = ["gpu"] }
+# The reflection's types and their JSON form; the host never compiles, so no
+# compiler (the tests take it, below).
+punchcutter-slang = { workspace = true, default-features = false }
+# The layer surfaces, the outputs and calloop; `wp_fractional_scale_v1` and
+# `wp_viewporter` come through its re-exported protocols.
+smithay-client-toolkit = { version = "0.19.2", default-features = false, features = ["calloop"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# `system`: the raw `wl_display` and `wl_surface` pointers wgpu's surface takes.
+wayland-client = { version = "0.31.15", features = ["system"] }
+wgpu = "30.0.0"
+# No image decoder and no compiler: pictures arrive as `Image` frames from
+# `caustics-wallpaper`, and the caustic as `Module` frames from
+# `caustics-reload`. The host copies bytes.
+
+[build-dependencies]
+# The same in-process compiler `caustics-reload` drives, so a baked canvas and
+# a reloaded one are compiled alike.
+punchcutter-slang.workspace = true
+caustics-bar-abi = { path = "../bar/abi" }
+
+[dev-dependencies]
+# The layout test compiles the caustic and compares its reflection with the
+# declarations; the bring-up test runs the two entry points headless.
+punchcutter-slang.workspace = true
