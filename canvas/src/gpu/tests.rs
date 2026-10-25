@@ -63,15 +63,23 @@ fn every_baked_binding_is_one_the_host_binds() {
         .collect();
     let mut sorted = names.clone();
     sorted.sort_unstable();
-    let mut bound = BOUND.to_vec();
+    let mut bound: Vec<&str> = BOUND.iter().chain(ENGINE_BOUND.iter()).copied().collect();
     bound.sort_unstable();
     assert_eq!(sorted, bound);
-    assert!(
-        baked_reflection()
-            .bindings
-            .iter()
-            .all(|binding| binding.set == 0)
-    );
+    for binding in &baked_reflection().bindings {
+        let want = if BOUND.contains(&binding.name.as_str()) {
+            SET_CANVAS
+        } else if binding.name.starts_with("text") {
+            SET_TEXT
+        } else {
+            SET_SHAPE
+        };
+        assert_eq!(
+            binding.set, want,
+            "`{}` is in set {}",
+            binding.name, binding.set
+        );
+    }
     assert!(private_stride(&baked_reflection().bindings).expect("a private buffer") >= 16);
 }
 
@@ -174,6 +182,7 @@ fn frame_on(gpu: &mut Gpu, now: u64, role: u32) -> (u32, [u8; 4]) {
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let (lo, hi) = clock::words(now);
     gpu.write_params(&target.params, SIDE, SIDE, 120, lo, hi, role);
+    gpu.shape_if_pending();
     gpu.encode(&target.params, &view, SIDE, SIDE);
     let stamp = gpu.finish().expect("the frame completes");
 
@@ -490,4 +499,205 @@ fn the_background_never_darkens() {
     let (_, overlay) = frame_on(&mut gpu, 20_000, TARGET_OVERLAY);
     assert_eq!(overlay, [0, 0, 0, 0]);
     assert_eq!(gpu.mirror().dim_reached, 0);
+}
+
+// -- On a device: text ----------------------------------------------------------
+
+/// A canvas with a real font in its engine buffers, as its `caustics-glyphs`
+/// would send it, and the baked caustic's literal pool.
+fn with_font() -> Gpu {
+    use caustics_bar_abi::wire::{
+        BUF_BAND_CURVES, BUF_BANDS, BUF_GLYPHS, BUF_OT, BUF_POINTS, BUF_SHAPE_FONT,
+    };
+    let mut gpu = Gpu::headless().expect("a Vulkan adapter (lavapipe will do)");
+    let loaded = punchcutter_fonts::Loaded::load_requiring(caustics_glyphs::COMPOSED)
+        .expect("a sans-serif font through fontconfig");
+    for buffer in [
+        BUF_POINTS,
+        BUF_BANDS,
+        BUF_BAND_CURVES,
+        BUF_GLYPHS,
+        BUF_OT,
+        BUF_SHAPE_FONT,
+    ] {
+        let bytes = caustics_glyphs::buffer(&loaded, buffer).expect("every buffer");
+        gpu.write_bytes(buffer, 0, bytes.len() as u32, &bytes);
+    }
+    gpu
+}
+
+/// A whole frame of `role` at `width` x `height`, scale 1, as RGBA8.
+fn image_on(gpu: &mut Gpu, width: u32, height: u32, role: u32) -> Vec<[u8; 4]> {
+    let target = gpu.configure(None, width, height);
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("canvas-test-text-dst"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let (lo, hi) = clock::words(1_000);
+    gpu.write_params(&target.params, width, height, 120, lo, hi, role);
+    gpu.shape_if_pending();
+    gpu.encode(&target.params, &view, width, height);
+    gpu.finish().expect("the frame completes");
+    let row = (width * 4).next_multiple_of(256);
+    let out = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("canvas-test-text-readback"),
+        size: u64::from(row * height),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &out,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit(Some(encoder.finish()));
+    let mut words = vec![0u32; (row * height / 4) as usize];
+    caustics_host::surface::read_words(&gpu.device, &out, &mut words);
+    let mut pixels = Vec::with_capacity((width * height) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            pixels.push(words[(y * row / 4 + x) as usize].to_le_bytes());
+        }
+    }
+    pixels
+}
+
+/// One `float4` of the prompt's layout, `PromptLayout.<field>` inside
+/// `CanvasPrivate.prompt`, read back by the reflection's offsets.
+fn layout_box(gpu: &Gpu, field: &str) -> [f32; 4] {
+    let structs = &baked_reflection().structs;
+    let base = structs["CanvasPrivate"]["prompt"];
+    let at = base + structs["PromptLayout"][field];
+    let size = private_stride(gpu.program.bindings()).expect("a stride");
+    let out = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("canvas-test-layout"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_buffer_to_buffer(&gpu.private, 0, &out, 0, size);
+    gpu.queue.submit(Some(encoder.finish()));
+    let mut words = vec![0u32; (size / 4) as usize];
+    caustics_host::surface::read_words(&gpu.device, &out, &mut words);
+    std::array::from_fn(|i| f32::from_bits(words[at / 4 + i]))
+}
+
+/// The text pipeline end to end on a device: a title from the prompt's text
+/// buffer and the caustic's own literal for an ask with no words of its own
+/// are shaped by `canvas_shape` against a real font and drawn by
+/// `canvas_draw` on the prompt's pane. Inside each run's box the panel has
+/// ink on it; in the gap between the two rows, and beside the title past
+/// its end, it is the bare panel colour.
+#[test]
+fn the_prompt_draws_its_text_on_the_device() {
+    use caustics_bar_abi::canvas::{CanvasPrompt, PROMPT_ASKING, TARGET_PROMPT};
+    if !gated() {
+        return;
+    }
+    let mut gpu = with_font();
+    let strings = caustics_host::strings::Strings::baked(BAKED_REFLECTION);
+    let literal_count = gpu.write_literals(&strings);
+    assert!(literal_count > 0, "the baked caustic names literals");
+    let title = b"Canvas text";
+    gpu.write_prompt_text(title);
+    gpu.write_facts(&CanvasFacts {
+        from_slot: NO_INDEX,
+        to_slot: NO_INDEX,
+        literal_count,
+        prompt: CanvasPrompt {
+            id: 1,
+            state: PROMPT_ASKING,
+            title_off: 0,
+            title_len: title.len() as u32,
+            ..CanvasPrompt::default()
+        },
+        ..CanvasFacts::default()
+    });
+    let (width, height) = (480u32, 320u32);
+    let pixels = image_on(&mut gpu, width, height, TARGET_PROMPT);
+    let at = |x: u32, y: u32| pixels[(y * width + x) as usize];
+    if let Some(path) = std::env::var_os("CANVAS_TEST_DUMP") {
+        let mut ppm = format!("P6 {width} {height} 255\n").into_bytes();
+        for px in &pixels {
+            ppm.extend_from_slice(&px[..3]);
+        }
+        std::fs::write(path, ppm).unwrap();
+    }
+    let panel: Vec<u8> = tunable("PROMPT_PANEL_COLOUR")
+        .iter()
+        .map(|c| (c * 255.0).round() as u8)
+        .collect();
+    let is_panel = |px: [u8; 4]| {
+        px[..3]
+            .iter()
+            .zip(&panel)
+            .all(|(got, want)| got.abs_diff(*want) <= 1)
+    };
+
+    let title_box = layout_box(&gpu, "title_box");
+    let ask_box = layout_box(&gpu, "ask_box");
+    for (name, b) in [("title", title_box), ("ask", ask_box)] {
+        assert!(
+            b[2] - b[0] > 20.0 && b[3] - b[1] > 8.0,
+            "the {name}'s run has a width and a line: {b:?}"
+        );
+        let (mut inked, mut all) = (0u32, 0u32);
+        for y in b[1] as u32..b[3] as u32 {
+            for x in b[0] as u32..b[2] as u32 {
+                all += 1;
+                inked += u32::from(!is_panel(at(x, y)));
+            }
+        }
+        assert!(
+            inked * 20 > all,
+            "the {name}'s box {b:?} has ink on {inked} of {all} pixels"
+        );
+    }
+    for y in (title_box[3] as u32 + 2)..(ask_box[1] as u32).saturating_sub(1) {
+        for x in title_box[0] as u32..(title_box[0] as u32 + 200) {
+            assert!(
+                is_panel(at(x, y)),
+                "the gap at ({x}, {y}) is {:?}",
+                at(x, y)
+            );
+        }
+    }
+    for x in (title_box[2] as u32 + 3)..(title_box[2] as u32 + 60) {
+        let y = (0.5 * (title_box[1] + title_box[3])) as u32;
+        assert!(
+            is_panel(at(x, y)),
+            "past the title at ({x}, {y}): {:?}",
+            at(x, y)
+        );
+    }
+    assert_eq!(gpu.mirror().cover_count, 0, "the font draws both runs");
+    assert!(!gpu.shape_blocked());
 }

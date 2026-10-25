@@ -28,4 +28,12 @@ fn each_role_is_its_layer_its_keyboard_and_its_target() {
     }
     assert_ne!(Role::Background.namespace(), Role::Overlay.namespace());
     assert_ne!(Role::Background.target(), Role::Overlay.target());
+    // The prompt: the top layer, every key, its own target, and no cancel.
+    assert_eq!(Role::Top.layer(), Layer::Top);
+    assert_eq!(Role::Top.keyboard(), KeyboardInteractivity::Exclusive);
+    assert_eq!(Role::Top.target(), TARGET_PROMPT);
+    assert_eq!(Role::Top.namespace(), "caustics-canvas-prompt");
+    assert!(!Role::Top.input_cancels());
+    assert!(!Role::Top.sizes_the_picture());
+    assert_eq!(Role::Top.exclusive_zone(), -1);
 }

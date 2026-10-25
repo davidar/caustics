@@ -51,3 +51,43 @@ public static const uint FIT = FIT_COVER;
 /// reads as a screen gone to sleep, and gives a prompt drawn over the dim a
 /// quieter backdrop to be legible on.
 public static const float DIM_DARKEN = 0.3;
+
+// ---------------------------------------------------------------------------
+// The prompt (docs/canvas.md, *The prompt core*). Sizes are logical px, so a
+// prompt is the same size on a scale-2 output as on a scale-1 one.
+// ---------------------------------------------------------------------------
+
+/// How far the prompt's wallpaper is darkened towards `DIM_COLOUR`, 0..1: the
+/// dim's rule, a little darker than `DIM_DARKEN`, so the panel reads as the
+/// one thing on the screen.
+public static const float PROMPT_DARKEN = 0.45;
+
+/// The panel's width; it is narrower only on an output narrower than it.
+public static const float PROMPT_WIDTH = 440.0;
+/// The space inside the panel's edge, and between its rows.
+public static const float PROMPT_PADDING = 24.0;
+public static const float PROMPT_GAP = 12.0;
+/// The corners' radius.
+public static const float PROMPT_RADIUS = 14.0;
+/// The em sizes of the title and of every other line.
+public static const float PROMPT_TITLE_PX = 17.0;
+public static const float PROMPT_TEXT_PX = 14.0;
+/// The space inside the answer's field, around its dots or its text.
+public static const float PROMPT_FIELD_PADDING = 8.0;
+/// The space between two dots, on top of the dot's own advance.
+public static const float PROMPT_DOT_GAP = 3.0;
+
+/// The panel, its answer field, and the inks: the title and the typed text,
+/// the ask's own words and an info line, an error line.
+public static const float3 PROMPT_PANEL_COLOUR = float3(0.13, 0.14, 0.17);
+public static const float3 PROMPT_FIELD_COLOUR = float3(0.08, 0.09, 0.11);
+public static const float3 PROMPT_INK = float3(0.92, 0.93, 0.95);
+public static const float3 PROMPT_MUTED_INK = float3(0.62, 0.64, 0.69);
+public static const float3 PROMPT_ERROR_INK = float3(0.95, 0.45, 0.42);
+
+/// How many milliseconds one `canvas_shape` pass may take on the device
+/// before the host stops shaping until the font's arena is written again: a
+/// prompt's few runs take well under one, so this is far past a healthy pass
+/// and far short of a hostile arena's cost. On a software adapter the host
+/// allows eight times it.
+public static const uint SHAPE_WATCHDOG_MS = 32u;

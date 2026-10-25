@@ -43,5 +43,10 @@ caustics-bar-abi = { path = "../bar/abi" }
 
 [dev-dependencies]
 # The layout test compiles the caustic and compares its reflection with the
-# declarations; the bring-up test runs the two entry points headless.
+# declarations; the bring-up test runs the entry points headless.
 punchcutter-slang.workspace = true
+# The text test's font: the buffers the canvas's own `caustics-glyphs` sends
+# over the pipe, built in-process so a headless frame shapes and draws
+# against a real font. The canvas's binary links none of it.
+caustics-glyphs = { path = "../glyphs" }
+punchcutter-fonts.workspace = true

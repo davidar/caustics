@@ -1,30 +1,42 @@
-//! The canvas's GPU side: one device, two pipelines, one bind group layout,
-//! and a swapchain per output.
+//! The canvas's GPU side: one device, three pipelines, three bind group
+//! layouts, and a swapchain per output.
 //!
 //! The mechanism is `caustics-host`'s, as it is the bar's: the device and its
 //! refusals (`caustics_host::device`), the layouts built from the reflection,
 //! the pipelines and their all-or-nothing reload (`caustics_host::program`),
 //! and one target's swapchain (`caustics_host::surface`). What is here is what
 //! makes them the canvas: which buffers it allocates and binds by which
-//! reflected name (docs/abi.md, *The canvas's buffer*), its two entry points
-//! and the order they run in, and the two image slots.
+//! reflected name (docs/abi.md, *The canvas's buffer*), its three entry
+//! points and the order they run in, the two image slots, and the text: the
+//! engine's buffers and the watchdog are `caustics_host::text`'s, the bar's
+//! own, filled by the canvas's own `caustics-glyphs`; the literal pool and
+//! the prompt's text buffer are the canvas's.
 //!
-//! A frame is one surface's (an output's background, or its overlay while a
-//! dim is up): `canvas_apply` once, `canvas_draw` over that surface's
-//! swapchain image, one copy of `state` back, one wait. Every surface is
-//! paced on its own frame callbacks, so a frame never waits for another's.
+//! A frame is one surface's (an output's background, its overlay while a dim
+//! is up, its prompt pane while a prompt is): `canvas_apply` once,
+//! `canvas_draw` over that surface's swapchain image, one copy of `state`
+//! back, one wait. Before it, when the text or the font changed since the
+//! last, `canvas_shape` runs in a submission of its own with the watchdog
+//! round it. Every surface is paced on its own frame callbacks, so a frame
+//! never waits for another's.
 
 use std::ptr::NonNull;
 
 use anyhow::{Context, Result, anyhow, bail};
-use caustics_bar_abi::canvas::{CanvasFacts, CanvasParams, CanvasState, SLOT_A, SLOT_B};
+use caustics_bar_abi::canvas::{
+    CANVAS_GLYPHS, CANVAS_STRINGS_BYTES, CANVAS_TEXT_BLOCKS, CanvasFacts, CanvasParams,
+    CanvasState, MAX_CANVAS_LITERALS, PROMPT_TEXT_BYTES, SLOT_A, SLOT_B, TEXT_LITERALS,
+    TEXT_PROMPT,
+};
 use caustics_bar_abi::wire::Image;
-use caustics_bar_abi::{CANVAS_ENTRIES, NO_INDEX, as_bytes};
+use caustics_bar_abi::{CANVAS_ENTRIES, Literal, NO_INDEX, as_bytes};
 use caustics_host::device::{self, Device, Presentation};
 use caustics_host::program::{Entry, Program, Refused, group_entries};
+use caustics_host::strings::Strings;
 use caustics_host::surface::{
     self, AcquireError, Surface, acquire, create_surface, refresh_mirror,
 };
+use caustics_host::text::{Group, TextBuffers, Watchdog};
 use punchcutter_slang::{Binding, BindingKind, Reflection};
 
 use crate::clock;
@@ -35,16 +47,31 @@ use crate::clock;
 pub const BAKED_REFLECTION: &str =
     include_str!(concat!(env!("OUT_DIR"), "/canvas.reflection.json"));
 
-/// The two entry points' positions in `CANVAS_ENTRIES`.
-const APPLY: usize = 0;
-const DRAW: usize = 1;
+/// The three entry points' positions in `CANVAS_ENTRIES`.
+const SHAPE: usize = 0;
+const APPLY: usize = 1;
+const DRAW: usize = 2;
+
+/// The canvas's own set, the text engine's curve buffers (`text.slang`
+/// declares them in set 1), and the shaper's tables with the strings buffer.
+const SET_CANVAS: u32 = 0;
+const SET_TEXT: u32 = 1;
+const SET_SHAPE: u32 = 2;
+
+/// One shaped glyph in `runs` (`punchcutter_shape::ShapedGlyph`), bytes.
+const SHAPED_GLYPH: u64 = 32;
 
 /// Workgroup edge of `canvas_draw` (`[numthreads(8, 8, 1)]`).
 const TILE: u32 = 8;
 
-/// The two entry points, in `CANVAS_ENTRIES` order: each one's name, its
+/// The three entry points, in `CANVAS_ENTRIES` order: each one's name, its
 /// pipeline's label and its `[numthreads]`.
 pub static CANVAS_ENTRY_TABLE: [Entry; CANVAS_ENTRIES.len()] = [
+    Entry {
+        name: CANVAS_ENTRIES[SHAPE],
+        label: "caustics-canvas-shape",
+        workgroup: (1, 1, 1),
+    },
     Entry {
         name: CANVAS_ENTRIES[APPLY],
         label: "caustics-canvas-apply",
@@ -60,11 +87,13 @@ pub static CANVAS_ENTRY_TABLE: [Entry; CANVAS_ENTRIES.len()] = [
 type BakedSpv = [&'static [u8]; CANVAS_ENTRIES.len()];
 
 const SPV_RGBA8UNORM: BakedSpv = [
+    include_bytes!(concat!(env!("OUT_DIR"), "/canvas_shape.rgba8unorm.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/canvas_apply.rgba8unorm.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/canvas_draw.rgba8unorm.spv")),
 ];
 
 const SPV_BGRA8UNORM: BakedSpv = [
+    include_bytes!(concat!(env!("OUT_DIR"), "/canvas_shape.bgra8unorm.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/canvas_apply.bgra8unorm.spv")),
     include_bytes!(concat!(env!("OUT_DIR"), "/canvas_draw.bgra8unorm.spv")),
 ];
@@ -96,6 +125,29 @@ pub struct Gpu {
     private: wgpu::Buffer,
     images: [Picture; 2],
     sampler: wgpu::Sampler,
+    /// The shaped glyphs (`runs`), the caustic's own: never written or read
+    /// here.
+    runs: wgpu::Buffer,
+    /// The literal pool: its index (`literals`) and its bytes (the strings
+    /// buffer, `shapeUtf8`), and a copy of the bytes for the covers.
+    literals: wgpu::Buffer,
+    strings: wgpu::Buffer,
+    strings_copy: Vec<u8>,
+    /// The prompt's text, and a copy of it for the covers.
+    prompt_text: wgpu::Buffer,
+    prompt_copy: Vec<u8>,
+    /// The text engine's buffers and the two groups over them.
+    text: TextBuffers,
+    text_group: wgpu::BindGroup,
+    shape_group: wgpu::BindGroup,
+    /// The watchdog round `canvas_shape`.
+    watchdog: Watchdog,
+    /// The text or the font changed, and `canvas_shape` is owed a pass.
+    shape_pending: bool,
+    /// What the shape pass binds where a frame binds a surface's: a uniform
+    /// of its own and a 1x1 image of the format, neither of which it touches.
+    shape_params: wgpu::Buffer,
+    shape_dst: wgpu::TextureView,
     mirror: Box<CanvasState>,
     /// The frame stamp (docs/abi.md, *The three rules the buffer adds*, rule
     /// 1): ≥ 1, written into `params.frame` and advanced after the frame's
@@ -127,7 +179,7 @@ impl Gpu {
             device,
             queue,
             features,
-            ..
+            shader_clock,
         } = Device::open(
             instance,
             Some(&wgpu_surface),
@@ -135,7 +187,16 @@ impl Gpu {
             "caustics-canvas-device",
         )?;
         let presentation = Presentation::negotiate(&wgpu_surface, &adapter, features)?;
-        let gpu = Gpu::bring_up(instance, adapter, device, queue, presentation, bindings)?;
+        let gpu = Gpu::bring_up(
+            instance,
+            adapter,
+            device,
+            queue,
+            presentation,
+            bindings,
+            features.contains(wgpu::Features::TIMESTAMP_QUERY),
+            shader_clock,
+        )?;
         let target = gpu.configure(Some(wgpu_surface), width, height);
         Ok((gpu, target))
     }
@@ -150,7 +211,8 @@ impl Gpu {
             adapter,
             device,
             queue,
-            ..
+            features,
+            shader_clock,
         } = Device::open(
             device::instance(),
             None,
@@ -164,9 +226,12 @@ impl Gpu {
             queue,
             Presentation::HEADLESS,
             bindings,
+            features.contains(wgpu::Features::TIMESTAMP_QUERY),
+            shader_clock,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn bring_up(
         instance: wgpu::Instance,
         adapter: wgpu::Adapter,
@@ -174,12 +239,18 @@ impl Gpu {
         queue: wgpu::Queue,
         presentation: Presentation,
         bindings: Vec<Binding>,
+        timing: bool,
+        shader_clock: punchcutter_core::gpu::ShaderClock,
     ) -> Result<Gpu> {
         let format = presentation.format;
         let program = Program::new(
             &device,
             bindings,
-            &["caustics-canvas-bgl"],
+            &[
+                "caustics-canvas-bgl",
+                "caustics-canvas-text-bgl",
+                "caustics-canvas-shape-bgl",
+            ],
             "caustics-canvas-pipeline-layout",
             &|name| storage_texture_format(name, format),
             &CANVAS_ENTRY_TABLE,
@@ -231,6 +302,62 @@ impl Gpu {
             empty_picture(&device, &queue),
             empty_picture(&device, &queue),
         ];
+        let storage = |label: &str, size: usize| {
+            punchcutter_core::gpu::storage_buffer(&device, label, size as u64)
+        };
+        let runs = storage(
+            "caustics-canvas-runs",
+            CANVAS_GLYPHS * SHAPED_GLYPH as usize,
+        );
+        let literals = storage(
+            "caustics-canvas-literals",
+            MAX_CANVAS_LITERALS * size_of::<Literal>(),
+        );
+        let strings = storage("caustics-canvas-strings", CANVAS_STRINGS_BYTES);
+        let prompt_text = storage("caustics-canvas-prompt-text", PROMPT_TEXT_BYTES);
+        // The dispatch half of `ShapeParams`: the canvas drives the pass from
+        // its fixed blocks, so it carries their count and the slots.
+        let text = TextBuffers::new(
+            &device,
+            "caustics-canvas",
+            shader_clock,
+            CANVAS_TEXT_BLOCKS as u32,
+            CANVAS_GLYPHS as u32,
+        );
+        let text_group = text_group(&device, &program, &text);
+        let shape_group = shape_group(&device, &program, &text, &strings);
+        let software = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        let watchdog = Watchdog::new(
+            &device,
+            &queue,
+            timing,
+            software,
+            "caustics-canvas",
+            "canvas_shape",
+            CANVAS_TEXT_BLOCKS as u32,
+        );
+        let shape_params = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("caustics-canvas-shape-params"),
+            size: size_of::<CanvasParams>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let shape_dst = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("caustics-canvas-shape-dst"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::STORAGE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor::default());
         let gpu = Gpu {
             instance,
             adapter,
@@ -244,6 +371,19 @@ impl Gpu {
             private,
             images,
             sampler,
+            runs,
+            literals,
+            strings,
+            strings_copy: Vec::new(),
+            prompt_text,
+            prompt_copy: Vec::new(),
+            text,
+            text_group,
+            shape_group,
+            watchdog,
+            shape_pending: true,
+            shape_params,
+            shape_dst,
             mirror: Box::new(CanvasState::ZERO),
             frame: 1,
         };
@@ -363,9 +503,160 @@ impl Gpu {
         Ok(())
     }
 
-    /// Swap in a freshly compiled generation, or keep what runs.
+    /// Swap in a freshly compiled generation, or keep what runs. New
+    /// pipelines shape again, and their first pass is not judged.
     pub fn reload(&mut self, reflection: &Reflection, spirv: &[&[u8]]) -> Result<(), Refused> {
-        self.program.reload(&self.device, reflection, spirv)
+        self.program.reload(&self.device, reflection, spirv)?;
+        self.watchdog.swapped();
+        self.shape_pending = true;
+        Ok(())
+    }
+
+    // -- the text ------------------------------------------------------------
+
+    /// One run of a glyphs sidecar's bytes into the engine's buffer it names
+    /// (docs/abi.md, *Bytes*), through `caustics_host::text`: the group a
+    /// grown buffer is in rebuilt, the watchdog released by a rewritten
+    /// front block, and the shape pass owed.
+    pub fn write_bytes(&mut self, buffer: u32, offset: u32, total: u32, bytes: &[u8]) {
+        let written =
+            self.text
+                .write_bytes(&self.device, &self.queue, buffer, offset, total, bytes);
+        match written.regroup {
+            Some(Group::Text) => {
+                self.text_group = text_group(&self.device, &self.program, &self.text)
+            }
+            Some(Group::Shape) => {
+                self.shape_group =
+                    shape_group(&self.device, &self.program, &self.text, &self.strings)
+            }
+            None => {}
+        }
+        if written.front_block {
+            self.watchdog.release();
+        }
+        if written.landed {
+            self.shape_pending = true;
+        }
+    }
+
+    /// The literal pool, from the running caustic's own table: every
+    /// literal's bytes laid end to end in the strings buffer and its
+    /// `(hash, off, len)` in `literals`, so the caustic can spell a word the
+    /// host never learns the meaning of. Returns how many went in, which the
+    /// caller puts in `facts`. A table past the buffers is cut, with a line.
+    pub fn write_literals(&mut self, strings: &Strings) -> u32 {
+        let mut bytes: Vec<u8> = Vec::new();
+        let mut index: Vec<Literal> = Vec::new();
+        for (hash, text) in strings.iter() {
+            let len = text.len();
+            if index.len() >= MAX_CANVAS_LITERALS || bytes.len() + len > CANVAS_STRINGS_BYTES {
+                tracing::warn!(
+                    "text: the literal pool is full at {} literals, {} bytes; the caustic \
+                     cannot spell every literal it names",
+                    index.len(),
+                    bytes.len()
+                );
+                break;
+            }
+            index.push(Literal {
+                hash,
+                off: bytes.len() as u32,
+                len: len as u32,
+                _pad0: 0,
+            });
+            bytes.extend_from_slice(text.as_bytes());
+            while bytes.len() % 4 != 0 {
+                bytes.push(0);
+            }
+        }
+        if !bytes.is_empty() {
+            self.queue.write_buffer(&self.strings, 0, &bytes);
+        }
+        let mut table: Vec<u8> = Vec::with_capacity(index.len() * size_of::<Literal>());
+        for literal in &index {
+            table.extend_from_slice(as_bytes(literal));
+        }
+        if !table.is_empty() {
+            self.queue.write_buffer(&self.literals, 0, &table);
+        }
+        self.strings_copy = bytes;
+        self.shape_pending = true;
+        index.len() as u32
+    }
+
+    /// The prompt's text, whole: what `facts.prompt`'s ranges name. At most
+    /// `PROMPT_TEXT_BYTES`, which the caller's arena keeps to. Never a
+    /// secret (docs/abi.md, *The canvas's buffer*).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn write_prompt_text(&mut self, bytes: &[u8]) {
+        let bytes = &bytes[..bytes.len().min(PROMPT_TEXT_BYTES)];
+        let mut padded = bytes.to_vec();
+        while padded.len() % 4 != 0 {
+            padded.push(0);
+        }
+        if !padded.is_empty() {
+            self.queue.write_buffer(&self.prompt_text, 0, &padded);
+        }
+        self.prompt_copy = bytes.to_vec();
+        self.shape_pending = true;
+    }
+
+    /// The bytes of a run the caustic asked to have covered, from this
+    /// side's own copy of the buffer it names (`TEXT_*`), or `None` for a
+    /// range that is not in it or not UTF-8.
+    pub fn cover_bytes(&self, source: u32, off: u32, len: u32) -> Option<String> {
+        let held = match source {
+            TEXT_LITERALS => &self.strings_copy,
+            TEXT_PROMPT => &self.prompt_copy,
+            _ => return None,
+        };
+        let start = off as usize;
+        let end = start.checked_add(len as usize)?;
+        let bytes = held.get(start..end)?;
+        String::from_utf8(bytes.to_vec()).ok()
+    }
+
+    /// Whether the watchdog has stopped the shape pass.
+    #[cfg(test)]
+    pub fn shape_blocked(&self) -> bool {
+        self.watchdog.blocked()
+    }
+
+    /// `canvas_shape`, when it is owed and the watchdog allows: its own
+    /// submission, waited out before the frame's, because the frame's draw
+    /// reads what it wrote and two submissions in flight have no order a host
+    /// can rely on. The watchdog's pair goes round this pass and no other:
+    /// it is the one that walks bytes a sidecar sent.
+    fn shape_if_pending(&mut self) {
+        if !self.shape_pending || self.watchdog.blocked() {
+            return;
+        }
+        self.shape_pending = false;
+        let group = self.bind_group(&self.shape_params, &self.shape_dst);
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("caustics-canvas-shape"),
+            });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("caustics-canvas-shape-pass"),
+                timestamp_writes: self.watchdog.timestamp_writes(),
+            });
+            pass.set_bind_group(SET_CANVAS, &group, &[]);
+            pass.set_bind_group(SET_TEXT, &self.text_group, &[]);
+            pass.set_bind_group(SET_SHAPE, &self.shape_group, &[]);
+            pass.set_pipeline(self.program.pipeline(SHAPE));
+            pass.dispatch_workgroups(CANVAS_TEXT_BLOCKS as u32, 1, 1);
+        }
+        self.watchdog.resolve(&mut encoder);
+        self.queue.submit(Some(encoder.finish()));
+        let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
+        // A trip leaves the pass owed, so the release shapes again.
+        if self.watchdog.check(&self.device) {
+            self.shape_pending = true;
+        }
     }
 
     /// The state as of the last readback.
@@ -410,6 +701,7 @@ impl Gpu {
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let (width, height) = target.size();
+        self.shape_if_pending();
         self.dispatch(&target.params, &view, width, height, scale, role);
         self.queue.present(frame.texture);
         if frame.suboptimal {
@@ -469,7 +761,9 @@ impl Gpu {
                 label: Some("caustics-canvas-pass"),
                 timestamp_writes: None,
             });
-            pass.set_bind_group(0, &group, &[]);
+            pass.set_bind_group(SET_CANVAS, &group, &[]);
+            pass.set_bind_group(SET_TEXT, &self.text_group, &[]);
+            pass.set_bind_group(SET_SHAPE, &self.shape_group, &[]);
             // Two dispatches, two usage scopes: the barrier between them is
             // what lets `canvas_draw` read the alpha `canvas_apply` wrote.
             pass.set_pipeline(self.program.pipeline(APPLY));
@@ -494,6 +788,12 @@ impl Gpu {
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|err| anyhow!("device wait failed: {err}"))?;
         refresh_mirror(&self.device, &self.readback, &mut *self.mirror);
+        // The caustic's threshold for its shape pass, as it said it this
+        // frame: one number in.
+        if self.mirror.shape_watchdog_ms > 0 {
+            self.watchdog
+                .set_threshold_ms(self.mirror.shape_watchdog_ms);
+        }
         let drawn = self.frame;
         self.frame = self.frame.wrapping_add(1).max(1);
         Ok(drawn)
@@ -503,7 +803,7 @@ impl Gpu {
     /// reflection (docs/abi.md, *Bindings and the oracle*): no binding number
     /// is written on this side.
     fn bind_group(&self, params: &wgpu::Buffer, dst: &wgpu::TextureView) -> wgpu::BindGroup {
-        let entries = group_entries(self.program.bindings(), 0, |name| match name {
+        let entries = group_entries(self.program.bindings(), SET_CANVAS, |name| match name {
             "state" => self.state.as_entire_binding(),
             "params" => params.as_entire_binding(),
             "facts" => self.facts.as_entire_binding(),
@@ -512,19 +812,22 @@ impl Gpu {
             "image_b" => wgpu::BindingResource::TextureView(&self.images[1].view),
             "tex_sampler" => wgpu::BindingResource::Sampler(&self.sampler),
             "private" => self.private.as_entire_binding(),
+            "runs" => self.runs.as_entire_binding(),
+            "literals" => self.literals.as_entire_binding(),
+            "prompt_text" => self.prompt_text.as_entire_binding(),
             other => panic!("{}", unknown_binding(other)),
         });
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("caustics-canvas-bg"),
-            layout: self.program.layout(0),
+            layout: self.program.layout(SET_CANVAS),
             entries: &entries,
         })
     }
 }
 
-/// Every binding name the bind group knows, in the order `bind_group`'s
-/// match lists them.
-pub const BOUND: [&str; 8] = [
+/// Every binding name the canvas's own group knows, in the order
+/// `bind_group`'s match lists them.
+pub const BOUND: [&str; 11] = [
     "state",
     "params",
     "facts",
@@ -533,12 +836,61 @@ pub const BOUND: [&str; 8] = [
     "image_b",
     "tex_sampler",
     "private",
+    "runs",
+    "literals",
+    "prompt_text",
 ];
+
+/// The text engine's names in sets 1 and 2 (`TextBuffers::resource`), and
+/// the strings buffer behind `shapeUtf8`: the bar's names, so one table of
+/// them serves both hosts.
+pub const ENGINE_BOUND: [&str; 7] = [
+    "textPoints",
+    "textBands",
+    "textBandCurves",
+    "textGlyphs",
+    "shapeParams",
+    "shapeOt",
+    "shapeUtf8",
+];
+
+/// Group 1: `text.slang`'s four curve buffers, by name.
+fn text_group(device: &wgpu::Device, program: &Program, text: &TextBuffers) -> wgpu::BindGroup {
+    let entries = group_entries(program.bindings(), SET_TEXT, |name| {
+        text.resource(name)
+            .unwrap_or_else(|| panic!("{}", unknown_binding(name)))
+    });
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("caustics-canvas-text"),
+        layout: program.layout(SET_TEXT),
+        entries: &entries,
+    })
+}
+
+/// Group 2: the shaper's tables, and the literal pool's bytes as its strings.
+fn shape_group(
+    device: &wgpu::Device,
+    program: &Program,
+    text: &TextBuffers,
+    strings: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    let entries = group_entries(program.bindings(), SET_SHAPE, |name| match name {
+        "shapeUtf8" => strings.as_entire_binding(),
+        other => text
+            .resource(other)
+            .unwrap_or_else(|| panic!("{}", unknown_binding(other))),
+    });
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("caustics-canvas-shape"),
+        layout: program.layout(SET_SHAPE),
+        entries: &entries,
+    })
+}
 
 fn unknown_binding(name: &str) -> String {
     format!(
         "the canvas caustic declares a binding `{name}` this host has no resource for; \
-         canvas/src/gpu.rs binds {BOUND:?}"
+         canvas/src/gpu.rs binds {BOUND:?} and {ENGINE_BOUND:?}"
     )
 }
 

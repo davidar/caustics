@@ -17,8 +17,16 @@ pub const WALLPAPER: &str = "caustics-wallpaper";
 /// The compiler: the canvas's caustic as it is saved (`reload/`).
 pub const RELOAD: &str = "caustics-reload";
 
+/// The font: the text engine's buffers as `Bytes`, and the covers a run the
+/// font cannot draw asks for (`glyphs/`). The canvas's own child, as the
+/// bar has its own: a sidecar belongs to its host (docs/architecture.md,
+/// *Sidecars*).
+pub const GLYPHS: &str = "caustics-glyphs";
+
 /// The set the canvas starts when `$CAUSTICS_SIDECARS` says nothing.
-pub const SIDECARS: &[&str] = &[WALLPAPER, RELOAD];
+/// `caustics-polkit` is not in it yet (canvas/README.md says why and how to
+/// add it).
+pub const SIDECARS: &[&str] = &[WALLPAPER, RELOAD, GLYPHS];
 
 /// Start every sidecar of the set, each sending its events to `events`.
 pub fn start(events: &Sender<Event>) -> Vec<Pipe> {

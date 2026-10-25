@@ -57,9 +57,10 @@ use std::ptr::NonNull;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use caustics_bar_abi::canvas::CanvasFacts;
 use caustics_bar_abi::wire::{
     self, CANVAS_EVENT_DIMMED, CANVAS_EVENT_INPUT, Canvas as Command, CanvasEventBody, Frame,
-    Module, PROGRAM_CANVAS, REQ_OUTPUT_SIZE, REQ_PROGRAM, Request,
+    Module, PROGRAM_CANVAS, REQ_COVER, REQ_OUTPUT_SIZE, REQ_PROGRAM, Request,
 };
 use caustics_bar_abi::{CANVAS_ENTRIES, wire::Image};
 use caustics_host::modules::{Collected, Modules};
@@ -67,6 +68,7 @@ use caustics_host::pacing::Pacing;
 use caustics_host::pipe::{Event, Pipe};
 use caustics_host::strings::Strings;
 use caustics_host::surface::Surface;
+use caustics_host::text::Covers;
 use caustics_host::witness::{Caustic, Printer};
 use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
@@ -104,7 +106,7 @@ use wayland_client::{
 use crate::dim::Dims;
 use crate::gpu::{self, Gpu};
 use crate::role::Role;
-use crate::sidecars::{self, RELOAD, WALLPAPER};
+use crate::sidecars::{self, GLYPHS, RELOAD, WALLPAPER};
 use crate::slots::{Applied, Slots};
 
 /// `wp_fractional_scale_v1`'s unit: a scale of 1.0 is 120.
@@ -200,6 +202,14 @@ pub struct Canvas {
     pointer_at: Option<(f64, f64)>,
     /// Pictures placed before the device existed, by slot.
     unplaced: [Option<Image>; 2],
+    /// `Bytes` runs that arrived before there was a device to put them in:
+    /// the font goes out the moment `caustics-glyphs` has it, which is often
+    /// before the first configure, and every run is sent once.
+    pending_bytes: Vec<wire::Bytes>,
+    /// The strings a `REQ_COVER` has gone out for, once each.
+    covers: Covers,
+    /// Literals in the pool the caustic spells from (`CanvasFacts::literal_count`).
+    literal_count: u32,
     /// The size last told the wallpaper sidecar, and how many sizes have been.
     told: Option<(u32, u32)>,
     sizes: u32,
@@ -266,6 +276,9 @@ impl Canvas {
             touch: None,
             pointer_at: None,
             unplaced: [None, None],
+            pending_bytes: Vec::new(),
+            covers: Covers::new(GLYPHS, REQ_COVER),
+            literal_count: 0,
             told: None,
             sizes: 0,
             loop_handle: None,
@@ -301,6 +314,22 @@ impl Canvas {
 
     fn pipe(&self, name: &str) -> Option<&Pipe> {
         self.pipes.iter().find(|pipe| pipe.name() == name)
+    }
+
+    /// What the caustic reads in `facts`: the slots' picture and dim, the
+    /// literal pool's size, and the prompt.
+    fn facts(&self) -> CanvasFacts {
+        CanvasFacts {
+            literal_count: self.literal_count,
+            ..*self.slots.facts()
+        }
+    }
+
+    /// `facts`, written whole, when there is a device to write it to.
+    fn push_facts(&self) {
+        if let Some(gpu) = self.gpu.as_ref() {
+            gpu.write_facts(&self.facts());
+        }
     }
 
     fn mark_dirty(&mut self, role: Role) {
@@ -526,7 +555,18 @@ impl Canvas {
                 gpu.upload(slot, &image)?;
             }
         }
-        gpu.write_facts(self.slots.facts());
+        if !self.pending_bytes.is_empty() {
+            let bytes: usize = self.pending_bytes.iter().map(|run| run.bytes.len()).sum();
+            tracing::info!(
+                "gpu: {} buffer runs ({} KiB) were waiting for a device",
+                self.pending_bytes.len(),
+                bytes / 1024
+            );
+            for run in std::mem::take(&mut self.pending_bytes) {
+                gpu.write_bytes(run.buffer, run.offset, run.total, &run.bytes);
+            }
+        }
+        self.literal_count = gpu.write_literals(&self.strings);
         let (define, _) = gpu.dst_format_args();
         self.modules.expect(wire::format_code(define));
         // The program this host runs: the format's define, and the canvas's
@@ -544,6 +584,7 @@ impl Canvas {
         }
         self.panes[index].target = Some(target);
         self.gpu = Some(gpu);
+        self.push_facts();
         Ok(())
     }
 
@@ -633,11 +674,36 @@ impl Canvas {
             tracing::warn!("witness: {} lines lost this frame", mirror.witness_lost);
         }
         let (reached, id) = (mirror.dim_reached, mirror.dim_id);
+        let covers: Vec<String> = mirror
+            .covers()
+            .iter()
+            .filter_map(|cover| gpu.cover_bytes(cover.source, cover.off, cover.len))
+            .collect();
         if let Some((sidecar, id)) = self.dims.reached(reached, id) {
             self.tell(&sidecar, CANVAS_EVENT_DIMMED, id);
             tracing::info!("dim {id}: at its depth, told to {sidecar}");
         }
+        for text in covers {
+            self.cover(&text);
+        }
         Ok(())
+    }
+
+    /// A run the font could not draw, out to the glyphs sidecar as the bytes
+    /// it was shaped from (docs/abi.md, *Request*), once per string. The
+    /// answer is the curve buffers and the arena growing, the run shaping
+    /// again and its flag going by itself. The prompt's text is never a
+    /// secret, so neither is anything sent here; and the line names no
+    /// string, since a prompt's text is the conversation's.
+    fn cover(&mut self, text: &str) {
+        let Some((sidecar, kind, name)) = self.covers.ask(text) else {
+            return;
+        };
+        if let Some(pipe) = self.pipe(sidecar) {
+            let len = name.len();
+            pipe.request(&Frame::Request(Request { kind, arg: 0, name }), "a cover");
+            tracing::info!("text: asking {sidecar} to cover a run of {len} bytes");
+        }
     }
 
     /// A frame is owed on a pane whose request is out and unanswered: wake
@@ -701,9 +767,7 @@ impl Canvas {
     /// goes.
     fn end_dim(&mut self) {
         self.slots.clear_dim();
-        if let Some(gpu) = self.gpu.as_ref() {
-            gpu.write_facts(self.slots.facts());
-        }
+        self.push_facts();
         self.drop_overlays();
     }
 
@@ -773,6 +837,27 @@ impl Canvas {
                 }
             }
             Frame::Canvas(command) => self.apply_command(sidecar, &command),
+            // A run of the text engine's buffers: copied, never read
+            // (docs/abi.md, *Bytes*).
+            Frame::Bytes(bytes) => match self.gpu.as_mut() {
+                Some(gpu) => {
+                    gpu.write_bytes(bytes.buffer, bytes.offset, bytes.total, &bytes.bytes);
+                    self.mark_dirty(Role::Top);
+                }
+                None => self.pending_bytes.push(bytes),
+            },
+            // A different glyph space: what was covered in the last one is
+            // asked again as it comes up. The canvas snaps nothing to the cap
+            // height, so the frame is a line and nothing else.
+            Frame::Font(font) => {
+                tracing::info!(
+                    "font: {} ({} glyphs at {} upem) from {sidecar}",
+                    font.family,
+                    font.glyph_count,
+                    font.upem
+                );
+                self.covers.forget();
+            }
             Frame::Module(module) => self.apply_module(sidecar, module),
             other => tracing::info!(
                 "sidecar {sidecar}: frame kind {} has no consumer here",
@@ -812,9 +897,7 @@ impl Canvas {
                 return;
             }
         }
-        if let Some(gpu) = self.gpu.as_ref() {
-            gpu.write_facts(self.slots.facts());
-        }
+        self.push_facts();
         match command {
             Command::Show { .. } => self.mark_dirty(Role::Background),
             Command::Dim { id, .. } => {
@@ -860,6 +943,7 @@ impl Canvas {
         match gpu.reload(&reflection, &ready.spirv()) {
             Ok(()) => {
                 self.strings.replace(reflection.strings);
+                self.literal_count = gpu.write_literals(&self.strings);
                 self.printer.reset();
                 tracing::info!(
                     "sidecar {sidecar}: generation {generation}, {} modules, swapped ({} KiB, {} ms)",
@@ -868,6 +952,7 @@ impl Canvas {
                     started.elapsed().as_millis()
                 );
                 self.mark_all_dirty();
+                self.push_facts();
             }
             Err(err) => tracing::error!(
                 "sidecar {sidecar}: generation {generation} refused: {err}; keeping the old canvas"

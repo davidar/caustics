@@ -29,10 +29,11 @@ pub const BAR_ENTRIES: [&str; 7] = [
 ];
 
 /// The entry points of the canvas caustic (`caustics/canvas.slang`), in
-/// dispatch order: `canvas_apply` once per frame, then `canvas_draw` over the
-/// output being drawn (docs/canvas.md, *Time*).
+/// dispatch order: `canvas_shape`, in a submission of its own whenever the
+/// text or the font changed, then per frame `canvas_apply` once and
+/// `canvas_draw` over the surface being drawn (docs/canvas.md, *Time*).
 ///
 /// Here beside the bar's for the same reason: `canvas/build.rs` bakes it,
 /// `caustics-reload` compiles it when the canvas host asks for its program
 /// (`PROGRAM_CANVAS`), and the canvas names its pipelines from it.
-pub const CANVAS_ENTRIES: [&str; 2] = ["canvas_apply", "canvas_draw"];
+pub const CANVAS_ENTRIES: [&str; 3] = ["canvas_shape", "canvas_apply", "canvas_draw"];

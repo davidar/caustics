@@ -1,8 +1,12 @@
 // The canvas, as a caustic: the wallpaper on every output, the cross-fade
-// between two of them, and the idle dim over everything (docs/canvas.md).
-// Two entry points over one descriptor set (docs/abi.md, *The canvas's
+// between two of them, the idle dim over everything, and the prompt's panel
+// (docs/canvas.md). Three entry points over three descriptor sets: the
+// canvas's own, and the text engine's two (docs/abi.md, *The canvas's
 // buffer*):
 //
+//   canvas_shape  1x1x1, one group per text block — the prompt's text, shaped
+//                          (canvas_text.slang). Its own submission, before a
+//                          frame, whenever the text or the font changed.
 //   canvas_apply  1x1x1  — the fade's alpha and the dim from the last show,
 //                          the last dim and the time, into `private`; the
 //                          witnesses; `wants_redraw` for the surface being
@@ -12,7 +16,13 @@
 //                          `params.target`: on the background, the two source
 //                          pictures at that alpha, opaque; on the overlay,
 //                          the same wallpaper, darkened by `DIM_DARKEN`, at
-//                          the dim's alpha, premultiplied.
+//                          the dim's alpha, premultiplied; on the prompt's
+//                          pane, the wallpaper darkened by `PROMPT_DARKEN` and
+//                          the panel on it.
+//
+// **The secret never enters the caustic** (docs/canvas.md, *Why a caustic*).
+// What an echo-off ask has typed reaches here as a count, and the panel draws
+// that many dots; the bytes stay in the host.
 //
 // **One dim, one owner.** The dim is drawn only on the overlay, the layer
 // above every window that the host puts up while a dim is and takes down on
@@ -36,6 +46,16 @@
 import canvas_abi;
 import canvas_tunables;
 import canvas_state;
+import canvas_text;
+
+/// One text block a group: the prompt's few runs, each walked by one thread,
+/// as the bar's `bar_shape` walks its blocks.
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void canvas_shape(uint3 gid: SV_DispatchThreadID)
+{
+    shape_block(gid.x);
+}
 
 /// The fade's curve, from its progress (canvas_tunables.slang, `FADE_CURVE`).
 float fade_curve(float t)
@@ -144,9 +164,123 @@ void canvas_apply()
     private[0].dim = dim_now(f.dim);
     // Another frame for the surface being drawn, and only for it: the
     // background while its fade runs, the overlay while its alpha moves. A
-    // settled surface draws nothing until something changes.
-    bool more = params.target == TARGET_OVERLAY ? (dimmed && !reached) : (fading && t < 1.0);
+    // settled surface draws nothing until something changes; the prompt's
+    // pane changes only when the host writes something new.
+    bool more = false;
+    if (params.target == TARGET_OVERLAY)
+    {
+        more = dimmed && !reached;
+    }
+    else if (params.target == TARGET_BACKGROUND)
+    {
+        more = fading && t < 1.0;
+    }
     state[0].wants_redraw = more ? 1u : 0u;
+
+    apply_prompt(f.prompt);
+    apply_text();
+}
+
+/// The prompt's steps, each said once: a conversation asking (and on which
+/// attempt), verifying, failed, closed. The typed count is never said.
+void apply_prompt(CanvasPrompt pr)
+{
+    if (pr.id != private[0].said_prompt_id || pr.state != private[0].said_prompt_state
+        || pr.attempts != private[0].said_prompt_attempts)
+    {
+        uint was = private[0].said_prompt_state;
+        private[0].said_prompt_id = pr.id;
+        private[0].said_prompt_state = pr.state;
+        private[0].said_prompt_attempts = pr.attempts;
+        Args a = args_new();
+        arg(a, pr.id);
+        if (pr.state == PROMPT_ASKING)
+        {
+            arg(a, pr.echo);
+            arg(a, pr.attempts);
+            witness(WITNESS_INFO, getStringHash("prompt: conversation {0} asking (echo {1}, attempts {2})"), a);
+        }
+        else if (pr.state == PROMPT_VERIFYING)
+        {
+            witness(WITNESS_INFO, getStringHash("prompt: conversation {0} verifying"), a);
+        }
+        else if (pr.state == PROMPT_FAILED)
+        {
+            arg(a, pr.attempts);
+            witness(WITNESS_INFO, getStringHash("prompt: conversation {0} failed (attempts {1})"), a);
+        }
+        else if (was != PROMPT_IDLE)
+        {
+            witness0(WITNESS_INFO, getStringHash("prompt: closed"));
+        }
+    }
+    if (params.target == TARGET_PROMPT)
+    {
+        layout_prompt(pr);
+    }
+}
+
+/// The text's witnesses and the runs to cover, and the shape pass's
+/// threshold for the host's watchdog.
+void apply_text()
+{
+    state[0].shape_watchdog_ms = max(SHAPE_WATCHDOG_MS, 1u);
+    uint2 notdef = text_covers();
+    if (notdef.x != private[0].said_notdef)
+    {
+        private[0].said_notdef = notdef.x;
+        Args a = args_new();
+        arg(a, notdef.x);
+        arg(a, notdef.y);
+        witness(WITNESS_INFO, getStringHash("text: {0} of {1} runs have a glyph the font lacks"), a);
+    }
+}
+
+/// Where the panel and its rows are on this surface: centred, `PROMPT_WIDTH`
+/// wide or the output's width less its padding, as tall as its rows. A
+/// title, the ask's words, the answer's field, and one line under it for
+/// whatever the conversation said last.
+void layout_prompt(CanvasPrompt pr)
+{
+    float s = float(max(params.scale, 1u)) / 120.0;
+    float w = float(params.width);
+    float h = float(params.height);
+    float pad = PROMPT_PADDING * s;
+    float gap = PROMPT_GAP * s;
+    float title_px = PROMPT_TITLE_PX * s;
+    float text_px = PROMPT_TEXT_PX * s;
+    float title_lh = text_line_height(title_px);
+    float lh = text_line_height(text_px);
+    float field_h = lh + 2.0 * PROMPT_FIELD_PADDING * s;
+    float pw = min(PROMPT_WIDTH * s, max(w - 2.0 * pad, 1.0));
+    // A title too long for the panel takes a second line, broken at a space.
+    uint title_break = wrap_at(BLOCK_TITLE, title_px, pw - 2.0 * pad);
+    float title_h = title_break == NO_INDEX ? title_lh : 2.0 * title_lh;
+    float ph = pad + title_h + gap + lh + 0.5 * gap + field_h + gap + lh + pad;
+    float x0 = floor(0.5 * (w - pw));
+    float y0 = floor(0.5 * (h - ph));
+    PromptLayout l;
+    l.panel = float4(x0, y0, x0 + pw, y0 + ph);
+    l.title_px = title_px;
+    l.text_px = text_px;
+    l.clip = x0 + pw - pad;
+    l.radius = PROMPT_RADIUS * s;
+    float left = x0 + pad;
+    float y = y0 + pad;
+    l.title_break = title_break;
+    l.title_shift = title_break == NO_INDEX ? 0.0 : glyph_x(BLOCK_TITLE, title_break + 1u, title_px);
+    float title_w = title_break == NO_INDEX ? text_width(BLOCK_TITLE, title_px)
+                                            : glyph_x(BLOCK_TITLE, title_break, title_px);
+    title_w = min(title_w, l.clip - left);
+    l.title_box = float4(left, y, left + title_w, y + title_lh);
+    y += title_h + gap;
+    float ask_w = min(text_width(BLOCK_ASK, text_px), l.clip - left);
+    l.ask_box = float4(left, y, left + ask_w, y + lh);
+    y += lh + 0.5 * gap;
+    l.field = float4(left, y, l.clip, y + field_h);
+    y += field_h + gap;
+    l.line_org = float2(left, y);
+    private[0].prompt = l;
 }
 
 /// One picture at an output pixel, laid on the output by `FIT`, over the dim
@@ -202,6 +336,73 @@ float3 wallpaper(float2 p)
     return colour;
 }
 
+/// How much of a pixel at `p` a rounded rect `r` (`(x0, y0, x1, y1)`, corner
+/// radius `radius`) covers, antialiased over a pixel.
+float rounded(float4 r, float radius, float2 p)
+{
+    float2 centre = 0.5 * (r.xy + r.zw);
+    float2 half_size = 0.5 * (r.zw - r.xy);
+    float rad = min(radius, min(half_size.x, half_size.y));
+    float2 q = abs(p - centre) - (half_size - rad);
+    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - rad;
+    return saturate(0.5 - d);
+}
+
+/// The prompt's pane at `p`, over the wallpaper's `colour` there: the
+/// wallpaper darkened by `PROMPT_DARKEN`, the panel, its four rows.
+float3 draw_prompt(CanvasPrompt pr, float3 colour, float2 p)
+{
+    float4 col = float4(lerp(colour, DIM_COLOUR, saturate(PROMPT_DARKEN)), 1.0);
+    PromptLayout l = private[0].prompt;
+    if (pr.state == PROMPT_IDLE || any(p < l.panel.xy) || any(p >= l.panel.zw))
+    {
+        return col.rgb;
+    }
+    col = ink(PROMPT_PANEL_COLOUR, rounded(l.panel, l.radius, p), col);
+    col = ink(PROMPT_FIELD_COLOUR, rounded(l.field, 0.5 * l.radius, p), col);
+
+    if (l.title_break == NO_INDEX)
+    {
+        col = paint_text(BLOCK_TITLE, l.title_box.xy, l.title_px, l.clip, PROMPT_INK, p, col);
+    }
+    else
+    {
+        col = paint_glyphs(BLOCK_TITLE, 0u, l.title_break, 0.0, l.title_box.xy, l.title_px,
+                           l.clip, PROMPT_INK, p, col);
+        float2 second = float2(l.title_box.x, l.title_box.w);
+        col = paint_glyphs(BLOCK_TITLE, l.title_break + 1u, 0xffffffffu, l.title_shift, second,
+                           l.title_px, l.clip, PROMPT_INK, p, col);
+    }
+    col = paint_text(BLOCK_ASK, l.ask_box.xy, l.text_px, l.clip, PROMPT_MUTED_INK, p, col);
+
+    // The answer, inside the field: the dots of an echo-off ask, the text of
+    // an echo-on one, its end kept in view when it is longer than the field.
+    // Verifying, they stay as they were, in the muted ink.
+    float s = float(max(params.scale, 1u)) / 120.0;
+    float fpad = PROMPT_FIELD_PADDING * s;
+    float2 inside = float2(l.field.x + fpad, l.field.y + fpad);
+    float inner_right = l.field.z - fpad;
+    float3 typed_ink = pr.state == PROMPT_VERIFYING ? PROMPT_MUTED_INK : PROMPT_INK;
+    if (p.x >= l.field.x && p.x < l.field.z)
+    {
+        if (pr.echo != 0u && p.x >= inside.x)
+        {
+            float overflow = max(text_width(BLOCK_ECHO, l.text_px) - (inner_right - inside.x), 0.0);
+            col = paint_text(BLOCK_ECHO, float2(inside.x - overflow, inside.y), l.text_px,
+                             inner_right, typed_ink, p, col);
+        }
+        else
+        {
+            col = paint_dots(pr.typed, inside, l.text_px, PROMPT_DOT_GAP * s, inner_right,
+                             typed_ink, p, col);
+        }
+    }
+
+    float3 line_ink = pr.line_error != 0u ? PROMPT_ERROR_INK : PROMPT_MUTED_INK;
+    col = paint_text(BLOCK_LINE, l.line_org, l.text_px, l.clip, line_ink, p, col);
+    return col.rgb;
+}
+
 [shader("compute")]
 [numthreads(8, 8, 1)]
 void canvas_draw(uint3 gid: SV_DispatchThreadID)
@@ -210,7 +411,22 @@ void canvas_draw(uint3 gid: SV_DispatchThreadID)
     {
         return;
     }
-    float3 colour = wallpaper(float2(gid.xy) + 0.5);
+    float2 p = float2(gid.xy) + 0.5;
+    float3 colour = wallpaper(p);
+    CanvasPrompt pr = facts[0].prompt;
+    if (params.target == TARGET_PROMPT)
+    {
+        dst.Store(gid.xy, float4(draw_prompt(pr, colour, p), 1.0));
+        return;
+    }
+    if (params.target == TARGET_OVERLAY && pr.state != PROMPT_IDLE)
+    {
+        // A prompt is up over the dim: the pane under this overlay is the
+        // one to see, so the dim stands aside while it is, and is as it was
+        // when the prompt goes.
+        dst.Store(gid.xy, float4(0.0, 0.0, 0.0, 0.0));
+        return;
+    }
     if (params.target == TARGET_OVERLAY)
     {
         // The wallpaper, darkened, at the dim's alpha, premultiplied:
