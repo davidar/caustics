@@ -50,7 +50,7 @@ From the sidecar's own environment:
 | `CAUSTICS_POLKIT_DRY_RUN` | unset | `1`: touch no system bus at all, and serve the agent on the session bus for any caller, so a test can play polkitd |
 
 `tests/fake-helper.sh` is the helper the tests use: it speaks the line
-protocol and authenticates nobody. `examples/fake_host.rs` runs a sink
+protocol and authenticates nobody. `bar/abi/examples/fake_host.rs` runs a sink
 sidecar on its pipes the way the canvas host will, answering each ask from a
 script; the nested gate runs the two together (docs/testing.md).
 

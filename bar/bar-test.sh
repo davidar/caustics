@@ -385,13 +385,12 @@ trap 'exit 130' INT TERM
 
 say "1. build"
 # All fifteen binaries (the bar spawns each sidecar from beside itself, and
-# the canvas its own), the rows demo, and the polkit sink's fake host.
+# the canvas its own), the rows demo, and the sink sidecars' fake host.
 if (cd "$REPO" &&
     cargo build --offline -p caustics-bar -p caustics-sysmon -p caustics-tray -p caustics-power \
         -p caustics-audio -p caustics-network -p caustics-bluetooth -p caustics-notify -p caustics-apps -p caustics-glyphs \
         -p caustics-reload -p caustics-canvas -p caustics-wallpaper -p caustics-polkit &&
-    cargo build --offline -p caustics-bar-abi --example rows_demo &&
-    cargo build --offline -p caustics-polkit --example fake_host); then
+    cargo build --offline -p caustics-bar-abi --example rows_demo --example fake_host); then
     pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit sink, the rows_demo example and the fake host"
 else
     fail "cargo build of the set, the rows_demo example or the fake host"
@@ -4672,7 +4671,7 @@ say "35b. the polkit sink asks through the wire, and the answer reaches its help
 # `caustics-polkit` in its dry run (polkit/README.md): the agent object on the
 # run's private session bus, no system bus at all (its address names a
 # socket that does not exist), `polkit/tests/fake-helper.sh` as the helper,
-# and `polkit/examples/fake_host.rs` on its pipes playing the canvas host,
+# and `bar/abi/examples/fake_host.rs` on its pipes playing the canvas host,
 # which answers the first ask with the secret and dismisses the second. This
 # step plays polkitd with `busctl`. The secret is this run's own, and no log
 # may hold it.

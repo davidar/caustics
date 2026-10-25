@@ -241,7 +241,7 @@ beside the bar's oracle:
 
 **The polkit sink's step** (35b) runs `caustics-polkit` in its dry run, with
 no system bus at all: the agent object on the run's private session bus,
-`polkit/tests/fake-helper.sh` as its helper, and `polkit/examples/fake_host.rs`
+`polkit/tests/fake-helper.sh` as its helper, and `bar/abi/examples/fake_host.rs`
 on its pipes in the canvas host's place, answering from a script. The step
 plays polkitd with `busctl --user call … BeginAuthentication`, and checks the
 prompt frames the fake host logged, the method's return, that the fake

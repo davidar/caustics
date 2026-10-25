@@ -1133,7 +1133,11 @@ newlines, so one witness can become three. `sysmon/` is the worked example
 for samples. `bar/abi/examples/rows_demo.rs` is the worked example for rows: a
 hundred-line applet with an icon, two menu rows and a slider that echoes
 every action to stderr and republishes on each one, and the test harness's
-proof that the rows path works without any real applet.
+proof that the rows path works without any real applet. `bar/abi/examples/fake_host.rs`
+is the other way round: a stand-in for the canvas host that runs a sink
+sidecar on its pipes, logs its `Prompt` and `Lock` frames, answers from a
+script and confirms a lock, which is how the nested gate drives the polkit
+and lock sinks without a canvas.
 
 ### Bytes: `WIRE_BYTES`
 
