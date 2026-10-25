@@ -79,16 +79,14 @@ pub const WIRE_MAX_BODY: usize =
 // `WireHeader::len` is a `u32`: the largest honest body has to be one.
 const _: () = assert!(WIRE_MAX_BODY <= u32::MAX as usize);
 
-/// How much of a body the reader asks its input for at a time, and how far
-/// ahead of the bytes in hand its buffer may grow (docs/abi.md, *Framing*,
-/// rule 4).
+/// How much of a body the reader asks its input for at a time
+/// (docs/abi.md, *Framing*, rule 4).
 ///
 /// **64 KiB**, the default capacity of a Linux pipe: a sidecar's stdout is a
 /// pipe, so one step is about what one `read` of a full pipe returns, and a
 /// larger one would only be a buffer zeroed ahead of bytes that are not there
-/// yet. It is also the whole of what a header lying about its length costs
-/// beyond the bytes its writer really sends, which at 64 KiB is nothing a
-/// reader notices.
+/// yet. A header lying about its length costs what its writer really sent, at
+/// most doubled by the buffer's growth, plus this one step.
 pub const WIRE_READ_STEP: usize = 64 << 10;
 
 // ---------------------------------------------------------------------------
