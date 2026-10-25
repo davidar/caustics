@@ -34,21 +34,31 @@ pub struct Pixels {
     pub rgba: Vec<u8>,
 }
 
-/// Read and decode a PNG or a JPEG, by its first bytes.
+/// Read and decode a PNG, a JPEG or a JPEG XL, by its first bytes.
 pub fn load(path: &Path) -> Result<Pixels, String> {
     let data =
         std::fs::read(path).map_err(|err| format!("could not read {}: {err}", path.display()))?;
     decode(&data).map_err(|err| format!("{}: {err}", path.display()))
 }
 
-/// Decode a PNG or a JPEG.
+/// A JPEG XL codestream's first bytes.
+const JXL_CODESTREAM: [u8; 2] = [0xff, 0x0a];
+
+/// A JPEG XL container's first box: its signature, `JXL `.
+const JXL_CONTAINER: [u8; 12] = [
+    0x00, 0x00, 0x00, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a,
+];
+
+/// Decode a PNG, a JPEG or a JPEG XL.
 pub fn decode(data: &[u8]) -> Result<Pixels, String> {
     if data.starts_with(&[0x89, b'P', b'N', b'G']) {
         decode_png(data)
     } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
         decode_jpeg(data)
+    } else if data.starts_with(&JXL_CODESTREAM) || data.starts_with(&JXL_CONTAINER) {
+        decode_jxl(data)
     } else {
-        Err("not a PNG or a JPEG".to_owned())
+        Err("not a PNG, a JPEG or a JPEG XL".to_owned())
     }
 }
 
@@ -139,6 +149,192 @@ fn decode_jpeg(data: &[u8]) -> Result<Pixels, String> {
     })
 }
 
+/// The most the JPEG XL decoder may allocate for its own buffers, which are
+/// wider than a byte a sample (32-bit floats for a lossy picture). The
+/// canvas's unit is capped at 1 GB, shared with a shader compiler that peaks
+/// near 400 MB, so a picture that would need more than this is refused
+/// rather than left to the cap.
+pub const JXL_DECODER_BYTES: usize = 512 << 20;
+
+/// How many rows of a lossy (VarDCT) JPEG XL are rendered at a time. The
+/// decoder renders a region of interest from the groups under it, so a band
+/// costs its own rows in floats rather than the whole picture's: a 6300×2700
+/// lossy picture rendered whole peaks near 480 MB, in bands of 512 rows near
+/// 280 MB, for a quarter more time. A multiple of the format's 256-pixel
+/// group, so that few groups are decoded twice. A Modular (lossless)
+/// picture is rendered whole: its transforms span the frame, so every band
+/// would decode it again, and its buffers are already the picture's size in
+/// 16-bit integers whichever way it is rendered.
+pub const JXL_BAND_ROWS: u32 = 512;
+
+/// Decode a JPEG XL's first frame (an animation's first, a still's only) to
+/// straight RGBA8 in sRGB.
+///
+/// The header is read first, from the leading bytes alone, so that the size
+/// is checked before any pixel is decoded; the decoder's own allocations are
+/// bounded by [`JXL_DECODER_BYTES`] besides. The pixels are then rendered,
+/// in bands of [`JXL_BAND_ROWS`] when the frame is lossy, and written
+/// straight into the RGBA.
+///
+/// **Colour.** The picture is rendered to sRGB by the decoder, which converts
+/// between the colour encodings JPEG XL names (sRGB, Display P3, Rec. 2020,
+/// linear or PQ transfer, and the XYB a lossy picture is coded in) and from
+/// an embedded ICC profile simple enough to be one of those. An ICC profile
+/// beyond that needs a colour management system the decoder is built
+/// without; such a picture is rendered in its own profile and shown as if it
+/// were sRGB, which is what the PNG and JPEG paths do with every profile.
+///
+/// **Alpha.** Kept straight: a picture whose alpha is stored premultiplied
+/// (associated) is divided back out.
+fn decode_jxl(data: &[u8]) -> Result<Pixels, String> {
+    decode_jxl_in_bands(data, JXL_BAND_ROWS)
+}
+
+/// [`decode_jxl`] with the band height a test can make small.
+fn decode_jxl_in_bands(data: &[u8], band_rows: u32) -> Result<Pixels, String> {
+    use jxl_oxide::frame::Encoding;
+    use jxl_oxide::{
+        AllocTracker, CropInfo, EnumColourEncoding, InitializeResult, JxlImage, PixelFormat,
+        RenderingIntent,
+    };
+    let err = |err: Box<dyn std::error::Error + Send + Sync>| format!("JPEG XL: {err}");
+
+    let mut uninit = JxlImage::builder()
+        .alloc_tracker(AllocTracker::with_limit(JXL_DECODER_BYTES))
+        .build_uninit();
+    // Fed a growing prefix until the header parses: the header, any ICC
+    // profile and a preview are all the decoder reads before it has a size.
+    let mut fed = 0;
+    let mut chunk = 4096;
+    let mut image = loop {
+        let end = (fed + chunk).min(data.len());
+        fed += uninit.feed_bytes(&data[fed..end]).map_err(err)?;
+        match uninit.try_init().map_err(err)? {
+            InitializeResult::Initialized(image) => break image,
+            InitializeResult::NeedMoreData(more) if end < data.len() => {
+                uninit = more;
+                chunk *= 2;
+            }
+            InitializeResult::NeedMoreData(_) => {
+                return Err("JPEG XL: the file ends inside its header".to_owned());
+            }
+        }
+    };
+    // With orientation applied: the size the picture is shown at.
+    let (width, height) = (image.width(), image.height());
+    check_size(width, height)?;
+    while fed < data.len() {
+        let consumed = image.feed_bytes(&data[fed..]).map_err(err)?;
+        if consumed == 0 {
+            break;
+        }
+        fed += consumed;
+    }
+    image.finalize().map_err(err)?;
+    if image.num_loaded_keyframes() == 0 {
+        return Err("JPEG XL: no complete frame".to_owned());
+    }
+
+    let band_rows = match image.frame_header(0).map(|frame| frame.encoding) {
+        Some(Encoding::VarDct) => band_rows.max(1),
+        _ => height,
+    };
+    let grey = image.pixel_format().is_grayscale();
+    let own = image.rendered_icc();
+    image.request_color_encoding(if grey {
+        EnumColourEncoding::gray_srgb(RenderingIntent::Relative)
+    } else {
+        EnumColourEncoding::srgb(RenderingIntent::Relative)
+    });
+    let associated = image
+        .image_header()
+        .metadata
+        .ec_info
+        .iter()
+        .find(|ec| ec.is_alpha())
+        .and_then(|ec| ec.alpha_associated())
+        .unwrap_or(false);
+
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    let mut row = Vec::new();
+    let mut top = 0;
+    while top < height {
+        let rows = band_rows.min(height - top);
+        image.set_image_region(CropInfo {
+            width,
+            height: rows,
+            left: 0,
+            top,
+        });
+        let render = match image.render_frame(0) {
+            Ok(render) => render,
+            // The one conversion the decoder cannot make alone: from an ICC
+            // profile it cannot reduce to an encoding it knows. Its own
+            // profile, then, for this band and the rest; an error that was
+            // not that one comes back again here.
+            Err(_) if top == 0 => {
+                image.request_icc(&own).map_err(err)?;
+                image.render_frame(0).map_err(err)?
+            }
+            Err(other) => return Err(err(other)),
+        };
+        let format = image.pixel_format();
+        let mut stream = render.stream();
+        let channels = stream.channels() as usize;
+        if (stream.width(), stream.height()) != (width, rows) {
+            return Err(format!(
+                "JPEG XL: a band of {}x{} where {width}x{rows} was asked for",
+                stream.width(),
+                stream.height()
+            ));
+        }
+        let to_rgba: fn(&[u8]) -> [u8; 4] = match (format, channels) {
+            (PixelFormat::Rgba, 4) => |px| [px[0], px[1], px[2], px[3]],
+            (PixelFormat::Rgb, 3) => |px| [px[0], px[1], px[2], 0xff],
+            (PixelFormat::Graya, 2) => |px| [px[0], px[0], px[0], px[1]],
+            (PixelFormat::Gray, 1) => |px| [px[0], px[0], px[0], 0xff],
+            (format, channels) => {
+                return Err(format!(
+                    "JPEG XL: {format:?} in {channels} channels, which needs a colour \
+                     management system to show"
+                ));
+            }
+        };
+        row.resize(width as usize * channels, 0u8);
+        for _ in 0..rows {
+            if stream.write_to_buffer(&mut row) != row.len() {
+                return Err("JPEG XL: a frame shorter than its size".to_owned());
+            }
+            for px in row.chunks_exact(channels) {
+                rgba.extend_from_slice(&to_rgba(px));
+            }
+        }
+        top += rows;
+    }
+    if associated {
+        unpremultiply(&mut rgba);
+    }
+    Ok(Pixels {
+        width,
+        height,
+        rgba,
+    })
+}
+
+/// Premultiplied RGBA8 to straight, in place; a transparent pixel's colour
+/// is left as it was, since it means nothing.
+fn unpremultiply(rgba: &mut [u8]) {
+    for px in rgba.chunks_exact_mut(4) {
+        let a = u32::from(px[3]);
+        if a == 0 || a == 255 {
+            continue;
+        }
+        for c in &mut px[..3] {
+            *c = ((u32::from(*c) * 255 + a / 2) / a).min(255) as u8;
+        }
+    }
+}
+
 /// The size `width`×`height` is fitted to for an output of `target` (or,
 /// with no output known yet, for the largest image the wire carries): scaled
 /// down, keeping its shape, until it no more than covers the target; left
@@ -161,6 +357,18 @@ pub fn fitted_size(width: u32, height: u32, target: Option<(u32, u32)>) -> (u32,
         ((w * scale).round() as u32).max(1),
         ((h * scale).round() as u32).max(1),
     )
+}
+
+/// `pixels` fitted for an output of `target` ([`fitted_size`]), taken and
+/// given back: the original is dropped here, as soon as the fit exists, and
+/// a picture that needs no fit is the same buffer, not a copy. A shown
+/// picture's original is the largest thing this process holds.
+pub fn fit(pixels: Pixels, target: Option<(u32, u32)>) -> Pixels {
+    let (width, height) = fitted_size(pixels.width, pixels.height, target);
+    if (width, height) == (pixels.width, pixels.height) {
+        return pixels;
+    }
+    shrink(&pixels, width, height)
 }
 
 /// `pixels` scaled down to `width`×`height` by area: every output pixel the

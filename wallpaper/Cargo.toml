@@ -19,10 +19,14 @@ path = "src/bin/caustics-canvasctl.rs"
 caustics-bar-abi = { path = "../bar/abi" }
 # The witness line, one copy for every sidecar.
 caustics-sidecar = { path = "../sidecar" }
+# JPEG XL, the encoding a distribution may ship its wallpapers in: pure Rust,
+# decode only, rendering to sRGB itself. Its default `rayon` feature is kept,
+# so a large picture decodes on every core.
+jxl-oxide = "0.12.6"
 # `clock_gettime(CLOCK_BOOTTIME)`: a fade's start, on the clock that counts a
 # suspend.
 libc = "0.2.189"
-# The two encodings a wallpaper is in, with the decoders `caustics-tray` and
-# `caustics-apps` already use.
+# The two everyday encodings a wallpaper is in, with the decoders
+# `caustics-tray` and `caustics-apps` already use.
 png = "0.18.1"
 zune-jpeg = "0.5.15"
