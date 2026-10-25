@@ -14,12 +14,12 @@ path = "src/main.rs"
 # The wire: `Hello` and `Prompt` out, `Answer` in (docs/abi.md, *Prompt*,
 # *Answer*).
 caustics-bar-abi = { path = "../bar/abi" }
-# The witness line, and the drain the one signal stream this agent
-# subscribes to (polkitd's name changing hands) goes to the moment it exists
-# (docs/architecture.md, *Rules*).
-caustics-sidecar = { path = "../sidecar", features = ["drain"] }
-# `getuid` and `getpwuid_r`: whose identity to authenticate as, and that
-# user's name for the helper's argument.
+# The witness line; the drain the one signal stream this agent subscribes to
+# (polkitd's name changing hands) goes to the moment it exists
+# (docs/architecture.md, *Rules*); and `session`: logind's session for this
+# process, this uid and its user name, which the lock sink shares.
+caustics-sidecar = { path = "../sidecar", features = ["drain", "session"] }
+# `kill`: a helper still running when its conversation ends gets SIGTERM.
 libc = "0.2.189"
 # One current-thread runtime for the bus and the helper, as the other D-Bus
 # sidecars; `process` and `io-util` for the helper's pipes.
@@ -35,10 +35,10 @@ tokio = { version = "1.53.1", default-features = false, features = [
 # The line written to the helper's stdin with the typed bytes in it, zeroed
 # once it is written.
 zeroize = "1.9.1"
-# The agent object, polkitd's authority and logind. `tokio` instead of the
+# The agent object and polkitd's authority. `tokio` instead of the
 # default `async-io`, so the process carries one executor rather than two.
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 # The private `dbus-daemon` the agent's bus test runs against.
-caustics-sidecar = { path = "../sidecar", features = ["drain", "test-bus"] }
+caustics-sidecar = { path = "../sidecar", features = ["drain", "session", "test-bus"] }

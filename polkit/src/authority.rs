@@ -1,17 +1,15 @@
-//! polkitd and logind on the **system** bus: registering this process as
-//! the session's authentication agent, and taking it back.
+//! polkitd on the **system** bus: registering this process as the session's
+//! authentication agent, and taking it back.
 //!
 //! The subject is a `unix-session` with the session's id, as every agent
-//! registers. The id is `$XDG_SESSION_ID` when the session set it, else
-//! logind's session for this process (`GetSessionByPID`), else the user's
-//! display session (`User.Display`): a process under the user's service
-//! manager is in no session of its own, and the display session is the one
-//! a graphical prompt is for.
+//! registers. The id is found through logind by `caustics_sidecar::session`
+//! (`$XDG_SESSION_ID`, else logind's session for this process, else the
+//! user's display session), the lookup the lock sink shares.
 
 use std::collections::HashMap;
 
 use zbus::Connection;
-use zbus::zvariant::{OwnedObjectPath, Value};
+use zbus::zvariant::Value;
 
 use crate::agent::PATH;
 
@@ -35,75 +33,10 @@ trait Authority {
     ) -> zbus::Result<()>;
 }
 
-#[zbus::proxy(
-    interface = "org.freedesktop.login1.Manager",
-    default_service = "org.freedesktop.login1",
-    default_path = "/org/freedesktop/login1"
-)]
-trait Manager {
-    #[zbus(name = "GetSessionByPID")]
-    fn get_session_by_pid(&self, pid: u32) -> zbus::Result<OwnedObjectPath>;
-    fn get_user(&self, uid: u32) -> zbus::Result<OwnedObjectPath>;
-}
-
-#[zbus::proxy(
-    interface = "org.freedesktop.login1.Session",
-    default_service = "org.freedesktop.login1"
-)]
-trait Session {
-    #[zbus(property)]
-    fn id(&self) -> zbus::Result<String>;
-}
-
-#[zbus::proxy(
-    interface = "org.freedesktop.login1.User",
-    default_service = "org.freedesktop.login1"
-)]
-trait User {
-    /// `(session id, object path)` of the user's graphical session.
-    #[zbus(property)]
-    fn display(&self) -> zbus::Result<(String, OwnedObjectPath)>;
-}
-
 /// The session this agent speaks for, and how it was found (for the
-/// witness).
-pub async fn session_id(conn: &Connection) -> Result<(String, &'static str), String> {
-    if let Some(id) = std::env::var("XDG_SESSION_ID")
-        .ok()
-        .filter(|id| !id.is_empty())
-    {
-        return Ok((id, "XDG_SESSION_ID"));
-    }
-    let manager = ManagerProxy::new(conn)
-        .await
-        .map_err(|e| format!("no logind ({e})"))?;
-    if let Ok(path) = manager.get_session_by_pid(std::process::id()).await {
-        let session = SessionProxy::builder(conn)
-            .path(path)
-            .map_err(|e| e.to_string())?
-            .build()
-            .await
-            .map_err(|e| e.to_string())?;
-        if let Ok(id) = session.id().await {
-            return Ok((id, "logind's session for this process"));
-        }
-    }
-    let user = manager
-        .get_user(crate::agent::own_uid())
-        .await
-        .map_err(|e| format!("logind has no user for this uid ({e})"))?;
-    let user = UserProxy::builder(conn)
-        .path(user)
-        .map_err(|e| e.to_string())?
-        .build()
-        .await
-        .map_err(|e| e.to_string())?;
-    match user.display().await {
-        Ok((id, _)) if !id.is_empty() => Ok((id, "the user's display session")),
-        Ok(_) => Err("no session for this process and no display session".to_owned()),
-        Err(e) => Err(format!("no display session ({e})")),
-    }
-}
+/// witness): `caustics_sidecar::session`'s lookup, which the lock sink
+/// shares.
+pub use caustics_sidecar::session::session_id;
 
 /// The locale polkitd translates its messages into: `LC_ALL`, then
 /// `LC_MESSAGES`, then `LANG`, as the C library would choose, else `C`.

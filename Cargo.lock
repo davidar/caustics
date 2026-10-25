@@ -423,7 +423,9 @@ version = "0.1.0"
 dependencies = [
  "freedesktop-icons",
  "futures-lite",
+ "libc",
  "tokio",
+ "zbus",
 ]
 
 [[package]]

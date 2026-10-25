@@ -158,36 +158,9 @@ pub fn choose(identities: &[Identity], own: u32) -> Option<(u32, String)> {
     user_name(uid).map(|name| (uid, name))
 }
 
-/// This process's real uid.
-pub fn own_uid() -> u32 {
-    // SAFETY: `getuid` has no preconditions and cannot fail.
-    unsafe { libc::getuid() }
-}
-
-/// The name `uid` has in the user database (`getpwuid_r`), or `None`.
-pub fn user_name(uid: u32) -> Option<String> {
-    let mut buf = vec![0 as libc::c_char; 4096];
-    loop {
-        // SAFETY: zeroed is a valid `passwd` (pointers null, numbers 0); it is
-        // only read after `getpwuid_r` reports it filled.
-        let mut pwd: libc::passwd = unsafe { std::mem::zeroed() };
-        let mut found: *mut libc::passwd = std::ptr::null_mut();
-        // SAFETY: every pointer is to a live local of the stated size, and
-        // `buf` outlives every read of `pwd`'s strings below.
-        let rc =
-            unsafe { libc::getpwuid_r(uid, &mut pwd, buf.as_mut_ptr(), buf.len(), &mut found) };
-        if rc == libc::ERANGE && buf.len() < 1 << 20 {
-            buf.resize(buf.len() * 2, 0);
-            continue;
-        }
-        if rc != 0 || found.is_null() || pwd.pw_name.is_null() {
-            return None;
-        }
-        // SAFETY: `pw_name` points into `buf`, NUL-terminated, set by the call.
-        let name = unsafe { std::ffi::CStr::from_ptr(pwd.pw_name) };
-        return name.to_str().ok().map(str::to_owned);
-    }
-}
+/// This process's real uid, and the name a uid has in the user database:
+/// the session lookup's, shared with the lock sink.
+pub use caustics_sidecar::session::{own_uid, user_name};
 
 #[cfg(test)]
 mod tests;

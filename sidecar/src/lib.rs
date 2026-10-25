@@ -12,6 +12,9 @@
 //! - [`settings`]: which program a menu's "Settings" row opens — the
 //!   `$CAUSTICS_SETTINGS` override, else the desktop's own, else the first known
 //!   one on `PATH`, else none — so no sidecar names a settings program.
+//! - [`session`] (feature `session`): this process's uid and user name, and
+//!   logind's session for it, which the canvas's polkit and lock sinks both
+//!   speak for.
 //! - [`test_bus`] (feature `test-bus`): a private `dbus-daemon` for the D-Bus
 //!   sidecars' deadlock tests.
 //!
@@ -81,6 +84,9 @@ pub mod icons;
 pub mod inbox;
 
 pub mod settings;
+
+#[cfg(feature = "session")]
+pub mod session;
 
 #[cfg(feature = "test-bus")]
 pub mod test_bus;

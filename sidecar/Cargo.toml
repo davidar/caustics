@@ -2,7 +2,7 @@
 name = "caustics-sidecar"
 version = "0.1.0"
 edition.workspace = true
-description = "What every bar sidecar shares: the witness line, the zbus drain, the stdin inbox, the icon-theme search, the settings-program choice and a private test bus"
+description = "What every bar sidecar shares: the witness line, the zbus drain, the stdin inbox, the icon-theme search, the settings-program choice, the login session and a private test bus"
 license.workspace = true
 rust-version.workspace = true
 
@@ -16,6 +16,10 @@ drain = ["dep:tokio", "dep:futures-lite"]
 # (`icons::resolve`, `theme_order`, `is_symbolic`, `in_directory`), written
 # once so no sidecar carries its own copy.
 icons = ["dep:freedesktop-icons"]
+# `session`: this process's uid and user name, and logind's session for it on
+# the system bus (`session::session_id`), which the canvas's polkit and lock
+# sinks both speak for.
+session = ["dep:zbus", "dep:libc"]
 # A private `dbus-daemon` for a test, killed when it drops (`test_bus::Bus`):
 # the D-Bus sidecars' deadlock tests share it as a dev-dependency.
 test-bus = []
@@ -23,6 +27,8 @@ test-bus = []
 [dependencies]
 # The theme search behind the `icons` feature.
 freedesktop-icons = { version = "0.4.0", optional = true }
+# `getuid` and `getpwuid_r`, behind `session`.
+libc = { version = "0.2.189", optional = true }
 # `StreamExt::next` on whatever stream a drain is handed.
 futures-lite = { version = "2.6.1", optional = true }
 # `spawn`, `Notify` and the unbounded channel: the drain task and what it folds
@@ -30,6 +36,11 @@ futures-lite = { version = "2.6.1", optional = true }
 tokio = { version = "1.53.1", default-features = false, features = [
     "rt",
     "sync",
+], optional = true }
+# logind's proxies behind `session`. `tokio` instead of the default
+# `async-io`, as every D-Bus sidecar takes it.
+zbus = { version = "5.19.0", default-features = false, features = [
+    "tokio",
 ], optional = true }
 
 [dev-dependencies]
