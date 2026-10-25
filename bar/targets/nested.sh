@@ -297,6 +297,13 @@ mark_journal() {
 # --- the supervisor ---------------------------------------------------------
 
 SUP_PID=""
+# The supervisor's state files are read while it writes them, so each write is
+# a rename: a reader sees the old value or the new one, never an empty file
+# (an empty `sup.pid` read as a new bar's pid sent bar_restart waiting for a
+# start line that names no pid).
+sup_put() { # sup_put <file under $RUN> <value>
+    printf '%s\n' "$2" >"$RUN/$1.tmp" && mv -f "$RUN/$1.tmp" "$RUN/$1"
+}
 sup_state() { cat "$RUN/sup.state" 2>/dev/null || echo inactive; }
 
 # Writes one line into both logs, with its arrival time in the second: the
@@ -345,9 +352,9 @@ stop_group() { # stop_group <pgid>
 supervise() {
     exec 3> >(exec python3 -c "$STAMPER" "$BAR_LOG" "$BAR_TS_LOG")
     local cmd="" rc pid restarts=0 starts=() now
-    echo 0 >"$RUN/sup.pid"
-    echo 0 >"$RUN/sup.nrestarts"
-    echo inactive >"$RUN/sup.state"
+    sup_put sup.pid 0
+    sup_put sup.nrestarts 0
+    sup_put sup.state inactive
     take_cmd() { cmd=""; [[ -e "$RUN/sup.cmd" ]] && cmd=$(<"$RUN/sup.cmd") && rm -f "$RUN/sup.cmd"; }
     take_cmd
     while :; do
@@ -374,6 +381,12 @@ supervise() {
             set -a
             for f in "$RUN"/env.d/*.env; do [[ -e "$f" ]] && source "$f"; done
             set +a
+            # The start line, written by the process that becomes the bar
+            # (`setsid` execs in place: this subshell leads no group), so it
+            # precedes every line the bar writes. bar_restart moves a caller's
+            # cursor to it; written after the launch, it could land behind the
+            # bar's first lines and hide them.
+            echo "supervisor: Started caustics-bar (pid $BASHPID)."
             exec env -u DISPLAY \
                 WAYLAND_DISPLAY="$NESTED_WAYLAND" XDG_RUNTIME_DIR="$NESTED_RT" \
                 NIRI_SOCKET="$NESTED_NIRI_SOCKET" \
@@ -385,44 +398,43 @@ supervise() {
                 setsid "$REPO/target/debug/caustics-bar"
         ) </dev/null >&3 2>&3 &
         pid=$!
-        echo "$pid" >"$RUN/sup.pid"
-        echo active >"$RUN/sup.state"
+        sup_put sup.pid "$pid"
+        sup_put sup.state active
         echo "bar $pid" >>"$PIDS_FILE"
-        echo "supervisor: Started caustics-bar (pid $pid)." >&3
         wait "$pid"
         rc=$?
         stop_group "$pid"
-        echo 0 >"$RUN/sup.pid"
+        sup_put sup.pid 0
         echo "caustics-bar.service: Main process exited, $(exit_words "$rc")" >&3
         take_cmd
         case "$cmd" in
             quit) break ;;
-            stop) echo inactive >"$RUN/sup.state"; cmd=""; continue ;;
+            stop) sup_put sup.state inactive; cmd=""; continue ;;
             start | restart) continue ;;
         esac
         if [[ "$rc" == 2 || "$rc" == 3 ]]; then
             # RestartPreventExitStatus=2 3: final until asked again.
-            echo failed >"$RUN/sup.state"
+            sup_put sup.state failed
             echo "caustics-bar.service: Failed with result 'exit-code'." >&3
             continue
         fi
         if ((${#starts[@]} >= 10)); then
-            echo failed >"$RUN/sup.state"
+            sup_put sup.state failed
             echo "caustics-bar.service: Start request repeated too quickly." >&3
             starts=()
             continue
         fi
-        echo activating >"$RUN/sup.state"
+        sup_put sup.state activating
         sleep 1
         take_cmd
         [[ "$cmd" == quit ]] && break
-        [[ "$cmd" == stop ]] && { echo inactive >"$RUN/sup.state"; cmd=""; continue; }
+        [[ "$cmd" == stop ]] && { sup_put sup.state inactive; cmd=""; continue; }
         restarts=$((restarts + 1))
-        echo "$restarts" >"$RUN/sup.nrestarts"
+        sup_put sup.nrestarts "$restarts"
         echo "caustics-bar.service: Scheduled restart job, restart counter is at $restarts." >&3
         cmd=restart
     done
-    echo inactive >"$RUN/sup.state"
+    sup_put sup.state inactive
     exec 3>&-
 }
 
@@ -457,10 +469,10 @@ bar_restart() {
     [[ "$old" != 0 ]] && kill -TERM "$old" 2>/dev/null
     for i in $(seq 150); do
         pid=$(cat "$RUN/sup.pid" 2>/dev/null || echo 0)
-        [[ "$pid" != 0 && "$pid" != "$old" ]] && break
+        [[ "$pid" =~ ^[1-9][0-9]*$ && "$pid" != "$old" ]] && break
         sleep 0.1
     done
-    if [[ "$pid" == 0 || "$pid" == "$old" ]]; then
+    if [[ ! "$pid" =~ ^[1-9][0-9]*$ || "$pid" == "$old" ]]; then
         note "the supervisor did not start a bar within 15 s"
         return 0
     fi
