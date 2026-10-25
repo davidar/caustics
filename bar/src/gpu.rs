@@ -3,9 +3,11 @@
 //! The mechanism is `caustics-host`'s: the device and its refusals
 //! (`caustics_host::device`), the reflection-driven layouts, the pipelines and
 //! the reload swap (`caustics_host::program`), and the swapchain of one target
-//! (`caustics_host::surface`). What is here is what makes them this bar: which
-//! buffers it allocates and binds by which name, the seven entry points and
-//! the order they dispatch in, the shape pass and its watchdog.
+//! (`caustics_host::surface`), and the text engine's buffers with the
+//! watchdog round the pass that walks them (`caustics_host::text`). What is
+//! here is what makes them this bar: which buffers it allocates and binds by
+//! which name, the seven entry points and the order they dispatch in, and
+//! when the shape pass runs.
 //!
 //! Three shapes here are deliberate:
 //!
@@ -59,6 +61,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use caustics_host::device::{self, Device, Presentation};
 use caustics_host::program::{Entry, Program, Refused, group_entries};
 use caustics_host::surface::{self, ID_FORMAT, Surface, acquire, create_surface, refresh_mirror};
+use caustics_host::text::{Group, TextBuffers, Watchdog, growable_buffer};
 use punchcutter_core::gpu::storage_buffer;
 use punchcutter_slang::{Binding, BindingKind, Reflection};
 
@@ -91,18 +94,6 @@ const SHAPE_GROUP: u32 = 1;
 /// reads the caustic's own number out of the module's text and checks this one
 /// against it.
 pub const SHAPE_BLOCKS: u32 = 512;
-
-/// Headroom left in the curve buffers when they are (re)created, as a fraction:
-/// an icon resolved later appends to them, and a buffer that has to be rebuilt
-/// on every new icon would rebuild its bind group with it. A font is 4 MiB and
-/// an icon is 2 KB, so an eighth is hundreds of icons.
-const CURVE_HEADROOM: f32 = 0.125;
-
-/// One glyph record in `BUF_GLYPHS`, in bytes (`punchcutter_text::Glyph`, which the bar does not link: `caustics-glyphs` writes them and this is the divisor
-/// that turns its `total` into a count). The ABI's own table says 64 B
-/// (docs/abi.md, *Bytes*) and `bar/src/abi/tests.rs` checks the layout against
-/// `text.slang`'s reflection.
-const GLYPH_RECORD: u32 = 64;
 
 // The seven entry points' positions in `abi::BAR_ENTRIES`, the one list build.rs
 // bakes and `caustics-reload` recompiles: a pipeline is named by its index in
@@ -178,50 +169,6 @@ const SPV_BGRA8UNORM: BakedSpv = [
     include_bytes!(concat!(env!("OUT_DIR"), "/bar_draw.bgra8unorm.spv")),
 ];
 
-/// The four curve buffers the engine's `text.slang` reads, and how much they hold.
-///
-/// Kept together because they are replaced together: an icon appended to the
-/// font's glyphs grows all four, and a bind group naming any of them has to be
-/// rebuilt when one is recreated.
-struct Curves {
-    points: wgpu::Buffer,
-    bands: wgpu::Buffer,
-    band_curves: wgpu::Buffer,
-    glyphs: wgpu::Buffer,
-}
-
-/// The shaper's buffers: the dispatch's scalars, and the **arena**.
-///
-/// One arena rather than a buffer per flattened table, each of which would be a shape the CPU had to understand in order to build. `ot` is `cmap`, `hmtx`, `GDEF`, `GSUB` and `GPOS` as they
-/// sit in the font files, behind a directory `caustics-glyphs` wrote and
-/// the engine's `ot.slang` reads. Adwaita Sans is 221 KiB this way.
-
-struct ShapeBuffers {
-    params: wgpu::Buffer,
-    ot: wgpu::Buffer,
-}
-
-/// What it takes to time one compute pass on the device itself.
-///
-/// Wall clock around the submit would do for an order of magnitude, and
-/// `model_pass_ms` is exactly that — but it times three passes plus a submit
-/// and a fence wait, which on a loaded host is mostly the host. The question
-/// here is narrower and needs the device's own answer: how long did
-/// **`bar_shape`** run.
-struct Watchdog {
-    set: wgpu::QuerySet,
-    /// Where `resolve_query_set` puts the two timestamps.
-    resolved: wgpu::Buffer,
-    /// ...and where they are copied to be mapped.
-    readback: wgpu::Buffer,
-    /// Nanoseconds per tick, from the queue.
-    period_ns: f32,
-    /// `SHAPE_WATCHDOG_MS` as the caustic last pushed it (`ACT_WATCHDOG`);
-    /// zero until the first frame, which is what makes the watchdog silent
-    /// before the caustic has run at all.
-    threshold_ms: f64,
-}
-
 /// Which target a surface is. The values are the ABI's `TARGET_*`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Target {
@@ -238,19 +185,11 @@ impl Target {
     }
 }
 
-/// How much more a software adapter's shape pass may take than the caustic's
-/// `SHAPE_WATCHDOG_MS` says: see [`Gpu::set_watchdog_ms`].
-pub const WATCHDOG_CPU_SCALE: f64 = 8.0;
-
 pub struct Gpu {
     instance: wgpu::Instance,
     adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
-    /// Whether the device came up with `VK_KHR_shader_clock`, which decides
-    /// whether the shaper gets a wall-clock deadline.
-    shader_clock: punchcutter_core::gpu::ShaderClock,
-
     /// The negotiated swapchain format, alpha mode and present mode; both
     /// surfaces use them, and the format decides which SPIR-V variant the
     /// pipelines were built from.
@@ -307,12 +246,12 @@ pub struct Gpu {
     /// Every string on the bar, UTF-8, four bytes per word. A `TextBlock` names
     /// a byte range of this and nothing else.
     strings: wgpu::Buffer,
-    /// The curve buffers (group 1), and the bind group over them. Rebuilt — both
-    /// of them — only when an icon has outgrown the headroom.
-    curves: Curves,
+    /// The text engine's six buffers (`caustics_host::text`): the curve
+    /// buffers of group 1 and the shaper's tables of group 2, filled by
+    /// `caustics-glyphs`'s `Bytes`. Each group is rebuilt only when a buffer
+    /// in it has outgrown its headroom.
+    text: TextBuffers,
     text_group: wgpu::BindGroup,
-    /// The shape tables (group 2). Written once per font, which is once.
-    shape: ShapeBuffers,
     shape_group: wgpu::BindGroup,
 
     /// A 1x1 texture of the swapchain's format, for the shape pass's bind
@@ -322,36 +261,16 @@ pub struct Gpu {
     shape_dst: wgpu::Texture,
     /// Set when the blocks changed and the shape pass owes them their metrics.
     shape_pending: bool,
-    /// The watchdog around `bar_shape`: a timestamp query
-    /// pair, somewhere to resolve it, somewhere to read it, and the threshold
-    /// the caustic pushed. `None` on an adapter without `TIMESTAMP_QUERY`,
-    /// which `Gpu::new` says out loud.
-    watchdog: Option<Watchdog>,
-    /// A shape pass ran over the threshold: nothing is shaped until the
-    /// OpenType arena's front block is written again (`write_bytes`). The
-    /// pending flag is kept, so the release re-shapes what was owed.
-    shape_blocked: bool,
-    /// The next timed shape pass is the first since the pipelines were
-    /// created or swapped, and is logged but not judged: on lavapipe it times
-    /// llvmpipe building the new variant (12 ms warm, 18 s with the cache
-    /// off), not the arena, and judging it would be a false watchdog trip.
-    shape_cold: bool,
+    /// The watchdog round `bar_shape` (`caustics_host::text::Watchdog`): the
+    /// device's own timing of the pass, the threshold the caustic pushed, and
+    /// the stop a trip holds until the arena's front block is written again.
+    watchdog: Watchdog,
     /// What the last build/compose/shape submission cost, until the mirror
     /// carrying what it built comes back and the two are logged together.
     model_pass_ms: Option<f64>,
     /// `Params.cap_height`, in em; set by `set_cap_height` when a font is
     /// known and 0 before.
     cap_height: f32,
-    /// Glyph records actually *written* into the curve buffers, which is the
-    /// font's glyphs plus the icons appended to them — not the buffers'
-    /// capacity, which carries [`CURVE_HEADROOM`] of unwritten tail. Every
-    /// glyph id the caustic indexes must be below this: `text.slang` reads
-    /// `textGlyphs[glyphIndex]` with no bound of its own, and a record read out
-    /// of the headroom has a garbage `band_base`.
-    curve_glyphs: u32,
-    /// The four curve buffers' live lengths, as the `Bytes` runs that filled
-    /// them declared. The health line's `curves=` clause and nothing else.
-    curve_totals: [u32; 4],
 
     /// The image slots: one [`abi::IMAGE_SLOT_PX`]² layer per slot.
     images: wgpu::Texture,
@@ -546,82 +465,41 @@ impl Gpu {
             mapped_at_creation: false,
         });
 
-        // The curve and table buffers start as one element each: nothing can be
-        // drawn until `caustics-glyphs`'s first `Bytes` lands, and a zero-sized
-        // storage buffer is not a legal binding. `write_bytes` grows each one to
-        // the `total` its writer declares, which is why they are `growable` —
-        // an icon's delta needs what is already there copied forward.
-        let curves = Curves {
-            points: growable_buffer(&device, "caustics-bar-points", 16),
-            bands: growable_buffer(&device, "caustics-bar-bands", 8),
-            band_curves: growable_buffer(&device, "caustics-bar-band-curves", 4),
-            glyphs: growable_buffer(&device, "caustics-bar-glyphs", 64),
-        };
-        let text_group = create_text_group(&device, program.layout(SET_TEXT), reflected, &curves);
-        let shape = ShapeBuffers {
-            params: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("caustics-bar-shape-params"),
-                size: size_of::<punchcutter_shape::ShapeParams>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
-            // The arena starts as the front block alone: the caustic reads
-            // its own bound out of the header, and a header of zeros is a
-            // directory of no faces, which shapes nothing and stalls nothing.
-            ot: growable_buffer(
-                &device,
-                "caustics-bar-ot",
-                punchcutter_shape::OT_TABLES_START as u64,
-            ),
-        };
+        // The engine's six buffers start as small as a legal binding:
+        // nothing can be drawn until `caustics-glyphs`'s first `Bytes` lands,
+        // and `write_bytes` grows each to the `total` its writer declares.
+        // `request_count` and `glyph_capacity` are the batch's, and this bar
+        // drives the pass from the block table instead, so they carry the
+        // capacities, which is what a reader of the buffer in a debugger
+        // wants to see.
+        let text = TextBuffers::new(
+            &device,
+            "caustics-bar",
+            clock,
+            SHAPE_BLOCKS,
+            abi::MAX_GLYPHS as u32,
+        );
+        let text_group = create_text_group(&device, program.layout(SET_TEXT), reflected, &text);
         let shape_group = create_shape_group(
             &device,
             program.layout(SET_SHAPE),
             reflected,
-            &shape,
+            &text,
             &strings,
         );
 
-        // Two timestamps, one pass: the device's own answer to "how long did
-        // `bar_shape` run". Eight bytes each, and the
-        // resolve target must be its own buffer because `QUERY_RESOLVE` and
-        // `MAP_READ` may not share one.
-        let watchdog = timing.then(|| {
-            let set = device.create_query_set(&wgpu::QuerySetDescriptor {
-                label: Some("caustics-bar-shape-watchdog"),
-                ty: wgpu::QueryType::Timestamp,
-                count: 2,
-            });
-            Watchdog {
-                set,
-                resolved: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("caustics-bar-shape-watchdog-resolved"),
-                    size: 16,
-                    usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
-                    mapped_at_creation: false,
-                }),
-                readback: device.create_buffer(&wgpu::BufferDescriptor {
-                    label: Some("caustics-bar-shape-watchdog-readback"),
-                    size: 16,
-                    usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                    mapped_at_creation: false,
-                }),
-                period_ns: queue.get_timestamp_period(),
-                threshold_ms: 0.0,
-            }
-        });
-        match &watchdog {
-            Some(watchdog) => tracing::info!(
-                "gpu: the shape pass is timed on the device ({:.1} ns a tick)",
-                watchdog.period_ns
-            ),
-            // Never silent: without it a runaway shape pass is a stuttering
-            // desktop and no journal line: a shaper reading a mismatched arena
-            // once took 150 ms a dispatch and said nothing.
-            None => tracing::warn!(
-                "gpu: this adapter has no TIMESTAMP_QUERY — the shape pass has no watchdog"
-            ),
-        }
+        // Two timestamps round `bar_shape`: the device's own answer to "how
+        // long did it run".
+        let software = adapter.get_info().device_type == wgpu::DeviceType::Cpu;
+        let watchdog = Watchdog::new(
+            &device,
+            &queue,
+            timing,
+            software,
+            "caustics-bar",
+            "bar_shape",
+            SHAPE_BLOCKS,
+        );
 
         let shape_dst = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("caustics-bar-shape-dst"),
@@ -673,7 +551,6 @@ impl Gpu {
             adapter,
             device,
             queue,
-            shader_clock: clock,
             presentation,
             program,
             state,
@@ -688,19 +565,14 @@ impl Gpu {
             strings,
             literals,
             facts,
-            curves,
+            text,
             text_group,
-            shape,
             shape_group,
             shape_dst,
             shape_pending: false,
             watchdog,
-            shape_blocked: false,
-            shape_cold: true,
             model_pass_ms: None,
             cap_height: 0.0,
-            curve_glyphs: 0,
-            curve_totals: [0; 4],
             images,
             images_view,
             tex_sampler,
@@ -856,176 +728,58 @@ impl Gpu {
     }
 
     /// Put one run of a sidecar's bytes into the buffer it names
-    /// (docs/abi.md, *Bytes*) — the one method for all six.
+    /// (docs/abi.md, *Bytes*): the one method for all six, which is
+    /// `caustics_host::text::TextBuffers::write_bytes`.
     ///
-    /// The font is read by a sidecar, not the bar. This grows and rebinds:
-    /// when `total` does not fit, a fresh buffer with
-    /// [`CURVE_HEADROOM`] of tail is created, **what is already there is copied
-    /// into it** — an icon's `Bytes` is a delta, so the font behind it has to
-    /// survive the growth — and the one group naming it is rebuilt.
-    ///
-    /// Nothing here reads a byte of the run. The caustic's counts come from the
-    /// writer's own `total`: `curve_glyphs` is `BUF_GLYPHS`'s `total /
-    /// GLYPH_RECORD`, the `ShapeFont` counts are the `BUF_SHAPE_FONT` body
-    /// itself, and the arena's are in its own header, which `ot.slang` clamps
-    /// to the words the driver bound. A malformed table draws wrong and stalls
-    /// nothing, because every index in `text.slang`, `ot.slang` and
-    /// `shape.slang` is bounded.
+    /// The font is read by a sidecar, not the bar, and nothing here reads a
+    /// byte of the run. What is the bar's is what follows a write: the one
+    /// group naming a grown buffer rebuilt, the watchdog released when the
+    /// arena's front block is rewritten (a sidecar that restarts sends the
+    /// whole arena from offset zero, so this is also what a fixed
+    /// `caustics-glyphs` looks like from here), and the shape pass owed.
     pub fn write_bytes(&mut self, buffer: u32, offset: u32, total: u32, bytes: &[u8]) {
-        if bytes.is_empty() {
-            return;
-        }
-        if buffer == abi::wire::BUF_SHAPE_FONT {
-            self.write_shape_font(bytes);
-            return;
-        }
-        let Some(label) = buffer_label(buffer) else {
-            tracing::warn!("gpu: no buffer {buffer}; {} bytes dropped", bytes.len());
-            return;
-        };
-        let want = u64::from(total).max(u64::from(offset) + bytes.len() as u64);
-        let Some(have) = self.slot(buffer).map(|slot| slot.size()) else {
-            return;
-        };
-        if want > have {
-            // Rounded up to sixteen bytes: wgpu requires a storage binding's
-            // effective size to be a multiple of four, and the headroom
-            // multiply does not respect that on its own (a 487575-byte
-            // band-curve buffer was refused). Sixteen rather
-            // than four because std430 aligns these structs to sixteen anyway.
-            let size = ((want as f64 * (1.0 + CURVE_HEADROOM as f64)) as u64)
-                .max(want)
-                .max(64)
-                .next_multiple_of(16);
-            let fresh = growable_buffer(&self.device, label, size);
-            let mut encoder = self
-                .device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
-            if let Some(old) = self.slot(buffer) {
-                encoder.copy_buffer_to_buffer(old, 0, &fresh, 0, have.min(size));
+        let written =
+            self.text
+                .write_bytes(&self.device, &self.queue, buffer, offset, total, bytes);
+        match written.regroup {
+            Some(Group::Text) => {
+                self.text_group = create_text_group(
+                    &self.device,
+                    self.program.layout(SET_TEXT),
+                    self.program.bindings(),
+                    &self.text,
+                );
             }
-            self.queue.submit(Some(encoder.finish()));
-            self.put(buffer, fresh);
-            tracing::info!(
-                "gpu: {label} grown to {} KiB, holding {want} bytes",
-                size / 1024
-            );
+            Some(Group::Shape) => {
+                self.shape_group = create_shape_group(
+                    &self.device,
+                    self.program.layout(SET_SHAPE),
+                    self.program.bindings(),
+                    &self.text,
+                    &self.strings,
+                );
+            }
+            None => {}
         }
-        if let Some(slot) = self.slot(buffer) {
-            self.queue.write_buffer(slot, u64::from(offset), bytes);
-        }
-        if let Some(i) = curve_index(buffer) {
-            self.curve_totals[i] = total;
-        }
-        if buffer == abi::wire::BUF_GLYPHS {
-            // Glyph records actually written, which is what bounds every glyph
-            // id the caustic may index: `text.slang` reads `textGlyphs[gid]`
-            // with no bound of its own. The writer's `total` is the only thing
-            // that knows, and a record is [`GLYPH_RECORD`] bytes.
-            self.curve_glyphs = total / GLYPH_RECORD;
-        }
-        // The watchdog's release: the arena's **front
-        // block** is its directory, and rewriting it is the only event that
-        // means "the thing the shaper walks is a different thing now". A
-        // sidecar that restarts sends the whole arena from offset zero, so
-        // this is also what a fixed `caustics-glyphs` looks like from here.
-        if buffer == abi::wire::BUF_OT && offset == 0 && self.shape_blocked {
-            self.shape_blocked = false;
-            tracing::info!("gpu: the arena's front block was rewritten; shaping again");
+        if written.front_block {
+            self.watchdog.release();
         }
         // Whatever was shaped against the buffers as they were is owed another
         // pass now that more of them has landed.
-        self.shape_pending = true;
-    }
-
-    /// `BUF_SHAPE_FONT`: the `font` half of `ShapeParams`, verbatim, and behind
-    /// it the four scalars that are the *dispatch's* rather than the font's.
-    fn write_shape_font(&mut self, bytes: &[u8]) {
-        let expected = size_of::<punchcutter_shape::abi::ShapeFont>();
-        if bytes.len() != expected {
-            tracing::warn!(
-                "gpu: BUF_SHAPE_FONT is {} bytes, not {expected}",
-                bytes.len()
-            );
-            return;
-        }
-        self.queue.write_buffer(&self.shape.params, 0, bytes);
-        // `request_count` and `glyph_capacity` are the batch's, and this bar
-        // drives the pass from the block table instead — so they carry the
-        // capacities, which is what a reader of the buffer in a debugger wants to see.
-        let mut tail = [0u8; 16];
-        tail[0..4].copy_from_slice(&SHAPE_BLOCKS.to_le_bytes());
-        tail[4..8].copy_from_slice(&(abi::MAX_GLYPHS as u32).to_le_bytes());
-        tail[8..12].copy_from_slice(&punchcutter_shape::SHAPE_ABI_VERSION.to_le_bytes());
-        // The shaper's wall-clock deadline. Zero where
-        // the adapter has no `VK_KHR_shader_clock`, which `Gpu::new` has
-        // already warned about — never a deadline that silently does nothing.
-        let deadline = match self.shader_clock {
-            punchcutter_core::gpu::ShaderClock::Device => {
-                punchcutter_shape::abi::SHAPE_DEADLINE_TICKS
-            }
-            punchcutter_core::gpu::ShaderClock::Absent => 0,
-        };
-        tail[12..16].copy_from_slice(&deadline.to_le_bytes());
-        self.queue
-            .write_buffer(&self.shape.params, expected as u64, &tail);
-        self.shape_pending = true;
-    }
-
-    /// The buffer a `BUF_*` names, or `None` for one outside the six.
-    fn slot(&self, buffer: u32) -> Option<&wgpu::Buffer> {
-        use abi::wire::*;
-        Some(match buffer {
-            BUF_POINTS => &self.curves.points,
-            BUF_BANDS => &self.curves.bands,
-            BUF_BAND_CURVES => &self.curves.band_curves,
-            BUF_GLYPHS => &self.curves.glyphs,
-            BUF_OT => &self.shape.ot,
-            _ => return None,
-        })
-    }
-
-    /// Swap a grown buffer in, and rebuild the one bind group that names it.
-    fn put(&mut self, buffer: u32, fresh: wgpu::Buffer) {
-        use abi::wire::*;
-        match buffer {
-            BUF_POINTS => self.curves.points = fresh,
-            BUF_BANDS => self.curves.bands = fresh,
-            BUF_BAND_CURVES => self.curves.band_curves = fresh,
-            BUF_GLYPHS => self.curves.glyphs = fresh,
-            BUF_OT => self.shape.ot = fresh,
-            _ => return,
-        }
-        if curve_index(buffer).is_some() {
-            self.text_group = create_text_group(
-                &self.device,
-                self.program.layout(SET_TEXT),
-                self.program.bindings(),
-                &self.curves,
-            );
-        } else {
-            self.shape_group = create_shape_group(
-                &self.device,
-                self.program.layout(SET_SHAPE),
-                self.program.bindings(),
-                &self.shape,
-                &self.strings,
-            );
+        if written.landed {
+            self.shape_pending = true;
         }
     }
 
     /// Glyph records the curve buffers hold — the font's, plus the icons the
     /// sidecar appended to them. What the health line reports.
     pub fn curve_glyphs(&self) -> u32 {
-        self.curve_glyphs
+        self.text.curve_glyphs()
     }
 
     /// Bytes the four curve buffers hold, by the writer's own totals.
     pub fn curve_bytes(&self) -> u64 {
-        self.curve_totals
-            .iter()
-            .map(|total| u64::from(*total))
-            .sum()
+        self.text.curve_bytes()
     }
 
     /// Drop one captured still into the preview slot, at (0, 0).
@@ -1176,7 +930,7 @@ impl Gpu {
             }
             Err(Refused::Pipelines(err)) => return Err(err),
         }
-        self.shape_cold = true;
+        self.watchdog.swapped();
         Ok(())
     }
 
@@ -1376,7 +1130,7 @@ impl Gpu {
         // since. The pending flag stays set, so whatever is
         // owed is shaped on the frame after the release — this is a pause, not
         // a discard.
-        if self.shape_blocked {
+        if self.watchdog.blocked() {
             return;
         }
         self.shape_pending = false;
@@ -1440,13 +1194,7 @@ impl Gpu {
             // walks bytes a sidecar sent.
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("caustics-bar-shape-pass"),
-                timestamp_writes: self.watchdog.as_ref().map(|watchdog| {
-                    wgpu::ComputePassTimestampWrites {
-                        query_set: &watchdog.set,
-                        beginning_of_pass_write_index: Some(0),
-                        end_of_pass_write_index: Some(1),
-                    }
-                }),
+                timestamp_writes: self.watchdog.timestamp_writes(),
             });
             pass.set_bind_group(0, &group, &[]);
             pass.set_bind_group(1, &self.text_group, &[]);
@@ -1454,10 +1202,7 @@ impl Gpu {
             pass.set_pipeline(self.program.pipeline(SHAPE));
             pass.dispatch_workgroups(SHAPE_BLOCKS.div_ceil(SHAPE_GROUP), 1, 1);
         }
-        if let Some(watchdog) = &self.watchdog {
-            encoder.resolve_query_set(&watchdog.set, 0..2, &watchdog.resolved, 0);
-            encoder.copy_buffer_to_buffer(&watchdog.resolved, 0, &watchdog.readback, 0, 16);
-        }
+        self.watchdog.resolve(&mut encoder);
         let started = std::time::Instant::now();
         self.queue.submit(Some(encoder.finish()));
         // Waited out before the frame's own submission: the layout reads what
@@ -1470,147 +1215,34 @@ impl Gpu {
         // model passes cost, and `bar_build`, the first of them, is the one
         // that does the work.
         self.model_pass_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
-        self.check_watchdog();
-    }
-
-    /// What the device says `bar_shape` cost, and what to do about it.
-    ///
-    /// **Translate, never decide**: the threshold arrived as an `ACT_WATCHDOG`
-    /// from the caustic and the response is fixed — one witness, and no more
-    /// shaping until the OpenType arena's front block is written again. The
-    /// embassy is here because it is the only side that holds the queue, the
-    /// query set and the wall clock the ticks convert against.
-    ///
-    /// The shaper's in-kernel deadline bounds one *run*; this bounds the
-    /// *pass*. An arena that is not an arena makes every run short and far too
-    /// many of them, which measured 152 ms a dispatch.
-    fn check_watchdog(&mut self) {
-        let Some(watchdog) = &self.watchdog else {
-            return;
-        };
-        // Zero until the caustic's first frame has pushed a threshold: a bar
-        // whose caustic has not run yet has nothing to compare against. The
-        // buffer is **not mapped** on this path and must not be unmapped —
-        // unmapping an idle buffer is a validation error, and a validation
-        // error is an exit.
-        // A cold pass under no threshold yet has still been and gone: the
-        // next one is warm.
-        if watchdog.threshold_ms <= 0.0 {
-            self.shape_cold = false;
-            return;
+        // What the device says `bar_shape` cost, and what to do about it
+        // (`caustics_host::text::Watchdog::check`): the threshold arrived as
+        // an `ACT_WATCHDOG` and the response is fixed. What was owed is still
+        // owed: the flag the pass cleared goes back on, so the release
+        // re-shapes rather than leaving last arena's metrics.
+        if self.watchdog.check(&self.device) {
+            self.shape_pending = true;
         }
-        let mut ticks = [0u64; 2];
-        let (tx, rx) = std::sync::mpsc::sync_channel(1);
-        watchdog
-            .readback
-            .slice(..)
-            .map_async(wgpu::MapMode::Read, move |result| {
-                let _ = tx.send(result);
-            });
-        // The submission above is already waited out; this is the second poll
-        // wgpu-core needs to drain its ready-to-map list.
-        if self
-            .device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .is_err()
-        {
-            return;
-        }
-        // A map that failed left the buffer idle: there is nothing to unmap,
-        // and nothing to read either.
-        if !matches!(rx.try_recv(), Ok(Ok(()))) {
-            return;
-        }
-        // The view must die before the unmap, hence the block.
-        {
-            match watchdog.readback.slice(..).get_mapped_range() {
-                Ok(view) if view.len() >= 16 => {
-                    for (i, slot) in ticks.iter_mut().enumerate() {
-                        let mut word = [0u8; 8];
-                        word.copy_from_slice(&view[i * 8..i * 8 + 8]);
-                        *slot = u64::from_le_bytes(word);
-                    }
-                }
-                // A timestamp that did not come back is not a runaway.
-                _ => {}
-            }
-        }
-        watchdog.readback.unmap();
-
-        let Some(elapsed) = ticks[1].checked_sub(ticks[0]) else {
-            return;
-        };
-        let ms = elapsed as f64 * f64::from(watchdog.period_ns) / 1.0e6;
-        // The first pass on new pipelines times the driver's JIT, not the
-        // arena. A hostile arena still trips on the next pass: the arena write
-        // that re-arms shaping is also what asks for a re-shape.
-        if std::mem::take(&mut self.shape_cold) {
-            tracing::debug!(
-                "shape watchdog: the cold pass (the first on new pipelines) took {ms:.1} ms; \
-                 not judged"
-            );
-            return;
-        }
-        if ms <= watchdog.threshold_ms {
-            return;
-        }
-        tracing::error!(
-            "shape watchdog: bar_shape took {ms:.1} ms over {SHAPE_BLOCKS} runs, past the \
-             {:.0} ms this caustic allows. Not shaping again until the OpenType arena is \
-             written. A sidecar from another tree, or an arena that is not one.",
-            watchdog.threshold_ms
-        );
-        self.shape_blocked = true;
-        // What was owed is still owed: the flag the pass cleared goes back on,
-        // so the release re-shapes rather than leaving last arena's metrics.
-        self.shape_pending = true;
     }
 
     /// The caustic's `SHAPE_WATCHDOG_MS`, as an `ACT_WATCHDOG`. One number in,
-    /// and nothing else changes.
-    ///
-    /// On a software adapter (lavapipe, what a VM usually has) the number is scaled
-    /// by [`WATCHDOG_CPU_SCALE`]: there the pass is CPU time on vCPUs that are
-    /// the host's cores, and it has been measured stretching from 70 to 155 ms
-    /// while the host was busy beside the guest, tripping a watchdog meant for
-    /// a GPU and stopping every popup's text for that bar's life. The tunable
-    /// keeps its meaning — a ceiling on a healthy pass on a real GPU — and a
-    /// hostile arena (3 ms, with the shaper's own deadline) is still far under
-    /// eight times it.
+    /// and nothing else changes; on a software adapter it is scaled by
+    /// `caustics_host::text::WATCHDOG_CPU_SCALE` (`Watchdog::set_threshold_ms`
+    /// says why).
     pub fn set_watchdog_ms(&mut self, ms: u32) {
-        let Some(watchdog) = self.watchdog.as_mut() else {
-            return;
-        };
-        let software = self.adapter.get_info().device_type == wgpu::DeviceType::Cpu;
-        let ms = f64::from(ms) * if software { WATCHDOG_CPU_SCALE } else { 1.0 };
-        if watchdog.threshold_ms == ms {
-            return;
-        }
-        watchdog.threshold_ms = ms;
-        tracing::info!(
-            "gpu: a shape pass may take {ms:.0} ms{}",
-            if software {
-                " (a software adapter: the caustic's number times 8)"
-            } else {
-                ""
-            }
-        );
+        self.watchdog.set_threshold_ms(ms);
     }
 
     /// Whether the watchdog has stopped the shape pass, for the health line.
     pub fn shape_blocked(&self) -> bool {
-        self.shape_blocked
+        self.watchdog.blocked()
     }
 
     /// A threshold no pass can meet, for the oracle's watchdog case: the
     /// caustic's `ACT_WATCHDOG` path only carries whole milliseconds.
     #[cfg(test)]
     pub fn set_watchdog_threshold(&mut self, ms: f64) -> bool {
-        let Some(watchdog) = self.watchdog.as_mut() else {
-            return false;
-        };
-        watchdog.threshold_ms = ms;
-        true
+        self.watchdog.set_threshold(ms)
     }
 
     /// `reload_all` with the baked modules, as `caustics-reload` would deliver an
@@ -1931,7 +1563,7 @@ impl Gpu {
     /// place is the record the caustic reads.
     #[cfg(test)]
     pub fn read_buffer(&mut self, buffer: u32, len: u64) -> Vec<u8> {
-        let Some(slot) = self.slot(buffer) else {
+        let Some(slot) = self.text.buffer(buffer) else {
             return Vec::new();
         };
         let len = len.min(slot.size()).next_multiple_of(4);
@@ -2057,14 +1689,11 @@ fn create_text_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     bindings: &[Binding],
-    curves: &Curves,
+    text: &TextBuffers,
 ) -> wgpu::BindGroup {
-    let entries = group_entries(bindings, SET_TEXT, |name| match name {
-        "textPoints" => curves.points.as_entire_binding(),
-        "textBands" => curves.bands.as_entire_binding(),
-        "textBandCurves" => curves.band_curves.as_entire_binding(),
-        "textGlyphs" => curves.glyphs.as_entire_binding(),
-        other => panic!("{}", unknown_binding(other, SET_TEXT)),
+    let entries = group_entries(bindings, SET_TEXT, |name| {
+        text.resource(name)
+            .unwrap_or_else(|| panic!("{}", unknown_binding(name, SET_TEXT)))
     });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("caustics-bar-text"),
@@ -2073,18 +1702,20 @@ fn create_text_group(
     })
 }
 
+/// The engine's tables, by their reflected names (`TextBuffers::resource`),
+/// and the bar's strings buffer behind `shapeUtf8`.
 fn create_shape_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     bindings: &[Binding],
-    shape: &ShapeBuffers,
+    text: &TextBuffers,
     strings: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     let entries = group_entries(bindings, SET_SHAPE, |name| match name {
-        "shapeParams" => shape.params.as_entire_binding(),
-        "shapeOt" => shape.ot.as_entire_binding(),
         "shapeUtf8" => strings.as_entire_binding(),
-        other => panic!("{}", unknown_binding(other, SET_SHAPE)),
+        other => text
+            .resource(other)
+            .unwrap_or_else(|| panic!("{}", unknown_binding(other, SET_SHAPE))),
     });
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("caustics-bar-shape"),
@@ -2238,48 +1869,6 @@ fn storage_texture_format(name: &str, dst: wgpu::TextureFormat) -> wgpu::Texture
              told about any third."
         ),
     }
-}
-
-/// The debug label of the buffer a `BUF_*` names, and the proof that it is one of the six (docs/abi.md, *Bytes*).
-fn buffer_label(buffer: u32) -> Option<&'static str> {
-    use abi::wire::*;
-    Some(match buffer {
-        BUF_POINTS => "caustics-bar-points",
-        BUF_BANDS => "caustics-bar-bands",
-        BUF_BAND_CURVES => "caustics-bar-band-curves",
-        BUF_GLYPHS => "caustics-bar-glyphs",
-        BUF_SHAPE_FONT => "caustics-bar-shape-params",
-        BUF_OT => "caustics-bar-ot",
-        _ => return None,
-    })
-}
-
-/// Which of the four curve buffers a `BUF_*` is, or `None` for a shape table —
-/// which is also which bind group a growth rebuilds.
-fn curve_index(buffer: u32) -> Option<usize> {
-    use abi::wire::*;
-    match buffer {
-        BUF_POINTS => Some(0),
-        BUF_BANDS => Some(1),
-        BUF_BAND_CURVES => Some(2),
-        BUF_GLYPHS => Some(3),
-        _ => None,
-    }
-}
-
-/// A storage buffer that can be **grown**: `COPY_SRC` beside the usual pair, so
-/// what is in it survives into its replacement.
-///
-/// `punchcutter_core::gpu::storage_buffer` makes a buffer nothing copies out of; this is the bar's own, for the six buffers `caustics-glyphs` fills a run at a time.
-fn growable_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_DST
-            | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    })
 }
 
 /// The baked modules matching a swapchain format. Panics on a format

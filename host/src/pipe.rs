@@ -406,9 +406,18 @@ impl Pipe {
     /// Write one frame of any kind a host sends — an `Action`, a `Request` (docs/abi.md, *Request*) or a `CanvasEvent` (*Canvas event*) — under exactly the rules `send`
     /// states: one non-blocking write, never a wait, one witness per way of
     /// failing. `what` names the frame in those witnesses.
+    ///
+    /// An `Answer` (docs/abi.md, *Answer*) goes through here too, and the
+    /// copy this serialises it into is the one copy of a typed secret this
+    /// side makes: it is reserved whole before the write, so a growing
+    /// buffer never leaves a moved copy behind, and zeroed when it drops.
     pub fn send_frame(&self, frame_to_send: &Frame, what: &str) -> bool {
-        let mut frame = Vec::with_capacity(wire::WireHeader::SIZE + 64);
-        if wire::write(&mut frame, frame_to_send).is_err() {
+        let room = match frame_to_send {
+            Frame::Answer(_) => wire::WireHeader::SIZE + 16 + wire::MAX_ANSWER_LEN,
+            _ => wire::WireHeader::SIZE + 64,
+        };
+        let mut frame = zeroize::Zeroizing::new(Vec::with_capacity(room));
+        if wire::write(&mut *frame, frame_to_send).is_err() {
             // A `Vec` cannot fail to be written to; this is here so that the
             // one path that could ever change never panics on the render
             // thread.

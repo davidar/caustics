@@ -50,6 +50,7 @@ use crate::feeders::pipe::{APPS_SIDECAR, GLYPHS_SIDECAR};
 use crate::model::Model;
 use crate::strings::Strings;
 use caustics_host::images::Images;
+use caustics_host::text::Covers;
 
 /// The dock's default pinned app ids, in the order they appear, compiled in
 /// because the bar has no configuration file (docs/architecture.md, *Configuration is
@@ -207,21 +208,20 @@ pub struct Facts {
     /// no theme has is answered with **silence**, so this is the only thing
     /// that stops the same dead name being asked about on every build.
     icons_asked: HashSet<String>,
-    /// The strings a `REQ_COVER` has gone out for (docs/abi.md, *Request*). One
-    /// question per distinct string for the life of the process, bounded by
-    /// [`MAX_COVERED`] because a title is whatever an application puts there.
-    covered: HashSet<String>,
-    /// Whether that bound has been reached and witnessed.
-    cover_capped: bool,
+    /// The strings a `REQ_COVER` has gone out for (docs/abi.md, *Request*):
+    /// one question per distinct string for the life of the glyph space,
+    /// bounded because a title is whatever an application puts there. The
+    /// bookkeeping is `caustics_host::text::Covers`, the canvas's too.
+    covers: Covers,
     /// What the caustic wants resolved: `(sidecar, REQ_*, name)`, drained by
     /// the embassy through `Feeders::request`.
     requests: Vec<(&'static str, u32, String)>,
 }
 
-/// Distinct strings [`Facts::ask_cover`] will ever ask about — the bar's own
-/// bound on a question whose answer is another process's memory. The pipe caps
-/// what it remembers at 4096 (docs/abi.md, *Request*); this is well inside that.
-pub const MAX_COVERED: usize = 1024;
+/// Distinct strings [`Facts::ask_cover`] will ever ask about
+/// (`caustics_host::text::MAX_COVERED`).
+#[cfg(test)]
+pub const MAX_COVERED: usize = caustics_host::text::MAX_COVERED;
 
 impl Default for Facts {
     fn default() -> Self {
@@ -256,8 +256,7 @@ impl Facts {
             apps_asked: HashSet::new(),
             glyphs_asked: HashSet::new(),
             icons_asked: HashSet::new(),
-            covered: HashSet::new(),
-            cover_capped: false,
+            covers: Covers::new(GLYPHS_SIDECAR, wire::REQ_COVER),
             requests: Vec::new(),
         };
         for name in slots {
@@ -685,7 +684,7 @@ impl Facts {
         self.glyphs_asked.clear();
         // A `Font` frame means `caustics-glyphs` restarted or switched fonts, so every
         // codepoint it had covered must be asked for again.
-        self.covered.clear();
+        self.covers.forget();
         self.rebuild_arena();
     }
 
@@ -899,27 +898,17 @@ impl Facts {
     /// The embassy has the bytes — they are in its own strings buffer — and
     /// sends them as they are. It decodes nothing: which codepoints are
     /// missing, which face has them and whether any face does is entirely
-    /// `caustics-glyphs`' business.
+    /// `caustics-glyphs`' business. [`Facts::cover`] is the production path;
+    /// this is its second half, for the tests.
+    #[cfg(test)]
     pub fn ask_cover(&mut self, text: &str) -> bool {
-        if text.is_empty() || self.covered.contains(text) {
-            return false;
-        }
-        if self.covered.len() >= MAX_COVERED {
-            // A bar whose titles have produced a thousand distinct unshapeable
-            // strings is looking at a font that is missing a script, not at a
-            // title: one witness, and it stops asking.
-            if !self.cover_capped {
-                self.cover_capped = true;
-                tracing::info!(
-                    "text: {MAX_COVERED} strings have been sent for cover; not asking again"
-                );
+        match self.covers.ask(text) {
+            Some(request) => {
+                self.requests.push(request);
+                true
             }
-            return false;
+            None => false,
         }
-        self.covered.insert(text.to_owned());
-        self.requests
-            .push((GLYPHS_SIDECAR, wire::REQ_COVER, text.to_owned()));
-        true
     }
 
     /// An `ACT_COVER` (docs/abi.md, *The action ring*): the bytes of the block the caustic flagged, read
@@ -932,15 +921,11 @@ impl Facts {
     /// and without the source word it would never be asked about). The wire carries a name as UTF-8 capped at `MAX_NAME_LEN`; a
     /// string past that loses its tail's glyphs and nothing else.
     pub fn cover(&mut self, cover: Cover) -> Option<String> {
-        let mut text = self.bytes_at(cover.source, cover.off, cover.len)?;
-        if text.len() > wire::MAX_NAME_LEN {
-            let cut = (0..=wire::MAX_NAME_LEN)
-                .rev()
-                .find(|at| text.is_char_boundary(*at))
-                .unwrap_or(0);
-            text.truncate(cut);
-        }
-        self.ask_cover(&text).then_some(text)
+        let text = self.bytes_at(cover.source, cover.off, cover.len)?;
+        let asked = self.covers.ask(&text)?;
+        let line = asked.2.clone();
+        self.requests.push(asked);
+        Some(line)
     }
 
     /// One name the caustic wants resolved, as the `(range, REQ_*, source)` an

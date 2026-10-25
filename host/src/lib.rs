@@ -8,7 +8,10 @@
 //! all; and a set of sidecar child processes whose stdout is the wire
 //! (docs/abi.md, *The wire*). This crate is the mechanism of those four, and
 //! the small CPU-side tables that go with them: the image slots, the literal
-//! table, the witness printer and the `/proc` reader.
+//! table, the witness printer and the `/proc` reader. Beside them is the text
+//! engine's half that a host holds ([`text`]): the engine's buffers filled by
+//! a glyphs sidecar's `Bytes`, the cover requests, and the watchdog round the
+//! pass that shapes.
 //!
 //! **The rule for what belongs here: mechanism, never policy.** Nothing in
 //! this crate names an entry point, a tunable, a sidecar binary or one of a
@@ -37,4 +40,5 @@ pub mod proc;
 pub mod program;
 pub mod strings;
 pub mod surface;
+pub mod text;
 pub mod witness;

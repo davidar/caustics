@@ -25,3 +25,8 @@ anyhow = "1.0.104"
 # `sysconf` for the `/proc` reader's tick and page sizes.
 libc = "0.2.189"
 tracing = "0.1.44"
+# The shaper's buffer layouts (`ShapeParams`, `ShapeFont`, the arena's
+# front block) for the engine's buffers a host holds (`text`).
+punchcutter-shape.workspace = true
+# An `Answer` frame's bytes are serialised into a zeroing buffer (`pipe`).
+zeroize = "1.9.1"

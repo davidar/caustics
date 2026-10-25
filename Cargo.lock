@@ -332,10 +332,12 @@ dependencies = [
  "libc",
  "pollster",
  "punchcutter-core",
+ "punchcutter-shape",
  "punchcutter-slang",
  "raw-window-handle",
  "tracing",
  "wgpu",
+ "zeroize",
 ]
 
 [[package]]
