@@ -11,11 +11,12 @@ down when it refuses to run, and sends its log to the journal.
 bar/install.sh
 ```
 
-The script builds the whole workspace in release mode, checks that all eleven
+The script builds the whole workspace in release mode, checks that all fourteen
 binaries came out of *that* build, reads the set's name out of the bar it just
 built (`caustics-bar --abi-hash`), installs the ones that changed into
 `~/.local/lib/caustics-bar/<hash>/`, moves the `~/.local/bin/caustics-bar` symlink on
-to the set atomically, and restarts what changed: when the running bar is
+to the set atomically (and the `caustics-canvas` and `caustics-canvasctl`
+ones beside it; the canvas's unit is canvas/README.md's), and restarts what changed: when the running bar is
 this set's and its own binary is unchanged, the unit stays up and only the
 sidecars whose binaries changed are ended (the bar respawns each on the new
 code, and the panel never blinks); otherwise the unit restarts and the script

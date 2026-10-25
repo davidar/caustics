@@ -106,7 +106,8 @@ writes frames; `bar/abi/examples/rows_demo.rs` is one.
 
 Both contracts are hashed at build time into one number that every binary
 carries. A sidecar's first frame says its hash, and the bar refuses a sidecar
-built against another one. So the bar and its ten sidecars are **one set**:
+built against another one. So the bar, its ten sidecars, the canvas host,
+its sidecar and its client are **one set**:
 `bar/install.sh` builds them together and installs them into a directory
 named after the hash, with `~/.local/bin/caustics-bar` a symlink into it. A
 running bar keeps its own set's sidecars even after a newer set is installed.
@@ -151,7 +152,7 @@ systemctl --user enable --now caustics-bar
 journalctl --user -u caustics-bar -f                        # every decision is one line
 ```
 
-`bar/install.sh` builds the workspace in release mode, checks that all eleven
+`bar/install.sh` builds the workspace in release mode, checks that all fourteen
 binaries came from that build, installs them into
 `~/.local/lib/caustics-bar/<abi-hash>/`, moves the symlink, restarts the unit if
 it is installed, and prints the bar's first `set:` and `health` lines.
@@ -283,7 +284,10 @@ ray-splat ground truth beside the shader's approximation.
 - docs/testing.md — the tests, the oracle, the nested gate and the VM target.
 - docs/roadmap.md — what is not built yet.
 - docs/canvas.md — the wallpaper, idle fade, lock screen, polkit prompt and
-  greeter as one caustic on a second host (design, not yet built).
+  greeter as one caustic on a second host (the wallpaper is built; the rest
+  is design).
+- `canvas/README.md` — the canvas host as a user unit: the wallpaper, its
+  socket and its client.
 - `caustics/README.md` — the shader files, the tunables, hot reload.
 - `bar/systemd/README.md` — the install, the unit, the sidecars, the journal.
 - `sysmon/README.md` — the charts' sidecar, and the lease it holds on NVML.

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Install the bar and its sidecars as one **set** (docs/architecture.md, *The ABI*).
 #
-# A set is a directory: `<prefix>/lib/caustics-bar/<abi-hash>/` holds the eleven
-# binaries, and `<prefix>/bin/caustics-bar` is a symlink into it. The bar resolves
+# A set is a directory: `<prefix>/lib/caustics-bar/<abi-hash>/` holds the
+# fourteen binaries, and `<prefix>/bin/caustics-bar` is a symlink into it, as
+# are `caustics-canvas` and `caustics-canvasctl`. The bar resolves
 # its own path (`current_exe`) and looks for its sidecars beside itself, so a
 # bar started through that link runs its own set's sidecars — and a sidecar
 # that crashes respawns out of the same set even after a newer one is
@@ -39,9 +40,12 @@ DROPIN=""
 UNIT=caustics-bar
 DROPIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT.service.d"
 
-# The eleven, in the order the bar names them: itself, then `SIDECARS` in
-# `bar/src/feeders/pipe.rs`. A name here that is not there is a binary nothing
-# starts; a name there that is not here is a sidecar the bar reports absent.
+# The fourteen, in the order the hosts name them: the bar, then `SIDECARS` in
+# `bar/src/feeders/pipe.rs`; then the canvas host, its own sidecar (`SIDECARS`
+# in `canvas/src/sidecars.rs`, whose other is `caustics-reload`, above) and
+# its client. A name here that is not in a host's list is a binary nothing
+# starts; a name in a list that is not here is a sidecar its host reports
+# absent.
 BINARIES=(
     caustics-bar
     caustics-sysmon
@@ -54,7 +58,15 @@ BINARIES=(
     caustics-apps
     caustics-glyphs
     caustics-reload
+    caustics-canvas
+    caustics-wallpaper
+    caustics-canvasctl
 )
+
+# The binaries something outside the set starts by name: the bar's unit, the
+# canvas's unit, and the scripts that drive the canvas. Each is a symlink
+# into the set, moved with the bar's.
+LINKED=(caustics-bar caustics-canvas caustics-canvasctl)
 
 die() { printf 'install.sh: %s\n' "$*" >&2; exit 1; }
 say() { printf '  %s\n' "$*"; }
@@ -152,18 +164,20 @@ else
     say "installed ${#changed[@]} of ${#BINARIES[@]} into $SET: ${changed[*]}"
 fi
 
-# The link moves last, and atomically: `ln -sfn` on to an existing symlink is
+# The links move last, and atomically: `ln -sfn` on to an existing symlink is
 # two syscalls and a window in which `~/.local/bin/caustics-bar` is a link into a
 # directory that does not exist yet. A temporary name and a rename is one.
-ln -sfn "$SET/caustics-bar" "$PREFIX/bin/caustics-bar.installing" ||
-    die "could not make the link"
-mv -Tf "$PREFIX/bin/caustics-bar.installing" "$PREFIX/bin/caustics-bar" ||
-    die "could not move the link"
-say "$PREFIX/bin/caustics-bar -> $(readlink "$PREFIX/bin/caustics-bar")"
+for name in "${LINKED[@]}"; do
+    ln -sfn "$SET/$name" "$PREFIX/bin/$name.installing" ||
+        die "could not make the link for $name"
+    mv -Tf "$PREFIX/bin/$name.installing" "$PREFIX/bin/$name" ||
+        die "could not move the link for $name"
+    say "$PREFIX/bin/$name -> $(readlink "$PREFIX/bin/$name")"
+done
 
 # Older sets are left alone, deliberately: a bar that is still running holds
 # its own set's path, and a sidecar of its that crashes respawns out of it. A
-# set is small (eleven binaries) and removing one by hand is `rm -r` on a
+# set is small (fourteen binaries) and removing one by hand is `rm -r` on a
 # directory named after a hash nothing is running.
 kept=$(find "$PREFIX/lib/caustics-bar" -mindepth 1 -maxdepth 1 -type d | wc -l)
 [[ "$kept" -gt 1 ]] && say "$((kept - 1)) older set(s) kept; a running bar holds its own"

@@ -25,8 +25,8 @@ process and its caustic, declared once in Rust with the Slang side generated
 and checked against Slang's reflection; and the wire between the bar and its
 sidecars, length-prefixed binary frames read by a reader that skips what it
 does not know. One hash over both, carried by every binary and checked on a
-sidecar's first frame. `bar/install.sh` installs the bar and its ten sidecars
-as one set named by that hash.
+sidecar's first frame. `bar/install.sh` installs the bar, its ten sidecars,
+the canvas host, its sidecar and its client as one set named by that hash.
 
 **The sidecars.** `caustics-sysmon` (CPU, temperature, memory, network, disk and
 GPU charts, with a guard that never wakes a suspended NVIDIA GPU), `caustics-tray`
@@ -42,6 +42,17 @@ raise its application), `caustics-apps` (desktop entries and colour icons),
 demand) and `caustics-reload` (the shader compiler, Slang in its own
 process, with a cache keyed on the bytes it compiles). Every D-Bus signal
 stream is drained by a task that awaits nothing else.
+
+**The canvas** (`caustics-canvas`, docs/canvas.md). A second host of a
+caustic on the same mechanism (`caustics-host`): the wallpaper on every
+output, on the background layer with fractional scale and a viewport,
+cross-faded between two source pictures at an alpha the caustic computes
+from `CLOCK_BOOTTIME`, so a fade lands where the clock says across a
+suspend; hot-reloaded from `caustics/canvas*.slang` like the bar. Its
+sidecar `caustics-wallpaper` owns a control socket, decodes PNG and JPEG and
+fits them to the largest output; `caustics-canvasctl` is the client for
+scripts. Dim and undim cross the wire and darken the wallpaper; the overlay
+that will carry them over windows is not built yet.
 
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout
