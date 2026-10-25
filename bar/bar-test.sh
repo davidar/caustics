@@ -4309,6 +4309,54 @@ if [[ "$CANVAS_RUN" -eq 1 ]]; then
     fi
 fi
 
+say "29b. a JPEG XL picture shows, and a broken one is the client's error"
+if [[ "$CANVAS_RUN" -eq 1 ]] && ! command -v magick >/dev/null 2>&1; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "no magick here to write a JPEG XL with"
+    SKIPS=$((SKIPS + 1))
+elif [[ "$CANVAS_RUN" -eq 1 ]]; then
+    # Solid green, lossless, 64x40 like the PNGs; and its first half, which
+    # ends before the picture does.
+    magick -size 64x40 xc:'#00ff00' -quality 100 "$SHOTS/canvas-green.jxl"
+    head -c "$(($(stat -c %s "$SHOTS/canvas-green.jxl") / 2))" "$SHOTS/canvas-green.jxl" \
+        >"$SHOTS/canvas-broken.jxl"
+    to_target "$SHOTS/canvas-green.jxl" canvas-green.jxl
+    to_target "$SHOTS/canvas-broken.jxl" canvas-broken.jxl
+    shows_before=$(canvas_count "canvas: show ")
+    reply=$(canvasctl show '"$T_HOME/canvas-green.jxl"' 2>&1)
+    if [[ $? -eq 0 ]]; then
+        pass "caustics-canvasctl show of a JPEG XL exited 0"
+    else
+        fail "caustics-canvasctl show of a JPEG XL: $reply"
+    fi
+    if wait_until "canvas: show" 30 "canvas_more 'canvas: show ' $shows_before"; then
+        pass "$(canvas_last 'canvas: show ' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the caustic never saw the JPEG XL's show"
+    fi
+    shot canvas-green.png
+    got=($(canvas_mean canvas-green.png))
+    if ((got[1] >= 240 && got[0] <= 15 && got[2] <= 15)); then
+        pass "the output is the JPEG XL's green: mean ${got[*]}"
+    else
+        fail "the output is ${got[*]}, not the JPEG XL's green"
+    fi
+    reply=$(canvasctl show '"$T_HOME/canvas-broken.jxl"' 2>&1)
+    if [[ $? -eq 1 && "$reply" == *"JPEG XL"* ]]; then
+        pass "a cut-short JPEG XL is refused with the decoder's reason: $reply"
+    else
+        fail "a cut-short JPEG XL was not refused as the client's error: $reply"
+    fi
+    # Blue again, cut, as step 29 left it: the steps after read it.
+    shows_before=$(canvas_count "canvas: show ")
+    canvasctl show '"$T_HOME/canvas-blue.png"' >/dev/null 2>&1 ||
+        fail "caustics-canvasctl show of the blue picture again failed"
+    if wait_until "canvas: show" 30 "canvas_more 'canvas: show ' $shows_before"; then
+        pass "blue again for the steps after"
+    else
+        fail "the caustic never saw the blue picture shown again"
+    fi
+fi
+
 say "30. a canvas tunables edit hot-reloads the canvas and not the bar"
 if [[ "$CANVAS_RUN" -eq 1 ]]; then
     swaps_before=$(canvas_count "modules, swapped")
