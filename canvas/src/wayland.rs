@@ -471,7 +471,7 @@ impl Canvas {
                 Some(target) => {
                     if gpu.resize(target, width, height) {
                         tracing::info!(
-                            "output {}: {} {width}x{height} px",
+                            "output {}: {width}x{height} px for the {}",
                             pane.name,
                             pane.role.name()
                         );
@@ -484,10 +484,10 @@ impl Canvas {
                     match unsafe { gpu.attach(display, surface, width, height) } {
                         Ok(target) => {
                             tracing::info!(
-                                "output {}: {} {width}x{height} px at scale {}/120",
+                                "output {}: {width}x{height} px at scale {}/120 for the {}",
                                 pane.name,
-                                pane.role.name(),
-                                pane.scale
+                                pane.scale,
+                                pane.role.name()
                             );
                             pane.target = Some(target);
                         }
@@ -516,10 +516,10 @@ impl Canvas {
         // outlive the target, and the device is dropped after every target.
         let (mut gpu, target) = unsafe { Gpu::new(display, surface, width, height) }?;
         tracing::info!(
-            "output {}: {} {width}x{height} px at scale {}/120; the device is up",
+            "output {}: {width}x{height} px at scale {}/120 for the {}; the device is up",
             pane.name,
-            pane.role.name(),
-            pane.scale
+            pane.scale,
+            pane.role.name()
         );
         for slot in 0..2u32 {
             if let Some(image) = self.unplaced[slot as usize].take() {
