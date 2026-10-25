@@ -16,8 +16,9 @@
 //!
 //! - it is for **this bar's swapchain format** (the format word against the
 //!   one the device negotiated; SPIR-V bakes the storage-image format in);
-//! - it is the **caustic's entry points**, in order, by name, one each
-//!   ([`ENTRIES`]);
+//! - it is the **caustic's entry points**, in order, by name, one each (the
+//!   list the host passes to [`Modules::new`]; the bar's is the ABI crate's
+//!   `ENTRIES`);
 //! - nothing else. The bindings are `Gpu::reload_all`'s check and the SPIR-V
 //!   is the device's.
 //!
@@ -27,8 +28,7 @@
 
 use punchcutter_slang::Reflection;
 
-use crate::abi::ENTRIES;
-use crate::abi::wire::{Module, ModuleAssembly, ModuleChunk};
+use caustics_bar_abi::wire::{Module, ModuleAssembly, ModuleChunk};
 
 /// What one `Module` frame did.
 pub enum Collected {
@@ -46,20 +46,17 @@ pub enum Collected {
     Refused(String),
 }
 
-/// A whole generation: [`ENTRIES`]`.len()` modules, in order, checked.
+/// A whole generation: one module per entry point, in order, checked.
 pub struct Ready {
     pub generation: u32,
     modules: Vec<Module>,
 }
 
 impl Ready {
-    /// The SPIR-V, in the order `Gpu::reload_all` takes it — which is
-    /// [`ENTRIES`]' order, which is dispatch order.
-    pub fn spirv(&self) -> [&[u8]; ENTRIES.len()] {
-        let slices: Vec<&[u8]> = self.modules.iter().map(|m| m.spirv.as_slice()).collect();
-        slices
-            .try_into()
-            .expect("a ready generation is one module per entry point")
+    /// The SPIR-V, in the order `Gpu::reload_all` takes it, which is the
+    /// entry list's order, which is dispatch order.
+    pub fn spirv(&self) -> Vec<&[u8]> {
+        self.modules.iter().map(|m| m.spirv.as_slice()).collect()
     }
 
     /// The new caustic's reflection: the bindings `Gpu::reload_all` checks
@@ -100,8 +97,10 @@ impl Ready {
 }
 
 /// The generation being collected, and the program it has to be for.
-#[derive(Default)]
 pub struct Modules {
+    /// The program's entry points, in dispatch order: what a generation has
+    /// to consist of, by name and by index.
+    entries: &'static [&'static str],
     /// `wire::format_code` of the define the device's swapchain format
     /// selects. `None` until the device is up, which is also until the bar has
     /// asked for a program at all.
@@ -118,8 +117,15 @@ pub struct Modules {
 }
 
 impl Modules {
-    pub fn new() -> Modules {
-        Modules::default()
+    /// A collector for a program of these entry points, in this order.
+    pub fn new(entries: &'static [&'static str]) -> Modules {
+        Modules {
+            entries,
+            want: None,
+            generation: 0,
+            have: Vec::new(),
+            partial: ModuleAssembly::default(),
+        }
     }
 
     /// The program this bar can run, learned when the device comes up. Until
@@ -150,7 +156,7 @@ impl Modules {
             return Collected::Waiting {
                 generation,
                 have: self.have.iter().flatten().count(),
-                count: ENTRIES.len(),
+                count: self.entries.len(),
             };
         };
         if module.format != want {
@@ -159,23 +165,23 @@ impl Modules {
                 module.generation, module.format
             ));
         }
-        if module.count as usize != ENTRIES.len() {
+        if module.count as usize != self.entries.len() {
             return Collected::Refused(format!(
                 "generation {} has {} entry points and this bar runs {}",
                 module.generation,
                 module.count,
-                ENTRIES.len()
+                self.entries.len()
             ));
         }
         let index = module.index as usize;
         // `wire::read` already bounds `index < count`, so this only fires if
         // the two ends' entry lists disagree — a sidecar from another build.
-        if ENTRIES.get(index) != Some(&module.name.as_str()) {
+        if self.entries.get(index) != Some(&module.name.as_str()) {
             return Collected::Refused(format!(
                 "generation {}'s entry point {index} is {:?} and this bar's is {:?}",
                 module.generation,
                 module.name,
-                ENTRIES.get(index).copied().unwrap_or("none")
+                self.entries.get(index).copied().unwrap_or("none")
             ));
         }
 
@@ -194,13 +200,13 @@ impl Modules {
     fn start(&mut self, module: Module, dropped: Option<usize>) -> Collected {
         let stale = self.generation;
         self.generation = module.generation;
-        self.have = (0..ENTRIES.len()).map(|_| None).collect();
+        self.have = (0..self.entries.len()).map(|_| None).collect();
         let index = module.index as usize;
         self.have[index] = Some(module);
         if let Some(dropped) = dropped {
             tracing::info!(
                 "modules: generation {stale} was abandoned at {dropped}/{} by generation {}",
-                ENTRIES.len(),
+                self.entries.len(),
                 self.generation
             );
         }
@@ -210,11 +216,11 @@ impl Modules {
     /// Whole yet?
     fn finish(&mut self) -> Collected {
         let have = self.have.iter().flatten().count();
-        if have < ENTRIES.len() {
+        if have < self.entries.len() {
             return Collected::Waiting {
                 generation: self.generation,
                 have,
-                count: ENTRIES.len(),
+                count: self.entries.len(),
             };
         }
         let modules: Vec<Module> = std::mem::take(&mut self.have)

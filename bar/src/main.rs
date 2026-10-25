@@ -28,7 +28,6 @@ mod feeders;
 mod gpu;
 mod health;
 mod model;
-mod modules;
 /// The oracle: the caustic's model passes run headless on the machine's own GPU. Test-only, and
 /// gated on `CAUSTICS_BAR_ORACLE=1` inside.
 #[cfg(test)]

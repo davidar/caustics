@@ -1,6 +1,7 @@
 use super::*;
 
-use crate::abi::wire::{WIRE_MAX_BODY, format_code};
+use caustics_bar_abi::ENTRIES;
+use caustics_bar_abi::wire::{WIRE_MAX_BODY, format_code};
 
 const RGBA8: &str = "DST_FORMAT_RGBA8";
 
@@ -28,7 +29,7 @@ fn module(generation: u32, index: usize, format: u32) -> Module {
 }
 
 fn collecting() -> Modules {
-    let mut modules = Modules::new();
+    let mut modules = Modules::new(&ENTRIES);
     modules.expect(format_code(RGBA8));
     modules
 }
@@ -104,7 +105,7 @@ fn a_module_arriving_in_pieces_completes_on_the_last() {
     let format = format_code(RGBA8);
     let mut big = module(5, 0, format);
     big.spirv = vec![0x7fu8; 4096];
-    let chunks = big.chunks(size_of::<crate::abi::wire::ModuleHeader>() + 512);
+    let chunks = big.chunks(size_of::<caustics_bar_abi::wire::ModuleHeader>() + 512);
     assert!(chunks.len() > 4, "{} pieces", chunks.len());
 
     for (at, chunk) in chunks.iter().enumerate() {
@@ -166,7 +167,7 @@ fn a_generation_for_another_program_is_refused_and_never_held() {
     let format = format_code(RGBA8);
 
     // Before the device has a format there is nothing to compare against.
-    let mut cold = Modules::new();
+    let mut cold = Modules::new(&ENTRIES);
     assert!(matches!(
         cold.collect(one(module(1, 0, format))),
         Collected::Refused(_)

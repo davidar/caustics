@@ -83,8 +83,8 @@ use crate::feeders::{Feeders, pipe};
 use crate::gpu::Gpu;
 use crate::health::{self, Health};
 use crate::model::{Action, Model, Update, Updates};
-use crate::modules::{Collected, Modules};
 use caustics_host::images::Images;
+use caustics_host::modules::{Collected, Modules};
 use caustics_host::witness::Printer;
 
 /// Which screen edge the bar takes. `FrameInputs::edge` carries it to the
@@ -547,7 +547,7 @@ impl Bar {
             font: None,
             curves_landed: false,
             pending_bytes: Vec::new(),
-            modules: Modules::new(),
+            modules: Modules::new(&abi::ENTRIES),
             images: Images::new(),
             preview_pending: false,
             preview_size: [0, 0],
@@ -834,7 +834,16 @@ impl Bar {
             return;
         };
         let started = Instant::now();
-        let [build, compose, shape, apply, visibility, sample, draw] = ready.spirv();
+        let spirv = ready.spirv();
+        // `Modules` was made with `abi::ENTRIES`, so a ready generation is
+        // one module per entry point and this pattern always matches.
+        let &[build, compose, shape, apply, visibility, sample, draw] = spirv.as_slice() else {
+            tracing::error!(
+                "sidecar {sidecar}: generation {generation} has {} modules; keeping the old bar",
+                spirv.len()
+            );
+            return;
+        };
         match gpu.reload_all(
             &reflection,
             build,

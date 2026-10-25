@@ -29,6 +29,7 @@
 //! the bar ran before it was a client, moved rather than rewritten.
 
 pub mod images;
+pub mod modules;
 pub mod proc;
 pub mod strings;
 pub mod witness;
