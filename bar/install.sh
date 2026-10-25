@@ -45,8 +45,8 @@ DROPIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT.service.d"
 # in `canvas/src/sidecars.rs`, whose other is `caustics-reload`, above), its
 # client, `caustics-polkit`, the canvas's polkit sink, which the canvas does
 # not start until it can show a prompt (polkit/README.md), and
-# `caustics-lock`, its lock sidecar, which it does not start until it has
-# lock surfaces (lock/README.md). A name here
+# `caustics-lock`, its lock sidecar, which a drop-in adds once the previous
+# locker is unhooked (canvas/README.md, *Enabling the lock*). A name here
 # that is not in a host's list is a binary nothing starts; a name in a list
 # that is not here is a sidecar its host reports absent.
 BINARIES=(

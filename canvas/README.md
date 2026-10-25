@@ -2,10 +2,12 @@
 
 caustics-canvas is the canvas host (docs/canvas.md): the wallpaper on every
 output, drawn by a caustic (`caustics/canvas.slang`) and cross-faded on
-command, the idle fade over every window, and the prompt a sink sidecar
-asks for (a polkit authentication). It is a layer-shell client on the
+command, the idle fade over every window, the prompt a sink sidecar
+asks for (a polkit authentication), and the lock screen. It is a layer-shell client on the
 **background** layer, on the **overlay** layer while a dim is up and on the
-**top** layer while a prompt is, and replaces swaybg and chayang. In a session it runs as a **systemd user unit**,
+**top** layer while a prompt is, and an `ext_session_lock_v1` client while
+the session is locked; it replaces swaybg and chayang, and can replace
+swaylock. In a session it runs as a **systemd user unit**,
 `caustics-canvas.service`, which restarts it whatever it exits with and sends
 its log to the journal.
 
@@ -31,7 +33,7 @@ draw over each other.
 - `Restart=always`, `RestartSec=1`, at most ten starts a minute, and **no
   `RestartPreventExitStatus`**: unlike the bar's, this unit restarts on a
   refusal and on a lost device too, because the canvas is where the lock
-  screen will be drawn and a session must always get it back.
+  screen is drawn and a session must always get it back.
 - Exit codes are the bar's: 1 a protocol error or a failed frame, 2 a
   refusal (an argument, a discrete GPU), 3 the device gone.
 - `RUST_LOG=info`; the journal gets stdout and stderr, the sidecars' lines
@@ -128,6 +130,63 @@ then `systemctl --user daemon-reload && systemctl --user restart
 caustics-canvas`. Removing the file (and starting the previous agent again)
 undoes it.
 
+## The lock
+
+`caustics-lock` (lock/README.md) is the session's locker as a sidecar of
+the canvas: it locks on logind's `Lock` signal (`loginctl lock-session`, an
+idle timer, the lid) or `caustics-canvasctl lock`, and the canvas puts a
+lock surface on every output, draws the wallpaper darkened by
+`PROMPT_DARKEN` on it, and the PAM conversation's panel when it asks. Only
+a conversation PAM says succeeded unlocks; Escape starts a fresh one, and
+the screen is never dismissed. While locked, the prompt is the lock's
+alone: another sink asking (a polkit request) is told no at once. A dim up
+when the lock comes is ended.
+
+```sh
+caustics-canvasctl lock                 # lock now
+caustics-canvasctl lock --wait && systemctl suspend   # the before-sleep hold
+caustics-canvasctl status               # the lock's line: ok locked=yes attempts=0
+```
+
+If the compositor ends the lock or will not give it (another locker holds
+it), the canvas says so in one line and exits 1, and the unit restarts it.
+If the canvas dies while locked, the compositor keeps the session locked,
+and the restarted canvas's lock sidecar takes the lock again on start
+(logind's `LockedHint`).
+
+### Enabling the lock
+
+Like the polkit agent, `caustics-lock` is installed with the set but is
+**not** in the canvas's default sidecars: two lockers on one session fight
+for the lock, and a session usually has one already, often hooked to
+logind's `Lock` signal by an idle daemon (`swayidle`'s `lock` event, say)
+or a unit. To take it on:
+
+1. **Unhook the previous locker from the lock signal** first (the idle
+   daemon's `lock` and `before-sleep` lines, or whatever unit runs it), so
+   that one `loginctl lock-session` starts one locker. Keep it
+   **installed**.
+2. Name the canvas's sidecars in a drop-in, the default set and the lock
+   (with `caustics-polkit` too if it is taken on, as one list):
+
+   ```ini
+   # ~/.config/systemd/user/caustics-canvas.service.d/lock.conf
+   [Service]
+   Environment=CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload caustics-glyphs caustics-lock"
+   ```
+
+   then `systemctl --user daemon-reload && systemctl --user restart
+   caustics-canvas`.
+3. Point the idle daemon's lock and before-sleep commands at
+   `caustics-canvasctl lock` and `caustics-canvasctl lock --wait`, or leave
+   them to logind's signal, which the sidecar hears itself.
+4. Lock and unlock once by hand, then **through a suspend**, before the
+   previous locker is removed (docs/canvas.md, *Order*). Until then it is a
+   drop-in removal and a hook away.
+
+The PAM service is the sidecar's own setting, `CAUSTICS_LOCK_PAM_SERVICE`
+in the same drop-in (lock/README.md, *Settings*).
+
 ## The journal lines worth knowing
 
 ```
@@ -149,6 +208,15 @@ prompt: conversation 1 answered; told to caustics-polkit         Return
 prompt: conversation 1: an error line after the answer (attempts 1)
 prompt: conversation 1 done, success
 prompt: conversation 1 dismissed; told to caustics-polkit        Escape
+lock: ext_session_lock_manager_v1 is bound                       at start
+lock: caustics-lock asked to lock; locking
+lock: ext_session_lock_v1 asked for, with 1 lock surfaces
+output winit: lock surface configured …                          one per output, while locked
+lock: the compositor locked the session; told to caustics-lock
+seat: the keyboard is on the lock (output winit)
+lock: caustics-lock asked to unlock; unlocking
+lock: the session is unlocked; told to caustics-lock
+exit: lock: the compositor ended caustics-lock's session lock …  `finished`: exit 1
 ```
 
 No line carries what was typed, how much was typed, or a prompt's message.

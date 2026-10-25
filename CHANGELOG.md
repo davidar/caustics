@@ -117,6 +117,22 @@ canvas events, `locked` and `unlocked`, moved the ABI hash, so the whole
 set (now sixteen binaries) is rebuilt and installed together; the canvas
 does not start the sidecar until it has lock surfaces.
 
+**The canvas's lock surfaces.** The canvas host now locks: the lock
+sidecar's `Lock` takes `ext_session_lock_v1`, a lock surface goes on every
+output (and on any that appears while locked), opaque, the wallpaper
+darkened by `PROMPT_DARKEN` with the lock's prompt panel on it, and the
+host tells the sidecar `locked` when the compositor confirms and
+`unlocked` once the compositor has read the unlock. Only the sidecar that
+locked unlocks. While locked the prompt is drawn on the lock surfaces and
+is the lock's alone (another sink is told no at once), and a dim up at the
+lock is ended. The compositor ending or refusing the lock is fatal, so the
+unit restarts the host; a host that dies locked leaves the session locked,
+and a restarted host sends its lock before its device is up. The lock
+sidecar stays out of the canvas's default set: canvas/README.md says how
+to take it on in place of the session's previous locker. No wire or
+buffer contract changed. The VM target's set upload gained the canvas's
+five binaries, so its install step's sixteen hold there.
+
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout
 applied on the GPU from the font's own tables, both as Slang modules the

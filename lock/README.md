@@ -16,9 +16,11 @@ No arguments. The first frame on stdout is `Hello`; then `Lock` and `Prompt`
 frames, `CanvasEvent` and `Answer` frames are read from stdin, every witness
 is one line on stderr, and the process exits when stdin closes.
 
-**The host's half is not built**: the canvas does not take
-`ext_session_lock_v1` or say `locked` yet, so this sidecar is not in its
-default set (*In the canvas's set*).
+The host's half is the canvas's lock surfaces (`canvas/src/lock.rs`): it
+takes `ext_session_lock_v1` on this sidecar's `LOCK_LOCK`, draws the
+conversation on a lock surface per output, and says `locked` and
+`unlocked`. This sidecar is not in the canvas's default set; a drop-in
+adds it (*In the canvas's set*).
 
 ## Behaviour
 
@@ -81,17 +83,23 @@ The dry run still speaks to logind if a system bus answers, so a test points
 bus, or without a session on it, there is **no logind**: one witness, no
 signals, no hint, and the socket's `lock` as the only trigger. The tests
 (`tests/dry_run.rs`) and the nested gate run exactly that, under
-`bar/abi/examples/fake_host.rs` in the host's place (docs/testing.md).
+`bar/abi/examples/fake_host.rs` in the host's place, and the nested gate
+again under the canvas host itself, locking the nested compositor
+(docs/testing.md).
 
 ## In the canvas's set
 
 `caustics-lock` is installed with the rest of the set by `bar/install.sh`.
 The canvas host starts the sidecars `$CAUSTICS_SIDECARS` names on its unit,
-else its compiled set (`canvas/src/sidecars.rs`); once the host has its lock surfaces, a unit drop-in that
-adds `caustics-lock` to that list is how it is enabled. **It is not started
-by default yet**: until the host can lock, a `LOCK_LOCK` is a frame with no
-consumer and a `lock --wait` never returns `locked`, so the session's
-previous locker stays its locker (docs/canvas.md, *Order*).
+else its compiled set (`canvas/src/sidecars.rs`). **It is not started by
+default**: two lockers on one session fight for the lock (the compositor
+gives it to one and tells the other `finished`, which the canvas host exits
+on), and a session usually has one hooked to logind's `Lock` signal
+already. A unit drop-in that adds `caustics-lock` to the list is how it is
+taken on, after the previous locker is unhooked from that signal, and with
+the previous locker kept installed until this one has locked and unlocked
+through a suspend (canvas/README.md, *Enabling the lock*; docs/canvas.md,
+*Order*).
 
 ## Building
 

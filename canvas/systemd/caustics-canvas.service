@@ -16,7 +16,7 @@ Environment=RUST_LOG=info
 StandardOutput=journal
 StandardError=journal
 # Restart on everything, a lost device (exit 3) included, unlike the bar's
-# unit: the canvas is where the lock screen will be drawn, a session must
+# unit: the canvas is where the lock screen is drawn, a session must
 # always get its canvas back, and a device lost after a resume is exactly
 # when it is needed (docs/canvas.md, *Constraints that survive*).
 Restart=always

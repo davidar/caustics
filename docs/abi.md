@@ -648,7 +648,7 @@ again from the same Rust declarations, and `CanvasBody` is the wire's
 
 | binding (by name) | struct / bytes | writer | reader |
 |---|---|---|---|
-| `params` | `CanvasParams`, 32 B, one per surface (an output's background, its overlay while a dim is up, its prompt pane while a prompt is) | the host, before every frame it draws on that surface | the entries |
+| `params` | `CanvasParams`, 32 B, one per surface (an output's background, its overlay while a dim is up, its prompt pane while a prompt is, its lock surface while the session is locked) | the host, before every frame it draws on that surface | the entries |
 | `facts` | `CanvasFacts`, 144 B | the host, whole, whenever the picture, the dim, the literal pool or the prompt changes | the entries |
 | `state` | `CanvasState`: `wants_redraw`, the dim's depth, the shape pass's threshold, the runs to cover and a witness ring, 1648 B | the caustic | the host, after every frame (the only readback) |
 | `private` | the caustic's own, stride from reflection | the caustic | the caustic; tests by reflection |
@@ -735,7 +735,8 @@ darkened towards `DIM_COLOUR` by the tunable `DIM_DARKEN`, at the dim's
 alpha, premultiplied: transparent where the alpha is 0, and at alpha 1 with
 `DIM_DARKEN` 0 pixel for pixel the background; and transparent while
 `facts.prompt` is not idle, so a prompt shows over a dim. On the prompt's
-pane, the wallpaper darkened by `PROMPT_DARKEN`, opaque, and the panel.
+pane and on a lock surface (both `TARGET_PROMPT`), the wallpaper darkened
+by `PROMPT_DARKEN`, opaque, and the panel while a conversation is up.
 
 **The prompt** is the host's conversation as `facts.prompt` (docs/canvas.md,
 *The prompt core*). **The secret is not in it**: for an echo-off ask the
@@ -1575,8 +1576,12 @@ struct CanvasEventBody { // 16 B
 | 3 | `CANVAS_EVENT_LOCKED` | to the lock sidecar, after its `LOCK_LOCK`: the compositor confirmed the lock and every output has its lock surface (*Lock*) |
 | 4 | `CANVAS_EVENT_UNLOCKED` | to the lock sidecar, after its `LOCK_UNLOCK`: the session is unlocked and the lock surfaces are gone |
 
-`CANVAS_EVENT_LAST` is 4. The host does not say the lock's two yet: the
-lock surfaces are not built; the sidecar is (`lock/README.md`).
+`CANVAS_EVENT_LAST` is 4. The host says the lock's two to the sidecar
+whose `LOCK_LOCK` took the lock: `locked` when the compositor sends
+`ext_session_lock_v1.locked`, and `unlocked` after its `unlock_and_destroy`,
+once a `wl_display.sync` behind it is answered, so the compositor has read
+the unlock (docs/canvas.md, *Surfaces*). A `LOCK_LOCK` while locked is
+answered `locked` again.
 
 The host learns the dim reached its depth from the caustic's readback
 (`CanvasState::dim_reached` for the head's `id`, *The canvas's buffer*), not
@@ -1687,8 +1692,15 @@ struct LockBody {        // 16 B
 
 `LOCK_LAST` is 2. **Nothing else unlocks**: not a signal, not a reload, not
 a compositor event, and not the host on its own; a `LOCK_UNLOCK` is written
-only after a conversation (*Prompt*) that PAM said succeeded. A `LOCK_LOCK`
-while locked is no change. The prompt drawn on the lock surfaces is the
+only after a conversation (*Prompt*) that PAM said succeeded. Only the
+sidecar whose `LOCK_LOCK` took the lock may unlock it; another's
+`LOCK_UNLOCK` is refused with a witness, and so is one while unlocked or
+before the compositor said locked. A `LOCK_LOCK` while locking is no change;
+while locked it is no change to the lock, and the asker is told `locked`
+again (a restarted sidecar waits for it before it asks for a secret); while
+unlocking it waits for the unlock and then locks afresh. While locked the
+host takes prompts from the lock's sidecar alone: another sink's ask is
+answered `ANSWER_CANCELLED` at once. The prompt drawn on the lock surfaces is the
 same conversation as a sink's (*Prompt*, *Answer*), from the same sidecar.
 
 Reader rules: a body other than 16 bytes → skip (length); `command` 0 or

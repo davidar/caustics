@@ -1,13 +1,13 @@
 # The canvas
 
-Steps 0 to 3 of *Order* are built: the host crate, the canvas host with its
+Steps 0 to 4 of *Order* are built: the host crate, the canvas host with its
 wallpaper sidecar (`canvas/`, `wallpaper/`, `caustics/canvas*.slang`;
-canvas/README.md runs it), the fade on its overlay, and the prompt core with
-its polkit sink (`polkit/`, docs/abi.md, *Prompt*, *Answer*). The sink is
-not in the canvas's default set yet; canvas/README.md says how to add it and
-why the default waits. Of step 4, the lock sidecar and the wire it locks
-over are built (`lock/`, docs/abi.md, *Lock*); the lock surfaces are not,
-so nothing starts it yet. The rest is design. The bar's complement: where the bar is a strip along
+canvas/README.md runs it), the fade on its overlay, the prompt core with
+its polkit sink (`polkit/`, docs/abi.md, *Prompt*, *Answer*), and the lock:
+its sidecar (`lock/`), the wire it locks over (docs/abi.md, *Lock*) and the
+host's lock surfaces. Neither sink is in the canvas's default set yet;
+canvas/README.md says how to add each and why the default waits. The
+greeter and what follows it are design. The bar's complement: where the bar is a strip along
 one edge, the canvas is everything else a session paints that is not a
 window. docs/architecture.md is the bar; this document borrows its model
 and says where the canvas departs from it. docs/roadmap.md, *The canvas*,
@@ -144,16 +144,32 @@ neither can be added later.
   the panel on it. While it is up, an overlay that is also up draws nothing,
   so the panel is what shows, and comes back as it was when the prompt
   goes. No decorations and no buttons: the keys are the whole interaction.
-- **`ext-session-lock-v1`**: `lock`, then one lock surface per output, each
-  configured and committed before the compositor sends `locked`; outputs
-  that appear while locked get a surface too; `unlock_and_destroy` only on
-  the lock sidecar's say-so. `finished` (another locker holds the lock, or
-  locking was refused) is reported to the sidecar and never pretended
-  away.
+- **`ext-session-lock-v1`**: `lock`, then at once one lock surface per
+  output, so each can be configured and committed before the compositor
+  sends `locked` (a compositor waits a while for them, then locks with the
+  outputs blank); outputs that appear while locked get a surface too. A lock
+  surface is not a layer surface: it has no layer, namespace or keyboard
+  mode, is configured as it is made, and is never committed without a
+  buffer, so its first commit is its first frame. It is opaque and draws
+  what the top pane draws: the wallpaper darkened by `PROMPT_DARKEN`, and
+  the panel while a conversation is up. `locked` is told to the lock sidecar;
+  `unlock_and_destroy` comes only on that sidecar's say-so, the lock
+  surfaces go with it, and `unlocked` is told once a `wl_display.sync` says
+  the compositor has read it. `finished` (another locker holds the lock,
+  locking was refused, or the compositor ended it) is never pretended
+  away: the host says so in one line and exits 1, and the unit restarts it;
+  the sidecar learns of it by its pipe closing.
 
 The prompt panel is drawn on whichever per-output surface is up at the
-time: the top layer for polkit, the lock surface when locked. So there is
-one dim and one owner of it.
+time: the top layer for polkit, the lock surface when locked. While the
+session is locked no top pane is made: a conversation's raise and lower
+redraw the lock surfaces, and the compositor gives them the keyboard. A dim
+that is up when the lock is asked for is ended (its overlays go, and its
+sidecar is told nothing, as with an undim it sent itself), and the prompt
+core is reserved for the lock's sidecar: another sink's conversation up at
+the lock is dismissed, and another sink's ask while locked is cancelled at
+once, so the lock screen's panel is only ever the lock's. So there is one
+dim and one owner of it.
 
 ### Time
 
@@ -299,8 +315,14 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   logind's `Lock` signal; the lock sidecar asks the host to lock and sets
   `SetLockedHint(true)` when the host reports `locked`, clearing it on
   unlock. On start the sidecar reads `LockedHint` and, if it is set,
-  requests the lock before the host has painted a frame. `caustics-canvasctl
-  lock --wait` returns when the host has said `locked`, the moment the hint
+  requests the lock before the host has painted a frame: the host applies
+  its sidecars' frames from the moment its globals are bound, before its
+  device is up, so the lock goes out at once and the lock surfaces get
+  their swapchains when the device comes, like any pane. The compositor
+  keeps the session locked and blank in between. Only the sidecar that
+  locked may unlock; a lock asked for while locked changes nothing but is
+  answered `locked` again, which is what a restarted sidecar waits for.
+  `caustics-canvasctl lock --wait` returns when the host has said `locked`, the moment the hint
   is set, which is the before-sleep hold. Nothing unlocks but a sink success: not a signal, not a reload, not
   a compositor event.
 - **greet**: the display manager's `default_session.command` runs the host
@@ -335,7 +357,8 @@ process holding a secret is the canvas host, and the bar is not it.
 | what dies | when | correct outcome |
 |---|---|---|
 | the host | unlocked | the compositor's backdrop shows; the unit restarts it; it paints the dim colour until the wallpaper sidecar re-sends the picture |
-| the host | locked | the compositor stays locked and blank; the unit restarts the host; the lock sidecar reads `LockedHint` and re-locks before the first frame |
+| the host | locked | the compositor stays locked (niri keeps the session locked with its lock client dead); the unit restarts the host; the lock sidecar reads `LockedHint` and re-locks before the first frame, and niri gives the new lock `locked` at once in place of the dead one (the nested gate drives the same restart through the socket) |
+| the host | told `finished` | one line and exit 1; the unit restarts it; the lock sidecar's pipe closes, so a waiting `lock --wait` fails, and the restarted sidecar locks again if logind's hint says so |
 | `caustics-wallpaper` | any time | the last picture stays; the host restarts it with backoff; the scheduler's next `show` lands |
 | `caustics-wallpaper` | mid-dim | the overlay goes with it (a dim without its owner is undone, so a crashed sidecar never leaves a dark screen); the picture stays; the host restarts it, and it comes back with no dim |
 | a fade | mid-fade | the waiting client gets EOF on the socket and exits 1; the idle stage locks anyway |
@@ -363,8 +386,8 @@ suspend cycle and a relogin.
    failure denies one action, and the previous agent is one unit edit away.
    The nested gate types into it with the harness's keyboard
    (docs/testing.md).
-4. **Lock.** Lock surfaces, the lock sidecar, logind's hint. Keep the
-   previous locker installed until the new one has locked and unlocked
+4. **Lock.** Built: lock surfaces, the lock sidecar, logind's hint. Keep
+   the previous locker installed until the new one has locked and unlocked
    through a suspend.
 5. **Greeter.** The greet sidecar, the session chooser, last-session
    memory.
