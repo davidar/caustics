@@ -121,6 +121,17 @@ stand between that and a sidecar from another tree.
     in its subject's scratch, with `bar_popups` telling the dock its popup
     ended through `dispatch_popup_ending`, as it tells notify today.
 
+## The canvas
+
+15. **Everything else a session paints that is not a window.** The
+    wallpaper, the idle fade, the lock screen, the polkit prompt and the
+    login greeter as one caustic on a second host of the bar process's
+    shape, with the jobs as sidecars; designed in docs/canvas.md, built in
+    its *Order*: the bar's mechanism lifted into a crate first, then the
+    host and the wallpaper, the fade, the prompt and polkit, the lock, the
+    greeter. The test prerequisite is a harness tool that can type
+    (docs/testing.md, *The nested gate*).
+
 ## Named open once, not re-checked against the tree since
 
 Smaller items left by earlier work; whether later work closed them has not

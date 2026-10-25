@@ -11,8 +11,9 @@ into `caustics/`.
 reasons for their shape; abi.md the contracts between the bar, its caustic
 and its sidecars; testing.md the tests, the oracle, the nested gate
 (`bar/nested-run.sh`, minutes on the host's own GPU) and the VM target
-(`bar/vm-run.sh`); roadmap.md what is not built yet; caustics/README.md the
-shaders; bar/systemd/README.md running the bar as a user unit;
+(`bar/vm-run.sh`); roadmap.md what is not built yet; canvas.md the
+wallpaper, fade, lock, polkit and greeter host (design); caustics/README.md
+the shaders; bar/systemd/README.md running the bar as a user unit;
 sysmon/README.md the sampling sidecar. `docs/check-links.sh` checks every
 `docs/….md` pointer.
 

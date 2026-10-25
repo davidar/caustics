@@ -238,8 +238,10 @@ support.
 ## Non-goals
 
 - **A configuration file.** The tunables module is the configuration.
-- **Password entry**, or any text input. A network that needs a password
-  opens the settings program.
+- **Password entry**, or any text input, in the bar. A network that needs a
+  password opens the settings program. The canvas (docs/canvas.md), the
+  wallpaper, fade, lock and prompt host designed beside the bar, is the one
+  program in this tree that takes a password, and the bar is not it.
 - **A widget toolkit.** Menus, sliders and toasts are immediate-mode layout
   in the shader; a third-party widget is a program that writes frames.
 - **X11.** The bar is a Wayland client and needs a layer-shell compositor.
@@ -277,6 +279,8 @@ ray-splat ground truth beside the shader's approximation.
   sidecar.
 - docs/testing.md — the tests, the oracle, the nested gate and the VM target.
 - docs/roadmap.md — what is not built yet.
+- docs/canvas.md — the wallpaper, idle fade, lock screen, polkit prompt and
+  greeter as one caustic on a second host (design, not yet built).
 - `caustics/README.md` — the shader files, the tunables, hot reload.
 - `bar/systemd/README.md` — the install, the unit, the sidecars, the journal.
 - `sysmon/README.md` — the charts' sidecar, and the lease it holds on NVML.
