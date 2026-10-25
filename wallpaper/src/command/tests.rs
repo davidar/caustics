@@ -61,16 +61,37 @@ fn dim_undim_and_status() {
         parse("dim 0.6"),
         Ok(Command::Dim {
             alpha_milli: 600,
-            over_ms: 0
+            over_ms: 0,
+            wait: false
         })
     );
     assert_eq!(
         parse("dim 1 over 30"),
         Ok(Command::Dim {
             alpha_milli: 1000,
-            over_ms: 30_000
+            over_ms: 30_000,
+            wait: false
         })
     );
+    assert_eq!(
+        parse("dim 1 over 10 wait"),
+        Ok(Command::Dim {
+            alpha_milli: 1000,
+            over_ms: 10_000,
+            wait: true
+        })
+    );
+    assert_eq!(
+        parse("dim 0.5 wait"),
+        Ok(Command::Dim {
+            alpha_milli: 500,
+            over_ms: 0,
+            wait: true
+        })
+    );
+    assert!(parse("dim wait").is_err(), "wait is not an alpha");
+    assert!(parse("dim 1 wait over 3").is_err(), "wait comes last");
+    assert!(parse("dim 1 over 3 wait wait").is_err());
     assert!(parse("dim 1.5").is_err());
     assert!(parse("dim").is_err());
     assert!(parse("dim 0.5 for 3").is_err());

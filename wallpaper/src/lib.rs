@@ -9,6 +9,11 @@
 //! far a fade is, this process knows from its own clock, which is the clock
 //! it stamped the fade with.
 //!
+//! It owns the dim too ([`dim`]): a `dim` on the socket is a `CANVAS_DIM`
+//! under the next id, and the host's `CanvasEvent`s on stdin say when that
+//! dim reached its depth or was cancelled by input, which is what a client
+//! that asked to `wait` is answered (docs/abi.md, *Canvas event*).
+//!
 //! The patterns are every sidecar's (docs/abi.md, *Writing a sidecar*): no
 //! arguments, settings from its own environment, one witness a line on
 //! stderr, and an exit when the host closes stdin. One thing is its own:
@@ -19,6 +24,7 @@
 //! and goes with it.
 
 pub mod command;
+pub mod dim;
 pub mod frames;
 pub mod picture;
 
@@ -28,9 +34,10 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
-use caustics_bar_abi::wire::{self, Frame, REQ_OUTPUT_SIZE};
+use caustics_bar_abi::wire::{self, CanvasEventBody, Frame, REQ_OUTPUT_SIZE};
 
 use crate::command::{Command, MAX_LINE};
+use crate::dim::{CANCELLED, DONE, Dimmer, Outcome};
 
 /// This sidecar's witness line: `caustics-wallpaper: …` on stderr, one write.
 pub const WITNESS: caustics_sidecar::Witness = caustics_sidecar::Witness::new("caustics-wallpaper");
@@ -74,6 +81,8 @@ pub fn boottime_ms() -> u64 {
 enum Input {
     /// The host's largest output, px.
     Size(u32, u32),
+    /// What became of a dim (docs/abi.md, *Canvas event*).
+    Event(CanvasEventBody),
     /// The host closed stdin.
     Eof,
     /// A command from a client, and where its reply goes.
@@ -178,7 +187,7 @@ fn bind(path: &Path) -> io::Result<UnixListener> {
     UnixListener::bind(path)
 }
 
-/// The host's requests: the output size is the only one this sidecar reads.
+/// What the host writes: the output size, and the events of a dim.
 fn listen_stdin(into: Sender<Input>) {
     let stdin = io::stdin();
     let mut input = stdin.lock();
@@ -197,6 +206,7 @@ fn listen_stdin(into: Sender<Input>) {
                     }
                 }
             }
+            Ok(Some(Frame::CanvasEvent(event))) => into.send(Input::Event(event)),
             Ok(Some(other)) => {
                 witness(&format!(
                     "stdin: frame kind {} has no meaning here",
@@ -267,8 +277,8 @@ fn serve(inbox: &Receiver<Input>, last: &Path) -> i32 {
     let mut size: Option<(u32, u32)> = None;
     let mut shown: Option<Shown> = None;
     let mut serial = 0u32;
-    // The dims this process has sent: each one's id on the wire.
-    let mut dims = 0u32;
+    // The dim, and the one client that may be waiting on it.
+    let mut dims: Dimmer<Sender<String>> = Dimmer::new();
     // The picture the session last showed, to be shown again once the host
     // has said how big its outputs are (or after RESTORE_WAIT).
     let mut restore: Option<(PathBuf, Instant)> = std::fs::read_to_string(last)
@@ -317,7 +327,32 @@ fn serve(inbox: &Receiver<Input>, last: &Path) -> i32 {
                     }
                 }
             }
+            Some(Input::Event(event)) => match dims.event(event.event, event.id) {
+                Outcome::Stale => witness(&format!(
+                    "a late event {} for dim {}, which is not the dim now; ignored",
+                    event.event, event.id
+                )),
+                Outcome::Done(waiter) => {
+                    witness(&format!("dim {} reached its depth", event.id));
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.send(DONE.to_owned());
+                    }
+                }
+                Outcome::Cancelled(waiter) => {
+                    // The host has taken the overlay down already; the
+                    // undim makes the two ends agree the dim is over.
+                    if let Err(err) = wire::write(&mut out, &frames::undim()) {
+                        return gone(err);
+                    }
+                    witness(&format!("dim {} cancelled by input; undim", event.id));
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.send(CANCELLED.to_owned());
+                    }
+                }
+            },
             Some(Input::Command(command, reply)) => {
+                // Taken by a dim that is waited on, which answers later.
+                let mut reply = Some(reply);
                 let answer = match command {
                     Command::Show { path, fade_ms } => {
                         restore = None;
@@ -329,30 +364,53 @@ fn serve(inbox: &Receiver<Input>, last: &Path) -> i32 {
                             Err(why) => format!("error {why}"),
                         }
                     }
-                    Command::Status => format!("ok {}", describe(shown.as_ref(), boottime_ms())),
+                    Command::Status => {
+                        let now = boottime_ms();
+                        format!(
+                            "ok {} {}",
+                            dims.describe(now),
+                            describe(shown.as_ref(), now)
+                        )
+                    }
                     Command::Dim {
                         alpha_milli,
                         over_ms,
+                        wait,
                     } => {
-                        dims = dims.wrapping_add(1).max(1);
-                        let frame = frames::dim(dims, alpha_milli, boottime_ms(), over_ms);
+                        let start = boottime_ms();
+                        let waiter = if wait { reply.take() } else { None };
+                        let (id, replaced) = dims.begin(start, over_ms, waiter);
+                        if let Some(replaced) = replaced {
+                            let _ = replaced.send(CANCELLED.to_owned());
+                        }
+                        let frame = frames::dim(id, alpha_milli, start, over_ms);
                         match wire::write(&mut out, &frame) {
                             Ok(()) => {
-                                witness(&format!("dim to {alpha_milli}/1000 over {over_ms} ms"));
+                                witness(&format!(
+                                    "dim {id} to {alpha_milli}/1000 over {over_ms} ms{}",
+                                    if wait { ", waited on" } else { "" }
+                                ));
                                 "ok".to_owned()
                             }
                             Err(err) => return gone(err),
                         }
                     }
-                    Command::Undim => match wire::write(&mut out, &frames::undim()) {
-                        Ok(()) => {
-                            witness("undim");
-                            "ok".to_owned()
+                    Command::Undim => {
+                        if let Some(waiter) = dims.undim() {
+                            let _ = waiter.send(CANCELLED.to_owned());
                         }
-                        Err(err) => return gone(err),
-                    },
+                        match wire::write(&mut out, &frames::undim()) {
+                            Ok(()) => {
+                                witness("undim");
+                                "ok".to_owned()
+                            }
+                            Err(err) => return gone(err),
+                        }
+                    }
                 };
-                let _ = reply.send(answer);
+                if let Some(reply) = reply {
+                    let _ = reply.send(answer);
+                }
             }
             None => {
                 if let Some((path, _)) = restore.take() {

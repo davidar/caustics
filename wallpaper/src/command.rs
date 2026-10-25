@@ -1,13 +1,19 @@
 //! The control socket's language: one command a line, one reply a line.
 //!
 //! ```text
-//! show <path> [fade <seconds>]    cross-fade to the picture at <path>
-//! status                          what is shown, and how far its fade is
-//! dim <alpha> [over <seconds>]    dim towards alpha (0..1) of the dim colour
-//! undim                           no dim, now
+//! show <path> [fade <seconds>]          cross-fade to the picture at <path>
+//! status                                where the dim is, what is shown, and
+//!                                       how far its fade is
+//! dim <alpha> [over <seconds>] [wait]   dim towards alpha (0..1) of the dim
+//!                                       colour, over every window, until an
+//!                                       undim or any input
+//! undim                                 no dim, now
 //! ```
 //!
-//! A reply starts `ok` or `error`. A path is everything between `show ` and a
+//! A reply starts `ok` or `error`, but for a `dim … wait`'s: the connection is
+//! held until the dim reached its depth, answered `done`, or ended before
+//! that or by input after it, answered `cancelled` (*Canvas event* in
+//! docs/abi.md says where the two come from). A path is everything between `show ` and a
 //! trailing `fade <seconds>`, so it may hold spaces; it must be absolute,
 //! because the sidecar's working directory is not the caller's
 //! (`caustics-canvasctl` makes it so).
@@ -24,9 +30,17 @@ pub const MAX_SECONDS: f64 = 86_400.0;
 /// One command.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Command {
-    Show { path: PathBuf, fade_ms: u32 },
+    Show {
+        path: PathBuf,
+        fade_ms: u32,
+    },
     Status,
-    Dim { alpha_milli: u32, over_ms: u32 },
+    Dim {
+        alpha_milli: u32,
+        over_ms: u32,
+        /// Hold the reply until the dim is `done` or `cancelled`.
+        wait: bool,
+    },
     Undim,
 }
 
@@ -73,11 +87,15 @@ pub fn parse(line: &str) -> Result<Command, String> {
         "status" if rest.is_empty() => Ok(Command::Status),
         "undim" if rest.is_empty() => Ok(Command::Undim),
         "dim" => {
-            let words: Vec<&str> = rest.split_whitespace().collect();
+            let mut words: Vec<&str> = rest.split_whitespace().collect();
+            let wait = words.last() == Some(&"wait");
+            if wait {
+                words.pop();
+            }
             let (alpha, over_ms) = match words.as_slice() {
                 [alpha] => (*alpha, 0),
                 [alpha, "over", seconds] => (*alpha, millis(seconds)?),
-                _ => return Err("dim takes <alpha> [over <seconds>]".to_owned()),
+                _ => return Err("dim takes <alpha> [over <seconds>] [wait]".to_owned()),
             };
             let alpha: f64 = alpha
                 .parse()
@@ -88,6 +106,7 @@ pub fn parse(line: &str) -> Result<Command, String> {
             Ok(Command::Dim {
                 alpha_milli: (alpha * 1000.0).round() as u32,
                 over_ms,
+                wait,
             })
         }
         "" => Err("an empty line".to_owned()),
