@@ -444,7 +444,7 @@ per literal per generation. **Level** is `aux`. **Target** is the word before
 the line's first colon, as a fixed match: `layout:` → `caustics_bar::layout`,
 `shape:` → `caustics_bar::shape`, everything else → `caustics_bar`. (`tracing`'s
 `target:` must be a literal at the macro's call site, so a target is three
-arms in `witness.rs`, and a fourth one is a line there as well as a line in
+arms in `host/src/witness.rs`, and a fourth one is a line there as well as a line in
 Slang.) Those are exactly what the unit drop-in's
 `RUST_LOG=info,caustics_bar::layout=debug,caustics_bar::shape=debug` turns on. The
 process prints every record it reads, in order, and dedups nothing. **Once
@@ -1355,7 +1355,7 @@ The hash crosses as two words because the plain byte views are a promise
 about `u32` leaves and no padding, and because every other number on this
 wire is a word.
 
-The bar's rule, in `bar/src/feeders/pipe.rs`:
+The bar's rule, in `host/src/pipe.rs` (the supervisor the bar is a client of):
 
 - `Hello` with this bar's `ABI_HASH` → one `info` line naming the child and
   the hash, and the stream is read from there on;

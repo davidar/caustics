@@ -19,7 +19,11 @@ Before writing code, decide which of the three parts it belongs in:
   or must decide before forwarding an event synchronously. Say which of the
   three in the pull request. The bar process translates and forwards. A
   change that makes it *decide* something, parse a sidecar's bytes, or link a
-  D-Bus, font, image or compiler library is in the wrong place.
+  D-Bus, font, image or compiler library is in the wrong place. The part of
+  it any program hosting a caustic would share (the device, the pipelines and
+  their reload, the sidecar supervisor) is the `caustics-host` crate in
+  `host/`, under the same test, and it names none of the bar's buffers, entry
+  points or sidecars: those are parameters the bar passes.
 
 **The GPU-first rule.** The CPU keeps I/O and protocol round trips. Strings,
 glyphs, icons that are paths, and shaping are the caustic's, even where the

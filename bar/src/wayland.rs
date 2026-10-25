@@ -1643,7 +1643,7 @@ impl Bar {
     ///
     /// This side dedups nothing: "once per change" is the caustic's duty, and
     /// it discharges it by comparing against what it persisted in its own
-    /// buffer (docs/abi.md, *The witness ring*). `witness.rs` resolves the format
+    /// buffer (docs/abi.md, *The witness ring*). `caustics_host::witness` resolves the format
     /// literal through the running generation's string table and substitutes.
     fn drain_witnesses(&mut self, mirror: &State) {
         let surface = mirror.surface;

@@ -17,7 +17,7 @@
 //! * the two checks that must not be the caustic checking itself — every
 //!   `check: block`'s px against this file's own text parse of `TEXT_PX` and
 //!   `ICON_LOGICAL`, and every `check: item` line rendering through
-//!   `witness.rs` with no `?`, which checks that every built id can be named.
+//!   `caustics_host::witness` with no `?`, which checks that every built id can be named.
 //!
 //! # Why it is a gated `#[test]` and not an example
 //!
@@ -29,8 +29,9 @@
 //!
 //! The gate is what makes it safe beside the rest of the suite: `cargo test
 //! --workspace` never creates a Vulkan instance, never compiles the oracle's entry point, and never
-//! puts a blocking device poll beside `feeders::pipe::tests`, which time
-//! child processes and fail when something parallel eats their slack. A
+//! puts a blocking device poll beside the bar's tests that time child
+//! processes (and fail when something parallel eats their slack), or beside
+//! the supervisor's own in `host/src/pipe/tests.rs`. A
 //! machine with only an
 //! NVIDIA card runs the suite green and simply never runs this.
 //!

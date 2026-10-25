@@ -233,7 +233,7 @@ fn a_generation_is_its_entry_points_in_order_for_the_asked_format() {
     );
 
     // And a real generation is `ENTRIES`, which is the bar's list and is what
-    // the bar checks a `count` against (`bar/src/modules.rs`).
+    // the bar checks a `count` against (`host/src/modules.rs`).
     assert!(
         ENTRIES.len() <= MAX_MODULES,
         "a generation has to fit in one"

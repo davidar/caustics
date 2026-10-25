@@ -30,7 +30,10 @@ There are three kinds of program, with a hard line between them.
 compositor's IPC socket and a set of pipes. It decides nothing. It writes what
 it knows (the windows, the dock's entries, the time) into GPU buffers, copies
 what its sidecars send into GPU buffers byte for byte, and carries out the
-actions the shader decides without interpreting them.
+actions the shader decides without interpreting them. The mechanism under it
+(the device, the caustic's pipelines and their hot reload, the sidecar
+supervisor) is a library crate, `caustics-host` (`host/`), which any program
+that hosts a caustic can use and of which the bar is the first client.
 
 **Sidecars** (`sysmon/`, `tray/`, `power/`, `audio/`, `network/`,
 `bluetooth/`, `notify/`, `apps/`, `glyphs/`, `reload/`) are separate processes

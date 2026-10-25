@@ -928,7 +928,7 @@ pub fn run() -> i32 {
         // A set installed without its source tree (a distribution image) has
         // nothing to reload, and the bar's baked caustic is the one it runs.
         // A sidecar that exits is restarted with a backoff for as long as the
-        // bar runs (bar/src/feeders/pipe.rs), so this one stays, idle, until
+        // bar runs (host/src/pipe.rs), so this one stays, idle, until
         // the bar closes the pipe.
         idle_until_eof(&mut io::stdin().lock());
         return 0;

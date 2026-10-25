@@ -335,7 +335,7 @@ impl Facts {
     pub fn compose(&mut self, model: &Model, strings: &Strings, images: &mut Images) {
         // One compose, one generation. What keeps a slot young is the
         // caustic's `ACT_IMAGES_DRAWN` (stamped with this generation) or a
-        // landing in it, never this pass's listing (`images.rs`).
+        // landing in it, never this pass's listing (`caustics_host::images`).
         images.begin_generation();
         // A slot taken from someone else takes that name's "asked" mark with
         // it — a themed name's under its prefix, an app id's bare — so the

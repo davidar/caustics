@@ -10,7 +10,7 @@
 //! `bar/build.rs` bakes a set of modules per variant, the bar picks the set
 //! matching its surface, and `caustics-reload` compiles for the variant a
 //! `REQ_PROGRAM` request names. None of them needs wgpu for it; the bar's
-//! `wgpu::TextureFormat` conversions are its own (`bar/src/gpu/surface.rs`).
+//! `wgpu::TextureFormat` conversions are the host crate's (`host/src/surface.rs`).
 
 /// One swapchain format the destination storage image can be baked for.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

@@ -113,6 +113,19 @@ image decoder and no shader compiler. It is about twelve thousand lines of
 Rust before its tests, most of it the surface, the GPU plumbing and the pipe
 router, which a drawing process cannot shed.
 
+**The mechanism is a library, and the bar is its client.** The parts of this
+process that any program hosting a caustic would need live in the
+`caustics-host` crate (`host/`): the device and its refusals, the caustic's
+bind group layouts and pipelines built from the compiler's reflection, the
+reload that swaps them whole or not at all, one target's swapchain, frame
+pacing, the sidecar supervisor and its *Hello* gate, the collection of a
+reload's `Module` frames, the literal table, the witness printer, the image
+slots and the `/proc` reader. The crate names none of the bar's buffers,
+entry points, tunables or sidecars; each is a parameter the bar passes. What
+names them, and every Wayland object, stays in `bar/src`, so a second program
+can host a caustic without copying the bar. The line count above is the two
+together.
+
 ### Sidecars
 
 A feeder lives in the bar's process **if and only if** it owns a Wayland
