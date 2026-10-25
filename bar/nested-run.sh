@@ -6,8 +6,13 @@
 #   bar/nested-run.sh             # headless: nothing appears on the desktop
 #   CAUSTICS_NESTED_HOST=desktop bar/nested-run.sh   # a window, to watch by eye
 #
-# 1. One at a time: `~/.cache/caustics-nested.lock`, and never beside a run of the
-#    VM target — while any `~/.cache/caustics-vm*.lock` slot is held, it waits.
+# 1. Runs are independent and may overlap. Each has its own run directory,
+#    runtime dir, session bus, host sway and nested niri; the GPU and the
+#    toolbox container are all that two runs share, and the container only
+#    needs its first-use creation to tolerate a race. A run still waits while
+#    a VM target slot (`~/.cache/caustics-vm*.lock`) is held: a lavapipe guest
+#    loads every core, and the steps' time bounds assume a machine that is
+#    not rendering a second desktop in software.
 # 2. The run directory (`$CAUSTICS_NESTED_LOG`'s, or bar/test-runs/), the log
 #    whose path is printed first, and the build: the workspace, the examples
 #    the steps run, the oracle's test binary. The "set" is `target/debug/`,
@@ -61,7 +66,7 @@ case "$HOST_KIND" in
     *) echo "nested-run: CAUSTICS_NESTED_HOST is headless or desktop, not '$HOST_KIND'"; exit 2 ;;
 esac
 
-# --- 1. the lock -------------------------------------------------------------
+# --- 1. the VM wait ------------------------------------------------------------
 
 vm_slots_busy() {
     local l
@@ -71,11 +76,6 @@ vm_slots_busy() {
     done
     return 1
 }
-
-if [[ -z "${CAUSTICS_NESTED_LOCK_HELD:-}" && -z "${CAUSTICS_NESTED_INNER:-}" ]]; then
-    mkdir -p "$HOME/.cache"
-    CAUSTICS_NESTED_LOCK_HELD=1 exec flock -o -w 7200 "$HOME/.cache/caustics-nested.lock" bash "$SELF" "$@"
-fi
 
 # --- 3. inside the private bus ------------------------------------------------
 
@@ -256,7 +256,7 @@ for name, o in json.load(sys.stdin).items():
     exit "$rc"
 fi
 
-# --- 2. holding the lock: the run directory, the build, the host ----------------
+# --- 2. the run directory, the build, the host ----------------------------------
 
 waited=0
 while busy=$(vm_slots_busy); do
@@ -265,7 +265,8 @@ while busy=$(vm_slots_busy); do
     sleep 15
 done
 
-stamp=$(date +%Y%m%d-%H%M%S)
+# The pid keeps two runs started in the same second apart.
+stamp=$(date +%Y%m%d-%H%M%S)-$$
 LOG="${CAUSTICS_NESTED_LOG:-$REPO/bar/test-runs/nested-run-$stamp.log}"
 RUN="$(dirname "$LOG")/nested-$stamp"
 mkdir -p "$RUN"
@@ -287,14 +288,24 @@ fi
 echo "nested-run: built in $((SECONDS - t0)) s"
 
 if [[ "$HOST_KIND" == headless ]]; then
+    # First use. Another run may be doing the same at the same moment, so a
+    # failed create or install is judged by what is there afterwards, not by
+    # its exit status.
     if ! toolbox run -c "$TOOLBOX" true >/dev/null 2>&1; then
         echo "nested-run: creating the '$TOOLBOX' toolbox (first use; sway goes in it, nothing else)"
-        toolbox create -y -c "$TOOLBOX" --image "$TOOLBOX_IMAGE" || exit 9
+        toolbox create -y -c "$TOOLBOX" --image "$TOOLBOX_IMAGE" >"$RUN/toolbox-create.log" 2>&1 ||
+            echo "nested-run: toolbox create said: $(tail -1 "$RUN/toolbox-create.log")"
+        toolbox run -c "$TOOLBOX" true >/dev/null 2>&1 || {
+            echo "nested-run: the '$TOOLBOX' toolbox is not usable; $RUN/toolbox-create.log"
+            exit 9
+        }
     fi
     if ! toolbox run -c "$TOOLBOX" sh -c 'command -v sway' >/dev/null 2>&1; then
         echo "nested-run: installing sway into '$TOOLBOX' (first use)"
-        toolbox run -c "$TOOLBOX" sudo dnf install -y sway >"$RUN/toolbox-dnf.log" 2>&1 || {
-            echo "nested-run: dnf install sway failed; $RUN/toolbox-dnf.log"
+        toolbox run -c "$TOOLBOX" sudo dnf install -y sway >"$RUN/toolbox-dnf.log" 2>&1 ||
+            echo "nested-run: dnf install sway said: $(tail -1 "$RUN/toolbox-dnf.log")"
+        toolbox run -c "$TOOLBOX" sh -c 'command -v sway' >/dev/null 2>&1 || {
+            echo "nested-run: sway is not in '$TOOLBOX'; $RUN/toolbox-dnf.log"
             exit 9
         }
     fi

@@ -5,8 +5,8 @@
 # Sourced by bar-test.sh when `CAUSTICS_TARGET=nested`; `bar/nested-run.sh` is the
 # only thing that sets that, and it has already, before this file is read:
 #
-#   - taken `~/.cache/caustics-nested.lock` and built the workspace (the "set" is
-#     `target/debug/`, where the bar finds its sidecars beside its own exe);
+#   - built the workspace (the "set" is `target/debug/`, where the bar finds
+#     its sidecars beside its own exe);
 #   - wrapped the run in `dbus-run-session`, so `$DBUS_SESSION_BUS_ADDRESS`
 #     is a bus nobody else is on;
 #   - started the nested niri (on a headless sway, or in a window on the

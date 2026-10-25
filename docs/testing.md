@@ -53,9 +53,12 @@ the timings real.
 
 ### What one run does
 
-1. **One at a time.** It takes `~/.cache/caustics-nested.lock` (waiting up to two
-   hours for another run to finish), and waits while any VM target slot is
-   held.
+1. **Independent of any other run.** Each run has its own run directory,
+   runtime dir, session bus, host sway and nested niri, so two runs may
+   overlap (two builders gating at once, say); the GPU and the toolbox
+   container are all they share. A run does wait while any VM target slot
+   is held: a lavapipe guest loads every core, and the steps' time bounds
+   assume a machine that is not rendering a second desktop in software.
 2. **Builds** the workspace in debug, the examples the steps use
    (`rows_demo`, the fake UPower) and the oracle's test binary. The "install
    set" is `target/debug/`: the bar finds its sidecars beside its own
@@ -188,6 +191,8 @@ is one `SKIP` line, counted as skipped and never as passed:
 - **One step's bound has little room on a busy machine.** The tunables step
   waits 40 s for a cold compile and a cold swap; under heavy parallel
   compilation it has missed once. It is recorded rather than raised.
+  Overlapping gate runs load the same CPU and GPU, so this is the bound to
+  watch when two run at once.
 
 ## The steps and their targets
 
