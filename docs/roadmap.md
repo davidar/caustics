@@ -105,7 +105,9 @@ stand between that and a sidecar from another tree.
     another ABI at its first frame (docs/abi.md, *Hello*), so a sidecar from
     another tree pins `caustics-bar-abi` to the revision the installed set
     was built from. That is the rule working; it needs saying in *Writing a
-    sidecar*, with the way to read the installed set's revision.
+    sidecar*, with the way to read the installed set's revision. The design
+    that removes the pin altogether, an append-only wire whose reader pads
+    and truncates instead of refusing, is docs/wire.md.
 14. **A sidecar's own look.** Everything a third-party sidecar shows is drawn
     by `applets`: the generic chip, rows and sliders. A sidecar that wants
     its own drawing (as the charts and the toasts have) needs a subject

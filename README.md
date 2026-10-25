@@ -288,6 +288,9 @@ ray-splat ground truth beside the shader's approximation.
   is design).
 - `canvas/README.md` — the canvas host as a user unit: the wallpaper, its
   socket and its client.
+- docs/wire.md — the wire contract that replaces the ABI hash with an
+  append-only rule, so sidecars from other trees can talk to the host
+  (design).
 - `caustics/README.md` — the shader files, the tunables, hot reload.
 - `bar/systemd/README.md` — the install, the unit, the sidecars, the journal.
 - `sysmon/README.md` — the charts' sidecar, and the lease it holds on NVML.
