@@ -103,6 +103,7 @@ BAR_TS_LOG="$RUN/bar.ts.log"
 : >>"$BAR_TS_LOG"
 PIDS_FILE="$RUN/pids"
 POINTER="$REPO/target/debug/caustics-pointer"
+KEYBOARD="$REPO/target/debug/caustics-keyboard"
 
 # Everything the run starts is written here as "<role> <pid>", so
 # bar/nested-run.sh can stop it even if this script was killed outright.
@@ -262,6 +263,20 @@ button() { # button <true|false> [left|right|middle|wheel-down|wheel-up]
             ;;
         *) pointer button "$name" "$state" >/dev/null ;;
     esac
+}
+
+# The keyboard: `caustics-keyboard`, a virtual keyboard on the nested niri's
+# seat with a US keymap of its own. Its events go to whatever niri has given
+# keyboard focus, so a step focuses a window first. A character the layout
+# lacks is refused before any key is sent.
+keyboard() { WAYLAND_DISPLAY="$NESTED_WAYLAND" XDG_RUNTIME_DIR="$NESTED_RT" "$KEYBOARD" "$@"; }
+
+keys() { # keys <text>: typed as is; a newline in it is Return
+    keyboard type "$1" >/dev/null || { note "caustics-keyboard type failed"; return 1; }
+}
+
+key() { # key <[mod+…]keysym> [press|release|tap]: `Return`, `ctrl+u`, `Escape release`
+    keyboard key "$@" >/dev/null || { note "caustics-keyboard key $* failed"; return 1; }
 }
 
 # The journal: the bar's log since the cursor, a line count.

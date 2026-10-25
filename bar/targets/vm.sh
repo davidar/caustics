@@ -18,6 +18,8 @@
 #   niri_msg …                   the compositor under test's IPC
 #   shot <name>                  a 1280x800 8-bit RGB PNG (filter 0) in $SHOTS
 #   pointer_to x y, button <true|false> [left|right|middle|wheel-down|wheel-up]
+#   keys <text>, key <[mod+…]keysym> [press|release|tap]
+#                                typed into whatever has keyboard focus
 #   journal [-o short-unix], mark_journal ($JOURNAL_CURSOR)
 #   bar_env <group> KEY=VALUE…, bar_env_clear <group>, bar_restart,
 #   bar_stop, bar_active, bar_restarts, bar_pid
@@ -146,6 +148,147 @@ pointer_to() { # pointer_to <px x> <px y>
 button() { # button <true|false> [left|right|middle|wheel-down|wheel-up]
     qmp input-send-event \
         "{\"events\":[{\"type\":\"btn\",\"data\":{\"down\":$1,\"button\":\"${2:-left}\"}}]}" >/dev/null
+}
+
+# --- the keyboard ------------------------------------------------------------
+#
+# QMP names physical keys (`qcode`s), and the guest's own keymap turns them
+# into characters, so what comes out is the US layout's only while the guest's
+# layout is US (the image's default). The characters `keys` can type are the
+# ones `caustics-keyboard` can on the nested target: printable ASCII, newline
+# (Return) and tab. Anything else is refused before a key is sent. A typed
+# character is one `send-key` (its keys down in order, then up in reverse),
+# queued by QEMU behind the one before it, so a string arrives in order.
+
+# The qcodes that type one character, Shift first when it takes Shift.
+vm_char_qcodes() { # vm_char_qcodes <char> -> "shift a", "spc", or nothing
+    local c="$1"
+    case "$c" in
+        [abcdefghijklmnopqrstuvwxyz0123456789]) printf '%s' "$c" ;;
+        [ABCDEFGHIJKLMNOPQRSTUVWXYZ]) printf 'shift %s' "${c,,}" ;;
+        ' ') printf spc ;;
+        $'\n') printf ret ;;
+        $'\t') printf tab ;;
+        '-') printf minus ;; '_') printf 'shift minus' ;;
+        '=') printf equal ;; '+') printf 'shift equal' ;;
+        '[') printf bracket_left ;; '{') printf 'shift bracket_left' ;;
+        ']') printf bracket_right ;; '}') printf 'shift bracket_right' ;;
+        '\') printf backslash ;; '|') printf 'shift backslash' ;;
+        ';') printf semicolon ;; ':') printf 'shift semicolon' ;;
+        "'") printf apostrophe ;; '"') printf 'shift apostrophe' ;;
+        '`') printf grave_accent ;; '~') printf 'shift grave_accent' ;;
+        ',') printf comma ;; '<') printf 'shift comma' ;;
+        '.') printf dot ;; '>') printf 'shift dot' ;;
+        '/') printf slash ;; '?') printf 'shift slash' ;;
+        '!') printf 'shift 1' ;; '@') printf 'shift 2' ;; '#') printf 'shift 3' ;;
+        '$') printf 'shift 4' ;; '%') printf 'shift 5' ;; '^') printf 'shift 6' ;;
+        '&') printf 'shift 7' ;; '*') printf 'shift 8' ;; '(') printf 'shift 9' ;;
+        ')') printf 'shift 0' ;;
+    esac
+}
+
+# The qcodes for a keysym name with optional modifiers, the names
+# `caustics-keyboard key` takes: `Return`, `A`, `slash`, `ctrl+u`.
+vm_key_qcodes() { # vm_key_qcodes <[mod+…]keysym> -> "ctrl u", or nothing
+    local spec="$1" name mods="" m q
+    name="${spec##*+}"
+    if [[ -z "$name" ]]; then
+        name=plus
+        spec="${spec%+}"
+    fi
+    [[ "$spec" == *+* ]] && mods="${spec%+*}"
+    case "$name" in
+        Return) q=ret ;; Escape) q=esc ;; BackSpace) q=backspace ;; Tab) q=tab ;;
+        Delete) q=delete ;; Insert) q=insert ;; Home) q=home ;; End) q=end ;;
+        Prior) q=pgup ;; Next) q=pgdn ;; Up) q=up ;; Down) q=down ;;
+        Left) q=left ;; Right) q=right ;; space) q=spc ;;
+        F[1-9] | F1[0-2]) q="${name,,}" ;;
+        Shift_L) q=shift ;; Control_L) q=ctrl ;; Alt_L) q=alt ;; Super_L) q=meta_l ;;
+        grave) q=grave_accent ;; asciitilde) q='shift grave_accent' ;;
+        exclam) q='shift 1' ;; at) q='shift 2' ;; numbersign) q='shift 3' ;;
+        dollar) q='shift 4' ;; percent) q='shift 5' ;; asciicircum) q='shift 6' ;;
+        ampersand) q='shift 7' ;; asterisk) q='shift 8' ;; parenleft) q='shift 9' ;;
+        parenright) q='shift 0' ;; minus) q=minus ;; underscore) q='shift minus' ;;
+        equal) q=equal ;; plus) q='shift equal' ;;
+        bracketleft) q=bracket_left ;; braceleft) q='shift bracket_left' ;;
+        bracketright) q=bracket_right ;; braceright) q='shift bracket_right' ;;
+        backslash) q=backslash ;; bar) q='shift backslash' ;;
+        semicolon) q=semicolon ;; colon) q='shift semicolon' ;;
+        apostrophe) q=apostrophe ;; quotedbl) q='shift apostrophe' ;;
+        comma) q=comma ;; less) q='shift comma' ;; period) q=dot ;;
+        greater) q='shift dot' ;; slash) q=slash ;; question) q='shift slash' ;;
+        ?) q=$(vm_char_qcodes "$name") ;;
+        *) q="" ;;
+    esac
+    [[ -n "$q" ]] || return 1
+    local out=()
+    if [[ -n "$mods" ]]; then
+        IFS=+ read -ra m <<<"$mods"
+        for m in "${m[@]}"; do
+            case "${m,,}" in
+                shift) out+=(shift) ;; ctrl | control) out+=(ctrl) ;;
+                alt) out+=(alt) ;; super | logo) out+=(meta_l) ;;
+                *) return 1 ;;
+            esac
+        done
+    fi
+    # Shift once, first, whether the name or the chord asked for it.
+    if [[ "$q" == "shift "* ]]; then
+        q="${q#shift }"
+        [[ " ${out[*]} " == *" shift "* ]] || out=(shift ${out[@]+"${out[@]}"})
+    fi
+    printf '%s' "${out[*]} $q" | sed 's/^ //'
+}
+
+vm_send_key() { # vm_send_key <qcode…>: down in order, up in reverse
+    local q json=""
+    for q in "$@"; do json+="${json:+,}{\"type\":\"qcode\",\"data\":\"$q\"}"; done
+    qmp send-key "{\"keys\":[$json],\"hold-time\":40}" >/dev/null
+}
+
+vm_key_events() { # vm_key_events <true|false> <qcode…>
+    local down="$1" q json=""
+    shift
+    for q in "$@"; do
+        json+="${json:+,}{\"type\":\"key\",\"data\":{\"down\":$down,\"key\":{\"type\":\"qcode\",\"data\":\"$q\"}}}"
+    done
+    qmp input-send-event "{\"events\":[$json]}" >/dev/null
+}
+
+keys() { # keys <text>: typed as is; a newline in it is Return
+    local text="$1" i c q missing="" strokes=()
+    for ((i = 0; i < ${#text}; i++)); do
+        c="${text:i:1}"
+        q=$(vm_char_qcodes "$c")
+        if [[ -z "$q" ]]; then
+            missing+="$(printf '%q ' "$c")"
+        else
+            strokes+=("$q")
+        fi
+    done
+    if [[ -n "$missing" ]]; then
+        note "keys: the VM path cannot type $missing"
+        return 1
+    fi
+    for ((i = 0; i < ${#strokes[@]}; i++)); do
+        # shellcheck disable=SC2086
+        vm_send_key ${strokes[i]} || { note "QMP send-key failed at character $i"; return 1; }
+    done
+}
+
+key() { # key <[mod+…]keysym> [press|release|tap]: `Return`, `ctrl+u`, `Escape release`
+    local q phase="${2:-tap}" rev=() i
+    q=$(vm_key_qcodes "$1") || { note "key: the VM path has no key for '$1'"; return 1; }
+    read -ra q <<<"$q"
+    case "$phase" in
+        tap) vm_send_key "${q[@]}" ;;
+        press) vm_key_events true "${q[@]}" ;;
+        release)
+            for ((i = ${#q[@]} - 1; i >= 0; i--)); do rev+=("${q[i]}"); done
+            vm_key_events false "${rev[@]}"
+            ;;
+        *) note "key: the phase is press, release or tap, not '$phase'"; return 1 ;;
+    esac
 }
 
 # Only this run's lines: the guest's journal keeps every earlier start since
