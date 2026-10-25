@@ -1,0 +1,44 @@
+[package]
+name = "caustics-lock"
+version = "0.1.0"
+edition.workspace = true
+description = "The canvas's lock sidecar: logind's Lock signal and LockedHint, the PAM conversation as prompt frames over the wire, and the lock's control socket"
+license.workspace = true
+rust-version.workspace = true
+# `libpam.so` for the linker when only the library's runtime name is
+# installed (build.rs).
+build = "build.rs"
+
+[[bin]]
+name = "caustics-lock"
+path = "src/main.rs"
+
+[dependencies]
+# The wire: `Hello`, `Lock` and `Prompt` out; `CanvasEvent` and `Answer` in
+# (docs/abi.md, *Lock*, *Canvas event*, *Prompt*, *Answer*).
+caustics-bar-abi = { path = "../bar/abi" }
+# The witness line; the drain logind's two signal streams go to the moment
+# they exist (docs/architecture.md, *Rules*); and `session`: which login
+# session this process locks, found as the polkit sink finds it.
+caustics-sidecar = { path = "../sidecar", features = ["drain", "session"] }
+# `malloc` and `calloc`: PAM frees the responses a conversation returns, so
+# they are allocated by the C library's allocator.
+libc = "0.2.189"
+# Linux-PAM's application calls (`pam_start`, `pam_authenticate`,
+# `pam_setcred`, `pam_end`, `pam_strerror`) and its conversation structs, as
+# prebuilt bindings: nothing reads a PAM header at build time.
+pam-sys = "0.5.6"
+# One current-thread runtime for logind and the conductor, as the other
+# D-Bus sidecars.
+tokio = { version = "1.53.1", default-features = false, features = [
+    "rt",
+    "sync",
+    "time",
+    "macros",
+] }
+# logind's session: its `Lock` and `Unlock` signals and `LockedHint`. `tokio`
+# instead of the default `async-io`, so the process carries one executor.
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+# A response handed back to PAM's conversation and then refused is zeroed
+# before it is freed.
+zeroize = "1.9.1"
