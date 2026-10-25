@@ -267,6 +267,88 @@ fn rule_3_a_body_past_the_cap_is_an_error() {
     assert!(err.to_string().contains("over the"), "{err}");
 }
 
+/// The cap is the largest honest body, computed: an `Image` at
+/// `IMAGE_MAX_PX` square behind its head and the longest key. It fits the
+/// header's `u32`, and a header stating exactly it passes rule 3.
+#[test]
+fn rule_3_the_cap_is_the_largest_image_and_fits_the_header() {
+    assert_eq!(
+        WIRE_MAX_BODY,
+        size_of::<ImageHeader>() + MAX_NAME_LEN + IMAGE_MAX_PX as usize * IMAGE_MAX_PX as usize * 4
+    );
+    assert!(u32::try_from(WIRE_MAX_BODY).is_ok());
+    let header = WireHeader::new(WIRE_IMAGE, WIRE_MAX_BODY as u32);
+    let err = read(&mut as_bytes(&header)).unwrap_err();
+    assert!(!err.to_string().contains("over the"), "{err}");
+    assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof);
+}
+
+/// A `Read` that records how many bytes each call asked for, so a test can
+/// say what the reader requested rather than guess what it allocated.
+struct Counting<'a> {
+    inner: &'a [u8],
+    asked: Vec<usize>,
+}
+
+impl<'a> Counting<'a> {
+    fn new(inner: &'a [u8]) -> Counting<'a> {
+        Counting {
+            inner,
+            asked: Vec::new(),
+        }
+    }
+}
+
+impl Read for Counting<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.asked.push(buf.len());
+        self.inner.read(buf)
+    }
+}
+
+/// Rule 4: a header that lies about its length costs what the writer sent
+/// and a step. The reader never asks for more than `WIRE_READ_STEP` in one
+/// call, and an EOF inside the body is an error, not a clean close.
+#[test]
+fn rule_4_a_lying_header_costs_one_step_and_its_eof_is_an_error() {
+    let mut raw = as_bytes(&WireHeader::new(WIRE_IMAGE, WIRE_MAX_BODY as u32)).to_vec();
+    raw.extend_from_slice(&[7u8; 100]);
+    let mut input = Counting::new(&raw);
+    let err = read(&mut input).unwrap_err();
+    assert_eq!(err.kind(), io::ErrorKind::UnexpectedEof, "{err}");
+    let most = input.asked.iter().copied().max().unwrap_or(0);
+    assert!(
+        most <= WIRE_READ_STEP,
+        "a request of {most} bytes, past the {WIRE_READ_STEP} step"
+    );
+    // The header, the first step that returned the hundred bytes, and the rest
+    // of that step that met the EOF: the reader stopped at the first one.
+    assert!(input.asked.len() <= 4, "{:?}", input.asked);
+
+    // And EOF inside a header is the same error, while EOF exactly on a
+    // boundary is the clean close.
+    assert!(read(&mut &raw[..5]).is_err());
+    assert!(matches!(read(&mut &raw[..0]), Ok(None)));
+}
+
+/// Rule 4 on an honest body of several steps: every request is at most one
+/// step, and the frame reads back whole.
+#[test]
+fn rule_4_an_honest_body_is_read_one_step_at_a_time() {
+    let picture = image("steps", 640, 480);
+    let raw = bytes(&Frame::Image(picture.clone()));
+    assert!(raw.len() > 10 * WIRE_READ_STEP);
+    let mut input = Counting::new(&raw);
+    let back = read(&mut input).expect("reads").expect("a frame");
+    assert_eq!(back, Frame::Image(picture));
+    assert!(
+        input.asked.iter().all(|&asked| asked <= WIRE_READ_STEP),
+        "{:?}",
+        input.asked.iter().max()
+    );
+    assert!(input.asked.len() >= raw.len() / WIRE_READ_STEP);
+}
+
 /// Rules 4 and 5: an unknown kind is consumed whole and skipped, and the
 /// *next* frame still reads — which is what length-prefixing is for.
 #[test]
@@ -612,8 +694,8 @@ fn the_m_heads_are_the_documented_sizes() {
     assert_eq!(size_of::<RequestBody>(), 16);
     assert_eq!(size_of::<AppBody>(), 32);
     assert_eq!(size_of::<PixmapBody>(), 16);
-    assert_eq!(size_of::<ModuleHeader>(), 40);
-    assert_eq!(size_of::<ImageHeader>(), 16);
+    assert_eq!(size_of::<ModuleHeader>(), 28);
+    assert_eq!(size_of::<ImageHeader>(), 12);
     assert_eq!(size_of::<CanvasBody>(), 32);
 }
 
@@ -822,7 +904,7 @@ fn a_pixmap_frame_is_one_slot_exactly() {
     assert!(write(&mut Vec::new(), &wrong).is_err());
 }
 
-/// *Module*. The payload carries three variable runs in a fixed order, so the one
+/// *Module*. The body carries three variable runs in a fixed order, so the one
 /// thing worth pinning is that a reader trusting `spirv_len` lands on the
 /// reflection and not in the middle of a word.
 #[test]
@@ -836,11 +918,8 @@ fn a_module_frame_round_trips_with_its_spirv_and_reflection() {
         spirv: (0u32..64).flat_map(u32::to_le_bytes).collect(),
         reflection: "{\"parameters\":[]}".into(),
     };
-    let chunks = module.chunks(WIRE_MAX_BODY);
-    assert_eq!(chunks.len(), 1, "a module this size is one frame");
-    let frame = Frame::Module(chunks[0].clone());
+    let frame = Frame::Module(module);
     assert_eq!(round_trip(frame.clone()), frame);
-    assert_eq!(ModuleAssembly::new().push(chunks[0].clone()), Some(module));
 }
 
 /// Every way a `Module` body can be wrong, and none of them a panic or a hung
@@ -848,7 +927,7 @@ fn a_module_frame_round_trips_with_its_spirv_and_reflection() {
 /// where only the bytes say.
 #[test]
 fn a_malformed_module_is_a_writers_error_or_a_readers_skip() {
-    let whole = Module {
+    let good = Module {
         generation: 1,
         index: 0,
         count: 6,
@@ -857,94 +936,51 @@ fn a_malformed_module_is_a_writers_error_or_a_readers_skip() {
         spirv: vec![1, 2, 3, 4],
         reflection: String::new(),
     };
-    let good = whole.chunks(WIRE_MAX_BODY).remove(0);
-    // SPIR-V that is not a whole number of words, an index outside its own
-    // generation, a piece that lands outside its payload: all writer errors.
-    let ragged = ModuleChunk {
-        spirv_len: 3,
-        total: good.total - 1,
-        ..good.clone()
-    };
-    assert!(write(&mut Vec::new(), &Frame::Module(ragged)).is_err());
-    let outside = ModuleChunk {
-        index: 6,
-        ..good.clone()
-    };
-    assert!(write(&mut Vec::new(), &Frame::Module(outside)).is_err());
-    let too_many = ModuleChunk {
-        index: 0,
-        count: MAX_MODULES as u32 + 1,
-        ..good.clone()
-    };
-    assert!(write(&mut Vec::new(), &Frame::Module(too_many)).is_err());
-    let ragged_total = ModuleChunk {
-        total: good.total + 1,
-        ..good.clone()
-    };
-    assert!(write(&mut Vec::new(), &Frame::Module(ragged_total)).is_err());
-    let past_end = ModuleChunk {
-        offset: good.total,
-        ..good.clone()
-    };
-    assert!(write(&mut Vec::new(), &Frame::Module(past_end)).is_err());
+    // SPIR-V that is not a whole number of words, none at all, no name, an
+    // index outside its own generation, a generation past the bound: all
+    // writer errors.
+    for bad in [
+        Module {
+            spirv: vec![1, 2, 3],
+            ..good.clone()
+        },
+        Module {
+            spirv: Vec::new(),
+            ..good.clone()
+        },
+        Module {
+            name: String::new(),
+            ..good.clone()
+        },
+        Module {
+            index: 6,
+            ..good.clone()
+        },
+        Module {
+            count: MAX_MODULES as u32 + 1,
+            ..good.clone()
+        },
+    ] {
+        assert!(
+            write(&mut Vec::new(), &Frame::Module(bad.clone())).is_err(),
+            "{bad:?}"
+        );
+    }
 
-    // A body whose `spirv_len` no longer adds up to `total` is a skip, not an
-    // error: the frame was read whole and the child keeps running.
+    // A body whose `spirv_len` no longer adds up to the bytes present is a
+    // skip, not an error: the frame was read whole and the child keeps
+    // running.
     let mut raw = bytes(&Frame::Module(good));
     let at = WireHeader::SIZE + std::mem::offset_of!(ModuleHeader, spirv_len);
     raw[at..at + 4].copy_from_slice(&1024u32.to_le_bytes());
     let mut cursor = std::io::Cursor::new(raw);
     assert!(matches!(
         read(&mut cursor).expect("reads"),
-        Some(Frame::Skipped(_))
+        Some(Frame::Skipped(Skipped {
+            kind: WIRE_MODULE,
+            why: Skip::Length
+        }))
     ));
-}
-
-/// The assembly's own rule (docs/abi.md, *Module*): pieces arrive in order, and one that does
-/// not continue where the last left off starts the payload over rather than
-/// splicing two compiles together.
-#[test]
-fn a_module_assembly_takes_its_pieces_in_order_and_nothing_else() {
-    let module = Module {
-        generation: 4,
-        index: 1,
-        count: 3,
-        format: 9,
-        name: "bar_shape".into(),
-        spirv: (0u32..256).flat_map(u32::to_le_bytes).collect(),
-        reflection: "{\"parameters\":[1]}".into(),
-    };
-    let chunks = module.chunks(size_of::<ModuleHeader>() + 64);
-    assert!(chunks.len() > 4, "{} pieces", chunks.len());
-
-    // The tail of a module whose head this reader never saw is dropped.
-    let mut assembly = ModuleAssembly::new();
-    assert_eq!(assembly.push(chunks[2].clone()), None);
-    assert_eq!(assembly.progress(), (0, 0));
-
-    // In order, it completes exactly once, on the last piece.
-    for chunk in &chunks[..chunks.len() - 1] {
-        assert_eq!(assembly.push(chunk.clone()), None);
-    }
-    assert_eq!(assembly.generation(), Some(4));
-    assert_eq!(
-        assembly.push(chunks[chunks.len() - 1].clone()),
-        Some(module.clone())
-    );
-
-    // A piece out of order forgets what was held; the writer starting again at
-    // offset 0 is what recovers it.
-    let mut assembly = ModuleAssembly::new();
-    assert_eq!(assembly.push(chunks[0].clone()), None);
-    assert_eq!(assembly.push(chunks[2].clone()), None);
-    assert_eq!(assembly.progress(), (0, 0));
-    for chunk in &chunks[..chunks.len() - 1] {
-        assert_eq!(assembly.push(chunk.clone()), None);
-    }
-    assert_eq!(
-        assembly.push(chunks[chunks.len() - 1].clone()),
-        Some(module)
-    );
 }
 
 /// The two ends never share a table: each hashes the define it holds. So the
@@ -999,21 +1035,12 @@ fn the_request_bound_admits_every_kind_the_wire_has_numbered() {
 }
 
 /// `bar_shape` with an OpenType shaper in it is 1.53 MiB of SPIR-V and
-/// 1.73 MiB with its reflection — **larger than the cap**. Sent as one frame,
-/// `caustics-reload` would refuse the whole generation and the bar would keep running the modules built into its binary, with no hot reload; so `Module` is chunked the way
-/// *Bytes*'s `Bytes` is.
-///
-/// That is what this tests: a module over the cap splits, and the pieces
-/// reassemble **byte-exact**. The cap stays at one mebibyte,
-/// and a shader may grow past it as far as it likes.
+/// 1.73 MiB with its reflection, and a shader only grows. A module of several
+/// mebibytes is **one frame**, and it comes back byte-exact.
 #[test]
-fn a_module_larger_than_the_cap_splits_and_reassembles() {
-    const BAR_SHAPE_SPIRV: usize = 1_534_000;
-    const WITH_REFLECTION: usize = 1_734_140;
-    assert!(
-        WITH_REFLECTION > WIRE_MAX_BODY,
-        "the shaper at {WITH_REFLECTION} bytes is what the cap of {WIRE_MAX_BODY} cannot hold"
-    );
+fn a_module_of_several_mebibytes_is_one_frame() {
+    const SPIRV: usize = 6 << 20;
+    const REFLECTION: usize = 200 << 10;
     let name = "bar_shape";
     let module = Module {
         generation: 7,
@@ -1021,23 +1048,25 @@ fn a_module_larger_than_the_cap_splits_and_reassembles() {
         count: 7,
         format: format_code("DST_FORMAT_RGBA8"),
         name: name.to_owned(),
-        spirv: vec![0x07u8; BAR_SHAPE_SPIRV],
-        reflection: "{".repeat(WITH_REFLECTION - BAR_SHAPE_SPIRV - name.len()),
+        spirv: (0..SPIRV).map(|i| (i % 249) as u8).collect(),
+        reflection: "{".repeat(REFLECTION),
     };
-    let chunks = module.chunks(WIRE_MAX_BODY);
-    assert_eq!(chunks.len(), 2, "1.73 MiB under a 1 MiB cap is two frames");
-
-    let mut assembly = ModuleAssembly::new();
-    let mut back = None;
-    for chunk in chunks {
-        let frame = Frame::Module(chunk);
-        // Each piece is a legal frame on its own, and survives the wire.
-        let Frame::Module(read_back) = round_trip(frame) else {
-            panic!("not a module")
-        };
-        back = assembly.push(read_back);
-    }
-    assert_eq!(back, Some(module), "the pieces reassemble byte for byte");
+    let raw = bytes(&Frame::Module(module.clone()));
+    assert_eq!(
+        raw.len(),
+        WireHeader::SIZE + size_of::<ModuleHeader>() + name.len() + SPIRV + REFLECTION
+    );
+    let mut cursor = std::io::Cursor::new(raw);
+    assert_eq!(
+        read(&mut cursor).expect("reads"),
+        Some(Frame::Module(module)),
+        "the module comes back byte for byte"
+    );
+    assert_eq!(
+        read(&mut cursor).expect("reads"),
+        None,
+        "and it was one frame"
+    );
 }
 
 // -- Image and Canvas (docs/abi.md, *Image*, *Canvas*) -------------------------
@@ -1071,74 +1100,47 @@ fn image(key: &str, width: u32, height: u32) -> Image {
     }
 }
 
-/// *Image*: a small image is one piece at offset 0, and it reads back whole.
+/// *Image*: a small image is one frame, and it reads back whole.
 #[test]
-fn an_image_that_fits_is_one_piece_and_round_trips() {
-    let picture = image("caustics-wallpaper:1-1", 3, 2);
-    let pieces = picture.chunks(WIRE_MAX_BODY);
-    assert_eq!(pieces.len(), 1);
-    assert_eq!(pieces[0].offset, 0);
-    let back = round_trip(Frame::Image(pieces[0].clone()));
-    assert_eq!(back, Frame::Image(pieces[0].clone()));
-    let mut assembly = ImageAssembly::new();
-    let Frame::Image(piece) = back else {
-        unreachable!()
+fn a_small_image_round_trips() {
+    let frame = Frame::Image(image("caustics-wallpaper:1-1", 3, 2));
+    assert_eq!(round_trip(frame.clone()), frame);
+}
+
+/// An image the size of an output is tens of mebibytes and still one frame:
+/// 2880 by 1800 is 20.7 MB of RGBA8.
+#[test]
+fn an_output_sized_image_is_one_frame() {
+    let picture = Image {
+        key: "caustics-wallpaper:1-2".into(),
+        width: 2880,
+        height: 1800,
+        rgba: (0..2880 * 1800 * 4).map(|i| (i % 251) as u8).collect(),
     };
-    assert_eq!(assembly.push(piece), Some(picture));
+    let raw = bytes(&Frame::Image(picture.clone()));
+    assert_eq!(
+        raw.len(),
+        WireHeader::SIZE + size_of::<ImageHeader>() + picture.key.len() + 2880 * 1800 * 4
+    );
+    let mut cursor = std::io::Cursor::new(raw);
+    assert_eq!(
+        read(&mut cursor).expect("reads"),
+        Some(Frame::Image(picture))
+    );
+    assert_eq!(
+        read(&mut cursor).expect("reads"),
+        None,
+        "and it was one frame"
+    );
 }
 
-/// An image past the frame cap is several pieces, in order, and only the
-/// last completes it; the bytes come back exact.
-#[test]
-fn an_image_larger_than_a_frame_splits_and_reassembles() {
-    let picture = image("big", 64, 48);
-    let pieces = picture.chunks(1024);
-    assert!(pieces.len() > 1, "{} pieces", pieces.len());
-    let mut assembly = ImageAssembly::new();
-    let last = pieces.len() - 1;
-    for (i, piece) in pieces.into_iter().enumerate() {
-        let read = round_trip(Frame::Image(piece));
-        let Frame::Image(piece) = read else {
-            panic!("piece {i} did not read back as an image: {read:?}")
-        };
-        let whole = assembly.push(piece);
-        if i < last {
-            assert!(whole.is_none(), "piece {i} completed the image early");
-            assert!(assembly.progress().0 > 0);
-        } else {
-            assert_eq!(whole.as_ref(), Some(&picture));
-        }
-    }
-}
-
-/// A piece out of order, or of another image, starts over: two images are
-/// never spliced, and a tail whose head never arrived is dropped.
-#[test]
-fn an_image_assembly_takes_its_pieces_in_order_and_nothing_else() {
-    let a = image("a", 16, 16).chunks(256);
-    let b = image("b", 16, 16).chunks(256);
-    let mut assembly = ImageAssembly::new();
-    assert!(assembly.push(a[1].clone()).is_none(), "a tail alone");
-    assert_eq!(assembly.progress(), (0, 0));
-    assert!(assembly.push(a[0].clone()).is_none());
-    // Another image's second piece where `a`'s was owed: dropped, and `a`
-    // with it.
-    assert!(assembly.push(b[1].clone()).is_none());
-    assert_eq!(assembly.progress(), (0, 0));
-    let mut whole = None;
-    for piece in &b {
-        whole = assembly.push(piece.clone());
-    }
-    assert_eq!(whole.map(|image| image.key), Some("b".to_owned()));
-}
-
-/// *Image*'s reader rules: a side of zero or past the cap, an empty key, an
-/// empty piece and a piece past the image are each a skip, never a frame.
+/// *Image*'s reader rules: a side of zero or past the cap and a key past the
+/// name cap are each a skip (body); pixels that are not the size's are a skip
+/// (length). Never a frame.
 #[test]
 fn a_malformed_image_is_skipped_rule_by_rule() {
-    let piece = image("k", 2, 2).chunks(WIRE_MAX_BODY).remove(0);
-    let frame = Frame::Image(piece);
-    // ImageHeader: key_len 0, width 4, height 8, offset 12.
+    let frame = Frame::Image(image("k", 2, 2));
+    // ImageHeader: key_len 0, width 4, height 8.
     let cases: [(&str, Vec<u8>); 6] = [
         ("width 0", with_words(&frame, &[(4, 0)], &[])),
         (
@@ -1150,11 +1152,11 @@ fn a_malformed_image_is_skipped_rule_by_rule() {
             with_words(&frame, &[(8, IMAGE_MAX_PX + 1)], &[]),
         ),
         (
-            "a piece past the image",
-            with_words(&frame, &[(12, 4)], &[]),
+            "fewer pixels than the size",
+            with_words(&frame, &[(8, 3)], &[]),
         ),
         (
-            "a piece longer than the image",
+            "more pixels than the size",
             with_words(&frame, &[], &[0; 4]),
         ),
         (
@@ -1174,37 +1176,23 @@ fn a_malformed_image_is_skipped_rule_by_rule() {
             "{what} was not skipped"
         );
     }
-    // The largest image the cap admits is a size the reader passes.
-    let edge = Frame::Image(ImageChunk {
-        key: "edge".into(),
-        width: IMAGE_MAX_PX,
-        height: IMAGE_MAX_PX,
-        offset: IMAGE_MAX_PX * IMAGE_MAX_PX * 4 - 4,
-        bytes: vec![1, 2, 3, 4],
-    });
-    assert_eq!(round_trip(edge.clone()), edge);
     // And the writer refuses what the reader would skip.
     for bad in [
-        ImageChunk {
+        Image {
             key: String::new(),
-            width: 1,
-            height: 1,
-            offset: 0,
-            bytes: vec![0; 4],
+            ..image("k", 1, 1)
         },
-        ImageChunk {
-            key: "k".into(),
+        Image {
             width: 0,
-            height: 1,
-            offset: 0,
-            bytes: vec![0; 4],
+            ..image("k", 1, 1)
         },
-        ImageChunk {
-            key: "k".into(),
-            width: 1,
-            height: 1,
-            offset: 4,
-            bytes: vec![0; 4],
+        Image {
+            width: IMAGE_MAX_PX + 1,
+            ..image("k", 1, 1)
+        },
+        Image {
+            rgba: vec![0; 8],
+            ..image("k", 1, 1)
         },
     ] {
         assert!(

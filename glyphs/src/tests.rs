@@ -1,6 +1,6 @@
 //! What the sidecar promises the bar (docs/abi.md, *Bytes*–*Request*): the font
-//! arrives as one `Font` and then contiguous `Bytes` runs that reassemble to
-//! exactly the buffers it holds, and an icon arrives as a **tail** of each
+//! arrives as one `Font` and then one `Bytes` run per buffer, exactly the
+//! buffers it holds, and an icon arrives as a **tail** of each
 //! curve buffer and one `Glyph`.
 //!
 //! Every test is skipped rather than failed on a machine with no font or no
@@ -83,29 +83,27 @@ fn the_font_goes_out_as_one_font_frame_then_contiguous_runs() {
     );
     assert_eq!(font.family, sidecar.loaded().family);
 
-    // Reassemble every run and compare it with what the sidecar holds.
+    // Every buffer is one run, whole, and the same bytes the sidecar holds.
     let mut rebuilt: HashMap<u32, Vec<u8>> = HashMap::new();
     let mut order: Vec<u32> = Vec::new();
     for frame in &decoded[1..] {
         let Frame::Bytes(bytes) = frame else {
             panic!("only Bytes follow the Font")
         };
-        let slot = rebuilt.entry(bytes.buffer).or_default();
-        if slot.is_empty() {
-            order.push(bytes.buffer);
-            slot.resize(bytes.total as usize, 0);
-        }
         assert_eq!(
-            slot.len(),
+            bytes.offset, 0,
+            "buffer {} is one run from zero",
+            bytes.buffer
+        );
+        assert_eq!(
+            bytes.bytes.len(),
             bytes.total as usize,
-            "every chunk carries the same total"
+            "buffer {} is one run, whole",
+            bytes.buffer
         );
-        let at = bytes.offset as usize;
-        assert!(
-            bytes.bytes.len() <= CHUNK,
-            "a chunk over the wire's cap would not have written"
-        );
-        slot[at..at + bytes.bytes.len()].copy_from_slice(&bytes.bytes);
+        let earlier = rebuilt.insert(bytes.buffer, bytes.bytes.clone());
+        assert!(earlier.is_none(), "buffer {} crossed twice", bytes.buffer);
+        order.push(bytes.buffer);
     }
     for buffer in BUFFERS {
         let want = crate::buffer(sidecar.loaded(), buffer).expect("a known buffer");
@@ -403,12 +401,13 @@ fn a_cover_opens_a_face_and_fills_what_the_primary_lacks() {
         };
         match CURVE_BUFFERS.iter().position(|b| *b == bytes.buffer) {
             Some(i) if bytes.offset == before_curves[i] as u32 => {}
-            Some(_) if bytes.offset > 0 => {} // a later chunk of the same run
+            // A glyph record a cover filled in place, below what was sent.
+            Some(_) if bytes.buffer == BUF_GLYPHS && bytes.offset > 0 => {}
             Some(i) => panic!(
                 "buffer {} restarted at {} not {}",
                 bytes.buffer, bytes.offset, before_curves[i]
             ),
-            // The arena goes back in three pieces: the front block at zero, a
+            // The arena goes back in three runs: the front block at zero, a
             // fill bitmap in the middle, and the new face's tables as a tail.
             None if bytes.buffer == BUF_OT => {}
             None => assert_eq!(bytes.offset, 0, "buffer {} goes back whole", bytes.buffer),

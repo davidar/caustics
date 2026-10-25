@@ -49,7 +49,8 @@ pub const KEY_SIDECAR: &str = "caustics-tray";
 /// built and the row count is not known until the end.
 ///
 /// Bounded by the bar's region of the rows arena rather than by the wire's
-/// body cap: the region is the smaller of the two (64 KiB against 1 MiB), and
+/// body cap: the region is the smaller of the two (64 KiB against the cap's
+/// 256 MiB, which is sized for a canvas picture), and
 /// a frame past it is one the bar refuses whole and keeps the last one that
 /// fitted: a menu that silently stops updating.
 const BLOB_BUDGET: usize = {

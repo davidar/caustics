@@ -1,5 +1,5 @@
 //! Two lines: everything is in the library so `glyphs/src/tests.rs` can reach
-//! the font load, the chunking and the icon append.
+//! the font load, the runs and the icon append.
 
 fn main() {
     // The first frame on the wire is the contract this binary was built against

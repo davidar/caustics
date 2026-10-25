@@ -385,14 +385,13 @@ fn show(
     let fitted = picture::shrink(&pixels, width, height);
     *serial = serial.wrapping_add(1);
     let key = frames::key(std::process::id(), *serial);
-    let (sent, start_ms) = frames::write_show(out, &key, &fitted, fade_ms, boottime_ms)
+    let (width, height) = (fitted.width, fitted.height);
+    let (sent, start_ms) = frames::write_show(out, &key, fitted, fade_ms, boottime_ms)
         .map_err(|err| format!("the host's pipe: {err}"))?;
     witness(&format!(
-        "showing {} as {key}: {}x{} from {}x{}, {sent} frames, fading over {fade_ms} ms ({} ms \
-         to decode and fit)",
+        "showing {} as {key}: {width}x{height} from {}x{}, {sent} frames, fading over {fade_ms} ms \
+         ({} ms to decode and fit)",
         path.display(),
-        fitted.width,
-        fitted.height,
         pixels.width,
         pixels.height,
         started.elapsed().as_millis()

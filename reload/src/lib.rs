@@ -78,8 +78,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::SystemTime;
 
 use caustics_bar_abi::wire::{
-    self, Frame, MAX_MODULES, Module, PROGRAM_BAR, PROGRAM_CANVAS, REQ_PROGRAM, WIRE_MAX_BODY,
-    format_code,
+    self, Frame, MAX_MODULES, Module, PROGRAM_BAR, PROGRAM_CANVAS, REQ_PROGRAM, format_code,
 };
 use caustics_bar_abi::{BAR_ENTRIES, CANVAS_ENTRIES, DstFormat};
 use punchcutter_slang::{Options, SlangError};
@@ -885,10 +884,9 @@ pub fn compile_entries(
 /// Both paths go through here so that a cache entry becomes a generation
 /// exactly as a compile does, whichever side of the cache it came from.
 ///
-/// There is no cap to refuse against. `Module` carries an `offset` and a
-/// `total` (docs/abi.md, *Module*), so a module of any size — `bar_shape` is
-/// about 1.7 MiB, past `WIRE_MAX_BODY` — goes as [`Module::chunks`] frames,
-/// and the frame cap stays at the mebibyte docs/abi.md, *Framing*, asks for.
+/// There is no cap to refuse against here. A module is one frame
+/// (docs/abi.md, *Module*), and the largest the caustic compiles to,
+/// `bar_shape` at about 1.7 MiB, is a hundredth of what `WIRE_MAX_BODY` admits.
 fn assemble(
     cached: Vec<Cached>,
     define: &str,
@@ -985,20 +983,13 @@ fn listen(into: mpsc::Sender<Input>) {
     }
 }
 
-/// Write one generation's frames. A closed pipe is the bar leaving, not an
-/// error.
-///
-/// A module is one frame where it fits in [`WIRE_MAX_BODY`] and several, in
-/// order, where it does not — `bar_shape`, at about 1.7 MiB, is two. The cut is
-/// `Module::chunks`'s and the reassembly is `wire::ModuleAssembly`'s; this loop
-/// knows only that a module has pieces.
+/// Write one generation's frames, one per entry point. A closed pipe is the
+/// bar leaving, not an error.
 fn send(program: &Program) -> io::Result<()> {
     let stdout = io::stdout();
     let mut out = stdout.lock();
     for module in &program.modules {
-        for chunk in module.chunks(WIRE_MAX_BODY) {
-            wire::write(&mut out, &Frame::Module(chunk))?;
-        }
+        wire::write(&mut out, &Frame::Module(module.clone()))?;
     }
     Ok(())
 }

@@ -28,7 +28,7 @@
 
 use punchcutter_slang::Reflection;
 
-use caustics_bar_abi::wire::{Module, ModuleAssembly, ModuleChunk};
+use caustics_bar_abi::wire::Module;
 
 /// What one `Module` frame did.
 pub enum Collected {
@@ -110,10 +110,6 @@ pub struct Modules {
     generation: u32,
     /// One slot per entry point, filled by index.
     have: Vec<Option<Module>>,
-    /// The entry point being reassembled, if a module is arriving in pieces.
-    /// The rule is the wire's ([`ModuleAssembly`]); this holds one because a
-    /// writer sends one module's pieces before it starts the next.
-    partial: ModuleAssembly,
 }
 
 impl Modules {
@@ -124,7 +120,6 @@ impl Modules {
             want: None,
             generation: 0,
             have: Vec::new(),
-            partial: ModuleAssembly::default(),
         }
     }
 
@@ -135,29 +130,17 @@ impl Modules {
         self.want = Some(format);
     }
 
-    /// File one frame: a piece of an entry point, or the whole of one.
+    /// File one frame, which is one whole entry point.
     ///
     /// Three checks — the format, the entry count, the name at the index —
-    /// and they are made on the *whole*
-    /// module, because a piece carries no name until its first bytes have
-    /// landed. Reassembly is [`ModuleAssembly`]'s: this decides nothing about
-    /// where a byte goes, it only says when a generation may be swapped.
-    pub fn collect(&mut self, chunk: ModuleChunk) -> Collected {
+    /// and nothing about where a byte goes: this only says when a generation
+    /// may be swapped.
+    pub fn collect(&mut self, module: Module) -> Collected {
         let Some(want) = self.want else {
             return Collected::Refused(format!(
                 "a module for generation {} arrived before the device had a format",
-                chunk.generation
+                module.generation
             ));
-        };
-        let generation = chunk.generation;
-        let Some(module) = self.partial.push(chunk) else {
-            // A piece landed and the entry point is not whole yet. The
-            // generation's own count has not moved.
-            return Collected::Waiting {
-                generation,
-                have: self.have.iter().flatten().count(),
-                count: self.entries.len(),
-            };
         };
         if module.format != want {
             return Collected::Refused(format!(

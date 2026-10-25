@@ -34,13 +34,12 @@
 //!
 //! [`FRAME_STALL`]: caustics_host::pacing::FRAME_STALL
 
-use std::collections::HashMap;
 use std::ptr::NonNull;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
 use caustics_bar_abi::wire::{
-    self, Frame, ImageAssembly, ModuleChunk, PROGRAM_CANVAS, REQ_OUTPUT_SIZE, REQ_PROGRAM, Request,
+    self, Frame, Module, PROGRAM_CANVAS, REQ_OUTPUT_SIZE, REQ_PROGRAM, Request,
 };
 use caustics_bar_abi::{CANVAS_ENTRIES, wire::Image};
 use caustics_host::modules::{Collected, Modules};
@@ -157,8 +156,6 @@ pub struct Canvas {
     strings: Strings,
     printer: Printer,
     slots: Slots,
-    /// Each sidecar's image in pieces.
-    assemblies: HashMap<String, ImageAssembly>,
     /// Pictures placed before the device existed, by slot.
     unplaced: [Option<Image>; 2],
     /// The size last told the wallpaper sidecar, and how many sizes have been.
@@ -220,7 +217,6 @@ impl Canvas {
             strings,
             printer: Printer::new(Caustic::Canvas),
             slots: Slots::new(),
-            assemblies: HashMap::new(),
             unplaced: [None, None],
             told: None,
             sizes: 0,
@@ -575,9 +571,8 @@ impl Canvas {
         match event {
             Event::Absent(name) => tracing::info!("sidecar {name} is absent"),
             Event::Gone(name) => {
-                // Whatever it had half sent is not coming. The picture on
-                // screen stays: it is the host's now.
-                self.assemblies.remove(&name);
+                // The picture on screen stays: it is the host's now. One
+                // received and never shown is not going to be.
                 if name == WALLPAPER
                     && let Some(image) = self.slots.forget_waiting()
                 {
@@ -590,11 +585,7 @@ impl Canvas {
 
     fn apply_frame(&mut self, sidecar: &str, frame: Frame) {
         match frame {
-            Frame::Image(chunk) => {
-                let assembly = self.assemblies.entry(sidecar.to_owned()).or_default();
-                let Some(image) = assembly.push(chunk) else {
-                    return;
-                };
+            Frame::Image(image) => {
                 tracing::info!(
                     "sidecar {sidecar}: image {:?}, {}x{} ({} KiB), waiting for its show",
                     image.key,
@@ -610,7 +601,7 @@ impl Canvas {
                 }
             }
             Frame::Canvas(command) => self.apply_command(sidecar, &command),
-            Frame::Module(chunk) => self.apply_module(sidecar, chunk),
+            Frame::Module(module) => self.apply_module(sidecar, module),
             other => tracing::info!(
                 "sidecar {sidecar}: frame kind {} has no consumer here",
                 other.kind()
@@ -655,11 +646,11 @@ impl Canvas {
         self.mark_all_dirty();
     }
 
-    /// One piece of a fresh compile, and the swap when it completes a
+    /// One entry point of a fresh compile, and the swap when it completes a
     /// generation (docs/abi.md, *Module*): all or nothing, the canvas's
     /// buffers and so its fade untouched.
-    fn apply_module(&mut self, sidecar: &str, chunk: ModuleChunk) {
-        let ready = match self.modules.collect(chunk) {
+    fn apply_module(&mut self, sidecar: &str, module: Module) {
+        let ready = match self.modules.collect(module) {
             Collected::Waiting { .. } => return,
             Collected::Refused(why) => {
                 tracing::warn!("sidecar {sidecar}: {why}; keeping the old canvas");

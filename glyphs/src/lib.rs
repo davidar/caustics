@@ -6,7 +6,7 @@
 //! buffers and covering what it lacks are the text engine's
 //! (`punchcutter_fonts`); what this process adds is the wire, the icons and the
 //! cover protocol over the pipe. It writes one `Font` frame and
-//! then a run of `Bytes` frames — one per chunk, six buffers — and the bar
+//! then one `Bytes` frame per buffer, six of them, and the bar
 //! copies each run into the GPU buffer the frame names without reading a byte
 //! of it (docs/abi.md, *Bytes*–*Glyph*).
 //!
@@ -27,10 +27,9 @@
 //!
 //! On start: `Font` (upem, cap height, the glyph count and where the icons will
 //! begin), then `Bytes` for each of the six `BUF_*` in ABI order — the four
-//! curve buffers, `BUF_SHAPE_FONT`, the arena. A buffer longer than
-//! [`CHUNK`] is several frames at consecutive offsets, every one of them
-//! carrying the same `total`, so the bar can size the GPU buffer on the first
-//! one and never resize mid-font.
+//! curve buffers, `BUF_SHAPE_FONT`, the arena. Each is one frame whatever its
+//! size, carrying the buffer's `total`, so the bar sizes the GPU buffer once
+//! and never resizes mid-font.
 //!
 //! On a `Request` of kind `REQ_COVER`: the **bytes of a string** whose run the
 //! shaper flagged `.notdef` (docs/architecture.md, *Text*; the rest of shaping
@@ -74,7 +73,7 @@ use std::time::{Duration, SystemTime};
 
 use caustics_bar_abi::wire::{
     self, BUF_BAND_CURVES, BUF_BANDS, BUF_GLYPHS, BUF_LAST, BUF_OT, BUF_POINTS, BUF_SHAPE_FONT,
-    Bytes, BytesHeader, Font, Frame, GLYPH_MISSING, Glyph, REQ_COVER, REQ_GLYPH, WIRE_MAX_BODY,
+    Bytes, Font, Frame, GLYPH_MISSING, Glyph, REQ_COVER, REQ_GLYPH,
 };
 use caustics_bar_abi::{IMAGE_SLOT_PX, slice_as_bytes};
 use caustics_sidecar::inbox::{Inbox, Next};
@@ -92,11 +91,6 @@ pub use caustics_sidecar::icons::{FALLBACK_THEMES, is_symbolic, resolve, theme_o
 /// so the two searches land on the same file for a name that turns out to be
 /// pixels after all.
 pub const ICON_PX: u32 = IMAGE_SLOT_PX;
-
-/// The most bytes one `Bytes` body carries, so a run longer than this is
-/// several frames at consecutive offsets. The wire's cap less the body's own
-/// header; a multiple of sixteen, which every buffer's element size divides.
-pub const CHUNK: usize = WIRE_MAX_BODY - size_of::<BytesHeader>();
 
 /// How often the names this process answered are looked at again
 /// (see [`Sidecar::sweep`]): a name no theme had is searched for once more, and
@@ -502,9 +496,8 @@ impl Sidecar {
         HeldGlyph { glyph, file }
     }
 
-    /// One run of bytes for one buffer, chunked so no body passes the wire's
-    /// cap. Every chunk carries the same `total`, so the bar sizes the GPU
-    /// buffer on the first one.
+    /// One run of bytes for one buffer, as one frame, carrying the buffer's
+    /// `total` so the bar sizes the GPU buffer before the run lands.
     fn write_run(
         &mut self,
         out: &mut impl Write,
@@ -517,16 +510,13 @@ impl Sidecar {
             // An empty run says nothing the bar does not already assume.
             return Ok(());
         }
-        for (i, chunk) in bytes.chunks(CHUNK).enumerate() {
-            let frame = Frame::Bytes(Bytes {
-                buffer,
-                offset: (offset + i * CHUNK) as u32,
-                total: total as u32,
-                bytes: chunk.to_vec(),
-            });
-            self.write_frame(out, &frame)?;
-        }
-        Ok(())
+        let frame = Frame::Bytes(Bytes {
+            buffer,
+            offset: offset as u32,
+            total: total as u32,
+            bytes: bytes.to_vec(),
+        });
+        self.write_frame(out, &frame)
     }
 
     fn write_frame(&mut self, out: &mut impl Write, frame: &Frame) -> io::Result<()> {

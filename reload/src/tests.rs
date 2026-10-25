@@ -183,32 +183,22 @@ fn a_generation_is_its_entry_points_in_order_for_the_asked_format() {
         "the first compile of a tree cannot be a cache hit"
     );
 
-    // The frames as `send` writes them — a module is one frame where it fits
-    // under the cap and several where it does not (docs/abi.md, *Module*) — and the
-    // reassembly the bar does, here against the compiler's own output.
+    // The frames as `send` writes them, one per entry point
+    // (docs/abi.md, *Module*), read back the way the bar reads them, here
+    // against the compiler's own output.
     let mut wire_bytes = Vec::new();
-    let mut frames = 0usize;
     for module in &program.modules {
-        for chunk in module.chunks(wire::WIRE_MAX_BODY) {
-            wire::write(&mut wire_bytes, &Frame::Module(chunk)).expect("frames");
-            frames += 1;
-        }
+        wire::write(&mut wire_bytes, &Frame::Module(module.clone())).expect("frames");
     }
-    assert!(
-        frames >= entries.len(),
-        "at least one frame per entry point"
-    );
     let mut cursor = io::Cursor::new(wire_bytes);
-    let mut assembly = wire::ModuleAssembly::new();
     for (index, &entry) in entries.iter().enumerate() {
-        let back = loop {
-            let Some(Frame::Module(chunk)) = wire::read(&mut cursor).expect("reads") else {
-                panic!("a frame before entry point {index} is not a module");
-            };
-            if let Some(whole) = assembly.push(chunk) {
-                break whole;
-            }
+        let Some(Frame::Module(back)) = wire::read(&mut cursor).expect("reads") else {
+            panic!("frame {index} is not a module");
         };
+        assert_eq!(
+            back, program.modules[index],
+            "{entry} came back byte for byte"
+        );
         assert_eq!(back.generation, 3);
         assert_eq!(back.index, index as u32);
         assert_eq!(back.count, entries.len() as u32);

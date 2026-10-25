@@ -48,25 +48,48 @@ pub const WIRE_ROWS: u32 = 2;
 /// An [`ActionBody`] (docs/abi.md, *Action*), the one kind the *bar* writes.
 pub const WIRE_ACTION: u32 = 3;
 
-/// A body longer than this is a broken writer, not a frame kind from the
-/// future: the reader errors and the bar restarts the child.
+/// The largest honest body: a body longer than this is a broken writer, not a
+/// frame kind from the future, and the reader errors and the bar restarts the
+/// child (docs/abi.md, *Framing*, rule 3).
 ///
-/// **One mebibyte**, which is the number *Pixmap icons*'s pixmap icons asked for when a
-/// `Rows` frame could carry several 256² of them. A row's icon is a name now,
-/// and pixels travel one 16 KiB [`Pixmap`] at a time, so no body a
-/// sidecar sends today comes near it — but the cap is a bound on a broken
-/// writer, not a size estimate, and a `Module` chunk is sized against it.
+/// It is computed from the wire's own bounds rather than chosen. The largest
+/// frame any writer can send is an [`Image`] at [`IMAGE_MAX_PX`] square in
+/// straight RGBA8, behind its [`ImageHeader`] and the longest key
+/// ([`MAX_NAME_LEN`]):
 ///
-/// It is not raised for big shaders: `bar_shape` with an OpenType shaper in it
-/// is 1.53 MiB of SPIR-V, and [`Module`] has what [`Bytes`] has — an
-/// `offset`, a `total`, and a body split across frames ([`Module::chunks`]).
-/// A shader only grows (Unicode tables, syllable machines, paint graphs), and
-/// it does not grow into this number.
+/// ```text
+/// size_of::<ImageHeader>() + MAX_NAME_LEN + IMAGE_MAX_PX² × 4
+///   = 12 + 1024 + 8192² × 4 = 268 436 492 bytes, a little over 256 MiB
+/// ```
 ///
-/// Every fixed body is tiny ([`Samples`] is 8336 B), so this bounds only the
-/// variable-size kinds — and it bounds them before a single byte is allocated,
-/// which is the property the cap exists for.
-pub const WIRE_MAX_BODY: usize = 1 << 20;
+/// Every other kind is far smaller: the fixed bodies are tiny ([`Samples`] is
+/// 8336 B), a `Rows` body is bounded by the bar's region of the rows arena,
+/// and a whole compiled `Module` (`bar_shape` with its reflection is about
+/// 1.7 MiB) or a font's arena as one `Bytes` run is a few mebibytes. So every
+/// payload crosses as **one frame**, and nothing on the wire is cut up and put
+/// back together.
+///
+/// The cap no longer has to be small to keep a lying header cheap. That is
+/// the reader's: a body is read in [`WIRE_READ_STEP`] steps into a buffer that
+/// grows with the bytes actually in hand, so a header claiming the cap from a
+/// writer that then sends ten bytes costs those ten bytes and one step.
+pub const WIRE_MAX_BODY: usize =
+    size_of::<ImageHeader>() + MAX_NAME_LEN + IMAGE_MAX_PX as usize * IMAGE_MAX_PX as usize * 4;
+
+// `WireHeader::len` is a `u32`: the largest honest body has to be one.
+const _: () = assert!(WIRE_MAX_BODY <= u32::MAX as usize);
+
+/// How much of a body the reader asks its input for at a time, and how far
+/// ahead of the bytes in hand its buffer may grow (docs/abi.md, *Framing*,
+/// rule 4).
+///
+/// **64 KiB**, the default capacity of a Linux pipe: a sidecar's stdout is a
+/// pipe, so one step is about what one `read` of a full pipe returns, and a
+/// larger one would only be a buffer zeroed ahead of bytes that are not there
+/// yet. It is also the whole of what a header lying about its length costs
+/// beyond the bytes its writer really sends, which at 64 KiB is nothing a
+/// reader notices.
+pub const WIRE_READ_STEP: usize = 64 << 10;
 
 // ---------------------------------------------------------------------------
 // The answer kinds (docs/abi.md, *Bytes*–*Module*): what a sidecar that turns a
@@ -96,8 +119,8 @@ pub const WIRE_PIXMAP: u32 = 9;
 pub const WIRE_MODULE: u32 = 10;
 /// **A sidecar's first frame**: which contract it was built against (docs/abi.md, *Hello*).
 pub const WIRE_HELLO: u32 = 11;
-/// One piece of a keyed image of any size up to [`IMAGE_MAX_PX`] square, for
-/// the canvas (docs/abi.md, *Image*). Not a [`Pixmap`]: that one is a slot of
+/// A keyed image of any size up to [`IMAGE_MAX_PX`] square, for the canvas
+/// (docs/abi.md, *Image*). Not a [`Pixmap`]: that one is a slot of
 /// the bar's fixed array, this one is a picture the canvas covers an output with.
 pub const WIRE_IMAGE: u32 = 12;
 /// A command for the canvas: show an image, dim, undim (docs/abi.md, *Canvas*).
@@ -1058,13 +1081,12 @@ pub struct Pixmap {
 }
 
 /// *Image* — the fixed head of a `WIRE_IMAGE` body; `key_len` bytes of key,
-/// then **one piece** of the image's straight RGBA8, follow. 16 B.
+/// then the whole image's straight RGBA8, `width * height * 4` bytes, follow.
+/// 12 B.
 ///
-/// An image is `width * height * 4` bytes, which at the cap is 256 MiB and
-/// at an ordinary output tens of them, so it crosses the way a `Module` does:
-/// in pieces under [`WIRE_MAX_BODY`], in order, each saying where its bytes
-/// land ([`Image::chunks`], [`ImageAssembly`]). Every piece repeats the key
-/// and the size, so a reader can tell where a piece belongs from the piece.
+/// An image at [`IMAGE_MAX_PX`] square is the largest honest body on the wire,
+/// and [`WIRE_MAX_BODY`] is computed from it, so an image of any size the
+/// reader passes is one frame.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ImageHeader {
@@ -1073,31 +1095,10 @@ pub struct ImageHeader {
     pub width: u32,
     /// 1..=[`IMAGE_MAX_PX`].
     pub height: u32,
-    /// Byte offset of this piece within the image's `width * height * 4`.
-    pub offset: u32,
 }
 unsafe impl Plain for ImageHeader {}
 
-/// A `WIRE_IMAGE` frame, decoded: one **piece** of one image.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ImageChunk {
-    pub key: String,
-    pub width: u32,
-    pub height: u32,
-    pub offset: u32,
-    /// This piece of the straight RGBA8, row-major.
-    pub bytes: Vec<u8>,
-}
-
-impl ImageChunk {
-    /// The whole image's length in bytes, which every piece implies.
-    pub fn total(&self) -> usize {
-        self.width as usize * self.height as usize * 4
-    }
-}
-
-/// One whole image: what a writer holds before it cuts it up, and what a
-/// reader holds once it has put it back together.
+/// A `WIRE_IMAGE` frame: one whole image.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Image {
     /// The sidecar's name for it; a `CANVAS_SHOW` names it again.
@@ -1107,97 +1108,6 @@ pub struct Image {
     /// Straight (not premultiplied) RGBA8, row-major, `width * height * 4`
     /// bytes.
     pub rgba: Vec<u8>,
-}
-
-impl Image {
-    /// Cut this image into frames whose body is at most `max_body` bytes,
-    /// header and key included. [`WIRE_MAX_BODY`] in every caller; a
-    /// parameter so a test can force several pieces from a small image.
-    pub fn chunks(&self, max_body: usize) -> Vec<ImageChunk> {
-        let room = max_body
-            .saturating_sub(size_of::<ImageHeader>() + self.key.len())
-            .max(4);
-        self.rgba
-            .chunks(room)
-            .enumerate()
-            .map(|(i, run)| ImageChunk {
-                key: self.key.clone(),
-                width: self.width,
-                height: self.height,
-                offset: (i * room) as u32,
-                bytes: run.to_vec(),
-            })
-            .collect()
-    }
-}
-
-/// The pieces of one image, collected until it is whole: *Module*'s rule for
-/// an image (docs/abi.md, *Image*). A writer sends an image's pieces **in
-/// order**, so a piece whose `offset` is not where the last one ended, or
-/// that names another key or size, starts over.
-///
-/// The bytes in hand grow as pieces arrive, never ahead of them: a first
-/// piece that claims the cap costs what it carries, not 256 MiB.
-#[derive(Clone, Debug, Default)]
-pub struct ImageAssembly {
-    head: Option<(String, u32, u32)>,
-    rgba: Vec<u8>,
-}
-
-impl ImageAssembly {
-    pub fn new() -> ImageAssembly {
-        ImageAssembly::default()
-    }
-
-    /// Bytes in hand, and the image's whole length.
-    pub fn progress(&self) -> (usize, usize) {
-        let total = self
-            .head
-            .as_ref()
-            .map_or(0, |(_, w, h)| *w as usize * *h as usize * 4);
-        (self.rgba.len(), total)
-    }
-
-    /// Forget what is held.
-    pub fn clear(&mut self) {
-        self.head = None;
-        self.rgba = Vec::new();
-    }
-
-    /// File one piece; `Some` once the image is whole.
-    pub fn push(&mut self, chunk: ImageChunk) -> Option<Image> {
-        let continues = match &self.head {
-            Some((key, width, height)) => {
-                *key == chunk.key
-                    && *width == chunk.width
-                    && *height == chunk.height
-                    && self.rgba.len() == chunk.offset as usize
-            }
-            None => false,
-        };
-        if !continues {
-            self.clear();
-            if chunk.offset != 0 {
-                // The tail of an image whose head this reader never saw.
-                return None;
-            }
-        }
-        let total = chunk.total();
-        self.rgba.extend_from_slice(&chunk.bytes);
-        if self.rgba.len() < total {
-            self.head = Some((chunk.key, chunk.width, chunk.height));
-            return None;
-        }
-        self.head = None;
-        let mut rgba = std::mem::take(&mut self.rgba);
-        rgba.truncate(total);
-        Some(Image {
-            key: chunk.key,
-            width: chunk.width,
-            height: chunk.height,
-            rgba,
-        })
-    }
 }
 
 abi_struct! {
@@ -1310,21 +1220,19 @@ impl Canvas {
     }
 }
 
-/// *Module* — the fixed head of a `WIRE_MODULE` body, and behind it **one piece**
-/// of the module's payload.
-///
-/// The payload is `name_len` bytes of entry point, then `spirv_len` bytes of
+/// *Module* — the fixed head of a `WIRE_MODULE` body, and behind it the whole
+/// of one entry point: `name_len` bytes of name, then `spirv_len` bytes of
 /// SPIR-V, then `reflection_len` bytes of the program's reflection as JSON
-/// (`punchcutter_slang::Reflection`), in that order. `total` is the whole of it and `offset` says where this frame's bytes
-/// land in it — the shape [`BytesHeader`] has (docs/abi.md, *Bytes*), given to `Module` so that
-/// a shader outgrowing [`WIRE_MAX_BODY`] is several frames
-/// rather than a refused generation.
+/// (`punchcutter_slang::Reflection`), in that order. 28 B.
+///
+/// The three runs are the body's tail exactly, so a reader checks them against
+/// the bytes present before it copies one.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ModuleHeader {
     /// Which compile this frame belongs to. A generation is complete when
-    /// `count` entry points have arrived **whole**; a newer one starting
-    /// abandons an older one that never completed.
+    /// `count` entry points have arrived; a newer one starting abandons an
+    /// older one that never completed.
     pub generation: u32,
     /// This entry point's index in the caustic's entry list, which is also
     /// the order the pipelines are built in. `index < count`.
@@ -1334,42 +1242,13 @@ pub struct ModuleHeader {
     /// [`format_code`] of the define this module was compiled for. A
     /// generation compiled for another swapchain format is not this session's.
     pub format: u32,
-    /// The whole module's three runs, repeated in every piece — so a reader can
-    /// size the payload from the first frame it sees and cut it up after the
-    /// last, without holding a piece's header apart from its bytes.
     pub spirv_len: u32,
     pub reflection_len: u32,
     pub name_len: u32,
-    /// Byte offset of this frame's bytes within the payload.
-    pub offset: u32,
-    /// The payload's whole length: `name_len + spirv_len + reflection_len`.
-    pub total: u32,
-    pub _rsvd0: u32,
 }
 unsafe impl Plain for ModuleHeader {}
 
-/// A `WIRE_MODULE` frame, decoded: one **piece** of one entry point.
-///
-/// A module that fits in a frame is one chunk at offset 0; a larger one is
-/// several, in order. [`ModuleAssembly`] puts them back together, and it rather
-/// than the bar is where that rule lives.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ModuleChunk {
-    pub generation: u32,
-    pub index: u32,
-    pub count: u32,
-    pub format: u32,
-    pub name_len: u32,
-    pub spirv_len: u32,
-    pub reflection_len: u32,
-    pub offset: u32,
-    pub total: u32,
-    /// This piece of `name || spirv || reflection`.
-    pub bytes: Vec<u8>,
-}
-
-/// One whole entry point of a fresh compile: what a writer holds before it cuts
-/// the payload up, and what a reader holds once it has put it back together.
+/// A `WIRE_MODULE` frame: one whole entry point of a fresh compile.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Module {
     pub generation: u32,
@@ -1385,130 +1264,6 @@ pub struct Module {
     /// carries the same reflection; each carries it so that a module stays
     /// one self-contained record.
     pub reflection: String,
-}
-
-impl Module {
-    /// The payload this module's frames carry between them.
-    fn payload(&self) -> Vec<u8> {
-        let mut out =
-            Vec::with_capacity(self.name.len() + self.spirv.len() + self.reflection.len());
-        out.extend_from_slice(self.name.as_bytes());
-        out.extend_from_slice(&self.spirv);
-        out.extend_from_slice(self.reflection.as_bytes());
-        out
-    }
-
-    /// Cut this module into frames whose body is at most `max_body` bytes,
-    /// header included. Always at least one, even for an empty payload.
-    ///
-    /// `max_body` is [`WIRE_MAX_BODY`] in every caller; it is a parameter so a
-    /// test can ask for a cap small enough to force several pieces without
-    /// building a megabyte of SPIR-V to do it.
-    pub fn chunks(&self, max_body: usize) -> Vec<ModuleChunk> {
-        let payload = self.payload();
-        let room = max_body.saturating_sub(size_of::<ModuleHeader>()).max(1);
-        let total = payload.len() as u32;
-        let piece = |offset: u32, bytes: Vec<u8>| ModuleChunk {
-            generation: self.generation,
-            index: self.index,
-            count: self.count,
-            format: self.format,
-            name_len: self.name.len() as u32,
-            spirv_len: self.spirv.len() as u32,
-            reflection_len: self.reflection.len() as u32,
-            offset,
-            total,
-            bytes,
-        };
-        if payload.is_empty() {
-            return vec![piece(0, Vec::new())];
-        }
-        payload
-            .chunks(room)
-            .enumerate()
-            .map(|(i, run)| piece((i * room) as u32, run.to_vec()))
-            .collect()
-    }
-}
-
-/// The pieces of one entry point, collected until the payload is whole.
-///
-/// The rule is *Module*'s and lives here rather than in the bar: a writer sends a
-/// module's pieces **in order**, so a chunk whose `offset` is not where the last
-/// one ended starts the payload over. That is the only state, and it cannot
-/// grow past the `total` its header states.
-#[derive(Clone, Debug, Default)]
-pub struct ModuleAssembly {
-    head: Option<ModuleChunk>,
-    payload: Vec<u8>,
-}
-
-impl ModuleAssembly {
-    pub fn new() -> ModuleAssembly {
-        ModuleAssembly::default()
-    }
-
-    /// The generation this assembly is collecting, if any.
-    pub fn generation(&self) -> Option<u32> {
-        self.head.as_ref().map(|head| head.generation)
-    }
-
-    /// Bytes of payload in hand, and the payload's whole length.
-    pub fn progress(&self) -> (usize, usize) {
-        (
-            self.payload.len(),
-            self.head.as_ref().map_or(0, |head| head.total as usize),
-        )
-    }
-
-    /// Forget what is held: the generation it belongs to is stale.
-    pub fn clear(&mut self) {
-        self.head = None;
-        self.payload.clear();
-    }
-
-    /// File one piece; `Some` once the entry point is whole.
-    ///
-    /// A piece for another generation, or one that does not continue where the
-    /// last left off, discards what was held: a compiler abandons a module only
-    /// by being killed mid-write or by recompiling, and either way the bytes in
-    /// hand are stale.
-    pub fn push(&mut self, chunk: ModuleChunk) -> Option<Module> {
-        let continues = match &self.head {
-            Some(head) => {
-                head.generation == chunk.generation
-                    && head.index == chunk.index
-                    && head.total == chunk.total
-                    && self.payload.len() as u32 == chunk.offset
-            }
-            None => false,
-        };
-        if !continues {
-            self.clear();
-            if chunk.offset != 0 {
-                // The tail of a module whose head this reader never saw.
-                return None;
-            }
-        }
-        self.payload.extend_from_slice(&chunk.bytes);
-        if (self.payload.len() as u32) < chunk.total {
-            self.head = Some(chunk);
-            return None;
-        }
-        let payload = std::mem::take(&mut self.payload);
-        self.head = None;
-        let name_end = chunk.name_len as usize;
-        let spirv_end = name_end + chunk.spirv_len as usize;
-        Some(Module {
-            generation: chunk.generation,
-            index: chunk.index,
-            count: chunk.count,
-            format: chunk.format,
-            name: String::from_utf8_lossy(&payload[..name_end]).into_owned(),
-            spirv: payload[name_end..spirv_end].to_vec(),
-            reflection: String::from_utf8_lossy(&payload[spirv_end..]).into_owned(),
-        })
-    }
 }
 
 /// The swapchain format a program was built for, as one word both ends
@@ -1620,13 +1375,13 @@ pub enum Frame {
     App(App),
     /// *Pixmap*: an image for a slot.
     Pixmap(Pixmap),
-    /// *Module*: one piece of one entry point of a fresh compile.
-    Module(ModuleChunk),
+    /// *Module*: one entry point of a fresh compile.
+    Module(Module),
     /// *Hello*: a sidecar's first frame, naming the contract it was built
     /// against.
     Hello(Hello),
-    /// *Image*: one piece of an image for the canvas.
-    Image(ImageChunk),
+    /// *Image*: an image for the canvas.
+    Image(Image),
     /// *Canvas*: a command for the canvas.
     Canvas(Canvas),
     /// Read whole, understood not at all — and that is fine (docs/abi.md, *Framing*, rules 5–7).
@@ -1667,6 +1422,9 @@ fn invalid(why: &str) -> io::Error {
 ///   understand. The child keeps running; the caller witnesses it once.
 /// - `Err` — the stream is not ours (a bad magic: a sidecar that printed to
 ///   stdout), an impossible length, or an EOF inside a header or a body.
+///
+/// The body is read as it arrives, never allocated from the header's word
+/// ahead of it ([`read_body`]).
 pub fn read<R: Read>(input: &mut R) -> io::Result<Option<Frame>> {
     // 1. The header. EOF exactly here is the clean close.
     let mut head = [0u8; WireHeader::SIZE];
@@ -1698,8 +1456,7 @@ pub fn read<R: Read>(input: &mut R) -> io::Result<Option<Frame>> {
     }
 
     // 4. The body, always consumed whole, whatever happens to it below.
-    let mut body = vec![0u8; len];
-    input.read_exact(&mut body)?;
+    let body = read_body(input, len)?;
 
     let skip = |why: Skip| {
         Ok(Some(Frame::Skipped(Skipped {
@@ -1779,6 +1536,30 @@ pub fn read<R: Read>(input: &mut R) -> io::Result<Option<Frame>> {
         },
         _ => skip(Skip::Kind),
     }
+}
+
+/// Rule 4: read `len` bytes of body **as they arrive**.
+///
+/// `len` is the writer's word, and the reader has not seen a byte that backs
+/// it. So the input is asked for at most [`WIRE_READ_STEP`] at a time, and the
+/// buffer is grown only to hold the step being read: by doubling, so an
+/// honest body of tens of mebibytes is a handful of reallocations, and never
+/// past `len`, so an honest body ends with no slack. A header that lies costs
+/// what its writer really sent, at most doubled, plus one step; an EOF inside
+/// the body is an error (rule 1's clean close is only at a header boundary).
+fn read_body<R: Read>(input: &mut R, len: usize) -> io::Result<Vec<u8>> {
+    let mut body: Vec<u8> = Vec::new();
+    while body.len() < len {
+        let start = body.len();
+        let end = start + (len - start).min(WIRE_READ_STEP);
+        if body.capacity() < end {
+            let grown = (body.capacity() * 2).clamp(end, len);
+            body.reserve_exact(grown - start);
+        }
+        body.resize(end, 0);
+        input.read_exact(&mut body[start..end])?;
+    }
+    Ok(body)
 }
 
 /// Split a fixed `Plain` head off a body. `Skip::Length` if the body is
@@ -1930,7 +1711,7 @@ fn decode_pixmap(body: &[u8]) -> Result<Pixmap, Skip> {
     })
 }
 
-fn decode_module(body: &[u8]) -> Result<ModuleChunk, Skip> {
+fn decode_module(body: &[u8]) -> Result<Module, Skip> {
     let (head, tail): (ModuleHeader, _) = split_head(body)?;
     if head.count == 0 || head.count as usize > MAX_MODULES || head.index >= head.count {
         return Err(Skip::Body);
@@ -1943,34 +1724,30 @@ fn decode_module(body: &[u8]) -> Result<ModuleChunk, Skip> {
     if head.name_len == 0 || head.name_len as usize > MAX_NAME_LEN {
         return Err(Skip::Body);
     }
-    // The three runs are the payload, every piece says so, and a piece lands
-    // inside it. Everything here is a header the reader can check against
-    // itself before a byte is copied.
+    // The three runs are the body's tail, exactly: counts that do not add up
+    // to the bytes present are rule 6's length, checked before a byte is
+    // copied.
     let runs =
         u64::from(head.name_len) + u64::from(head.spirv_len) + u64::from(head.reflection_len);
-    if runs != u64::from(head.total) {
-        return Err(Skip::Body);
+    if runs != tail.len() as u64 {
+        return Err(Skip::Length);
     }
-    if u64::from(head.offset) + tail.len() as u64 > u64::from(head.total) {
-        return Err(Skip::Body);
-    }
-    Ok(ModuleChunk {
+    let (name, rest) = tail.split_at(head.name_len as usize);
+    let (spirv, reflection) = rest.split_at(head.spirv_len as usize);
+    Ok(Module {
         generation: head.generation,
         index: head.index,
         count: head.count,
         format: head.format,
-        name_len: head.name_len,
-        spirv_len: head.spirv_len,
-        reflection_len: head.reflection_len,
-        offset: head.offset,
-        total: head.total,
-        bytes: tail.to_vec(),
+        name: String::from_utf8_lossy(name).into_owned(),
+        spirv: spirv.to_vec(),
+        reflection: String::from_utf8_lossy(reflection).into_owned(),
     })
 }
 
-/// *Image*'s rules: a size inside the cap, a key, and a piece that lands
-/// inside the image.
-fn decode_image(body: &[u8]) -> Result<ImageChunk, Skip> {
+/// *Image*'s rules: a size inside the cap, a key, and exactly the pixels the
+/// size says.
+fn decode_image(body: &[u8]) -> Result<Image, Skip> {
     let (head, mut tail): (ImageHeader, _) = split_head(body)?;
     if !(1..=IMAGE_MAX_PX).contains(&head.width) || !(1..=IMAGE_MAX_PX).contains(&head.height) {
         return Err(Skip::Body);
@@ -1979,16 +1756,15 @@ fn decode_image(body: &[u8]) -> Result<ImageChunk, Skip> {
     if key.is_empty() {
         return Err(Skip::Body);
     }
-    let total = u64::from(head.width) * u64::from(head.height) * 4;
-    if tail.is_empty() || u64::from(head.offset) + tail.len() as u64 > total {
-        return Err(Skip::Body);
+    let texels = u64::from(head.width) * u64::from(head.height) * 4;
+    if tail.len() as u64 != texels {
+        return Err(Skip::Length);
     }
-    Ok(ImageChunk {
+    Ok(Image {
         key,
         width: head.width,
         height: head.height,
-        offset: head.offset,
-        bytes: tail.to_vec(),
+        rgba: tail.to_vec(),
     })
 }
 
@@ -2172,14 +1948,19 @@ pub fn write<W: Write>(out: &mut W, frame: &Frame) -> io::Result<()> {
             let len = size_of::<BytesHeader>() + bytes.bytes.len();
             if len > WIRE_MAX_BODY {
                 return Err(invalid(&format!(
-                    "bytes body of {len} bytes, over the {WIRE_MAX_BODY} cap: chunk it"
+                    "bytes body of {len} bytes, over the {WIRE_MAX_BODY} cap"
                 )));
             }
+            // A run reaching past the 32-bit address space names no place in
+            // a buffer the header can state.
+            let Some(end) = bytes.offset.checked_add(bytes.bytes.len() as u32) else {
+                return Err(invalid("a Bytes run ends past u32::MAX"));
+            };
             let head = BytesHeader {
                 buffer: bytes.buffer,
                 offset: bytes.offset,
                 len: bytes.bytes.len() as u32,
-                total: bytes.total.max(bytes.offset + bytes.bytes.len() as u32),
+                total: bytes.total.max(end),
             };
             buf.reserve(WireHeader::SIZE + len);
             buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_BYTES, len as u32)));
@@ -2282,49 +2063,49 @@ pub fn write<W: Write>(out: &mut W, frame: &Frame) -> io::Result<()> {
             buf.extend_from_slice(key);
             buf.extend_from_slice(&pixmap.rgba);
         }
-        Frame::Module(chunk) => {
-            let len = size_of::<ModuleHeader>() + chunk.bytes.len();
-            if len > WIRE_MAX_BODY {
-                return Err(invalid(&format!(
-                    "module body of {len} bytes, over the {WIRE_MAX_BODY} cap: chunk it"
-                )));
-            }
-            if chunk.spirv_len == 0 || chunk.spirv_len % 4 != 0 {
+        Frame::Module(module) => {
+            if module.spirv.is_empty() || module.spirv.len() % 4 != 0 {
                 return Err(invalid(
                     "a Module frame's SPIR-V is not a whole number of words",
                 ));
             }
-            if chunk.name_len == 0 || chunk.name_len as usize > MAX_NAME_LEN {
+            let name = name_bytes(&module.name)?;
+            if name.is_empty() {
                 return Err(invalid("a Module frame names no entry point"));
             }
-            if chunk.count == 0 || chunk.count as usize > MAX_MODULES || chunk.index >= chunk.count
+            if module.count == 0
+                || module.count as usize > MAX_MODULES
+                || module.index >= module.count
             {
                 return Err(invalid(
                     "a Module frame's index is not inside its generation",
                 ));
             }
-            if chunk.name_len + chunk.spirv_len + chunk.reflection_len != chunk.total {
-                return Err(invalid("a Module frame's three runs are not its total"));
+            let len = size_of::<ModuleHeader>()
+                + name.len()
+                + module.spirv.len()
+                + module.reflection.len();
+            if len > WIRE_MAX_BODY {
+                return Err(invalid(&format!(
+                    "module body of {len} bytes, over the {WIRE_MAX_BODY} cap"
+                )));
             }
-            if chunk.offset as usize + chunk.bytes.len() > chunk.total as usize {
-                return Err(invalid("a Module frame's piece lands outside its payload"));
-            }
+            // Every run is inside a body the cap fits in a `u32`.
             let head = ModuleHeader {
-                generation: chunk.generation,
-                index: chunk.index,
-                count: chunk.count,
-                format: chunk.format,
-                spirv_len: chunk.spirv_len,
-                reflection_len: chunk.reflection_len,
-                name_len: chunk.name_len,
-                offset: chunk.offset,
-                total: chunk.total,
-                _rsvd0: 0,
+                generation: module.generation,
+                index: module.index,
+                count: module.count,
+                format: module.format,
+                spirv_len: module.spirv.len() as u32,
+                reflection_len: module.reflection.len() as u32,
+                name_len: name.len() as u32,
             };
             buf.reserve(WireHeader::SIZE + len);
             buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_MODULE, len as u32)));
             buf.extend_from_slice(as_bytes(&head));
-            buf.extend_from_slice(&chunk.bytes);
+            buf.extend_from_slice(name);
+            buf.extend_from_slice(&module.spirv);
+            buf.extend_from_slice(module.reflection.as_bytes());
         }
         Frame::Hello(hello) => {
             let name = name_bytes(&hello.name)?;
@@ -2340,36 +2121,32 @@ pub fn write<W: Write>(out: &mut W, frame: &Frame) -> io::Result<()> {
             buf.extend_from_slice(as_bytes(&head));
             buf.extend_from_slice(name);
         }
-        Frame::Image(chunk) => {
-            let key = name_bytes(&chunk.key)?;
+        Frame::Image(image) => {
+            let key = name_bytes(&image.key)?;
             if key.is_empty() {
                 return Err(invalid("an Image frame names no key"));
             }
-            if !(1..=IMAGE_MAX_PX).contains(&chunk.width)
-                || !(1..=IMAGE_MAX_PX).contains(&chunk.height)
+            if !(1..=IMAGE_MAX_PX).contains(&image.width)
+                || !(1..=IMAGE_MAX_PX).contains(&image.height)
             {
                 return Err(invalid("an Image frame's size is outside 1..=IMAGE_MAX_PX"));
             }
-            if chunk.bytes.is_empty() || chunk.offset as usize + chunk.bytes.len() > chunk.total() {
-                return Err(invalid("an Image frame's piece lands outside its image"));
+            let texels = image.width as usize * image.height as usize * 4;
+            if image.rgba.len() != texels {
+                return Err(invalid("an Image frame's rgba does not match its size"));
             }
-            let len = size_of::<ImageHeader>() + key.len() + chunk.bytes.len();
-            if len > WIRE_MAX_BODY {
-                return Err(invalid(&format!(
-                    "image body of {len} bytes, over the {WIRE_MAX_BODY} cap: chunk it"
-                )));
-            }
+            // Never past the cap: `WIRE_MAX_BODY` is this sum at its largest.
+            let len = size_of::<ImageHeader>() + key.len() + texels;
             let head = ImageHeader {
                 key_len: key.len() as u32,
-                width: chunk.width,
-                height: chunk.height,
-                offset: chunk.offset,
+                width: image.width,
+                height: image.height,
             };
             buf.reserve(WireHeader::SIZE + len);
             buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_IMAGE, len as u32)));
             buf.extend_from_slice(as_bytes(&head));
             buf.extend_from_slice(key);
-            buf.extend_from_slice(&chunk.bytes);
+            buf.extend_from_slice(&image.rgba);
         }
         Frame::Canvas(canvas) => {
             let key = name_bytes(canvas.key().unwrap_or(""))?;

@@ -334,7 +334,7 @@ pub struct Bar {
     /// Whether any `Bytes` run has landed. The bar draws its first frames with
     /// empty curve buffers — every index in `text.slang` is bounded, so that is
     /// a bar with no text in it rather than a broken one — and this is what
-    /// makes "the font arrived" one witness line and not one per chunk.
+    /// makes "the font arrived" one witness line and not one per run.
     curves_landed: bool,
     /// `Bytes` runs that arrived before there was a GPU to put them in.
     ///
@@ -775,7 +775,7 @@ impl Bar {
         }
     }
 
-    /// One `Module` frame — a piece of an entry point — and the swap
+    /// One `Module` frame — one entry point — and the swap
     /// when it completes a generation (docs/abi.md, *Module*).
     ///
     /// The swap is `Gpu::reload_all`'s: all-or-nothing,
@@ -787,8 +787,8 @@ impl Bar {
     ///
     /// A failure here is a witness and the running caustic. Bad shader = wrong
     /// pixels, never a dead bar — and since the tunables are part of the caustic, bad *config* = the last good bar, never a dead one.
-    fn apply_module(&mut self, sidecar: &str, chunk: wire::ModuleChunk) {
-        let ready = match self.modules.collect(chunk) {
+    fn apply_module(&mut self, sidecar: &str, module: wire::Module) {
+        let ready = match self.modules.collect(module) {
             Collected::Waiting {
                 generation,
                 have,
