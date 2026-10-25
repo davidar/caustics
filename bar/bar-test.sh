@@ -2271,7 +2271,9 @@ fi
 say "14. a sidecar tick redraws once a second without stalling or animating"
 # A settled bar logs nothing per frame, so the evidence is the picture: the
 # chart's columns move one step a tick as samples arrive, so ten seconds
-# apart the same rect does not hold the same texels.
+# apart the same rect does not hold the same texels. Counted pixel by pixel:
+# an idle guest's flat chart can shift a column and keep the same rounded
+# mean over the whole rect (seen on the VM target), so the mean is only noted.
 stalls_before=$(journal_count "sidecar caustics-sysmon: stalled")
 animating_before=$(journal_count "redraw: still animating")
 cpu_rect=($(layout_rect chart-cpu))
@@ -2285,11 +2287,12 @@ if [[ ${#cpu_rect[@]} -eq 4 && -n "$bar_origin_y" ]]; then
     sleep 10
     shot scroll-after.png
     after_rgb=$(png_mean "$SHOTS/scroll-after.png" "$probe_x" "$probe_y" "$probe_w" "$probe_h")
-    note "chart-cpu mean RGB over ten quiet seconds: [$before_rgb] -> [$after_rgb]"
-    if [[ "$before_rgb" != "$after_rgb" ]]; then
-        pass "the chart moved with nothing else happening: the frames keep arriving"
+    moved=$(png_pixel_diff "$SHOTS/scroll-before.png" "$SHOTS/scroll-after.png" "$probe_x" "$probe_y" "$probe_w" "$probe_h")
+    note "chart-cpu mean RGB over ten quiet seconds: [$before_rgb] -> [$after_rgb]; $moved px of its rect differ"
+    if [[ "${moved:-0}" -gt 0 ]]; then
+        pass "the chart moved with nothing else happening: the frames keep arriving ($moved px)"
     else
-        fail "the chart froze over ten seconds ([$before_rgb])"
+        fail "the chart froze over ten seconds (no pixel of its rect changed; mean [$before_rgb])"
     fi
 else
     sleep 10
