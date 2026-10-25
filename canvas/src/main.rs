@@ -244,6 +244,16 @@ fn dispatch_awhile(
 }
 
 fn log_protocol_error(conn: &Connection) {
+    // A compositor answering a fault sends wl_display.error and closes the
+    // socket at once. A flush can then fail with EPIPE before that event has
+    // been read, and the dispatch error is an I/O one with the real cause
+    // still in the socket's buffer: on a slow adapter the order flips every
+    // time. One read picks the event up, and the connection records it.
+    if conn.protocol_error().is_none() {
+        if let Some(guard) = conn.prepare_read() {
+            let _ = guard.read();
+        }
+    }
     if let Some(protocol) = conn.protocol_error() {
         tracing::error!(
             object_id = protocol.object_id,
