@@ -1,0 +1,28 @@
+[package]
+name = "caustics-wallpaper"
+version = "0.1.0"
+edition.workspace = true
+description = "The canvas's wallpaper sidecar: a control socket, image decoding and fitting, and Image and Canvas frames to the canvas host; and caustics-canvasctl, its client"
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "caustics-wallpaper"
+path = "src/main.rs"
+
+[[bin]]
+name = "caustics-canvasctl"
+path = "src/bin/caustics-canvasctl.rs"
+
+[dependencies]
+# The wire: `Hello`, `Image`, `Canvas` out; `REQ_OUTPUT_SIZE` in.
+caustics-bar-abi = { path = "../bar/abi" }
+# The witness line, one copy for every sidecar.
+caustics-sidecar = { path = "../sidecar" }
+# `clock_gettime(CLOCK_BOOTTIME)`: a fade's start, on the clock that counts a
+# suspend.
+libc = "0.2.189"
+# The two encodings a wallpaper is in, with the decoders `caustics-tray` and
+# `caustics-apps` already use.
+png = "0.18.1"
+zune-jpeg = "0.5.15"

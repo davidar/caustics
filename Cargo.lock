@@ -407,6 +407,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "caustics-wallpaper"
+version = "0.1.0"
+dependencies = [
+ "caustics-bar-abi",
+ "caustics-sidecar",
+ "libc",
+ "png",
+ "zune-jpeg",
+]
+
+[[package]]
 name = "cc"
 version = "1.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
