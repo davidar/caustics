@@ -11,7 +11,7 @@ is the third tier, **the nested gate**.
 |---|---|---|---|---|
 | unit tests | `cargo test --workspace` | every crate's logic: the wire's reader rules, each sidecar's frames against recorded bus bodies, the ABI layouts against Slang's reflection, the rendered Slang modules on disk against their Rust declaration | Rust (the first build downloads the pinned Slang release, README.md, *Requirements*); fontconfig for the text tests (they skip without it) | a minute or two |
 | the oracle | `CAUSTICS_BAR_ORACLE=1 cargo test -p caustics-bar oracle -- --nocapture` | the caustic's own passes (`bar_build`, `bar_compose`, `bar_shape`) on a real GPU with a real font: the tables they build obey `caustics/bar_check.slang`'s invariants, every block is the size its tunable says, every built item can be named, no glyph is a notdef | a Vulkan adapter (Mesa's lavapipe will do) | about a minute, most of it compiling |
-| the nested gate | `bar/nested-run.sh` | the bar as a process in a session: the layer surface and its configure, popups and their grabs, the dock against real windows, every sidecar on a real (private) session bus, clicks, hot reload, the install set's refusals, the watchdog, restarts | the list under *What the gate needs* | eight to ten minutes |
+| the nested gate | `bar/nested-run.sh` | the bar as a process in a session: the layer surface and its configure, popups and their grabs, the dock against real windows, every sidecar on a real (private) session bus, clicks and typing, hot reload, the install set's refusals, the watchdog, restarts | the list under *What the gate needs* | eight to ten minutes |
 
 The oracle is gated on `CAUSTICS_BAR_ORACLE=1` so that `cargo test --workspace`
 never creates a Vulkan instance or compiles `bar_check` beside the rest of the suite
@@ -188,6 +188,12 @@ is one `SKIP` line, counted as skipped and never as passed:
   through the output transform, so a virtual pointer's y comes out inverted
   on a nested niri. `caustics-pointer` sends the device point whose image is the
   pixel asked for.
+- **`caustics-keyboard` uploads a keymap of its own**, a US layout written
+  out from the same table that says which key and level types each
+  character, so the lookup and the keymap cannot disagree and no XKB library
+  is linked. `caustics-keyboard keymap` prints it. The focused client
+  receives that keymap with the first key, as it would on any switch of
+  keyboards.
 - **One step's bound has little room on a busy machine.** The tunables step
   waits 40 s for a cold compile and a cold swap; under heavy parallel
   compilation it has missed once. It is recorded rather than raised.
@@ -206,6 +212,7 @@ nothing in the steps knows which target it is on:
 | `to_target`, `target_kill <pid>` | `cp`; `kill`, but only a pid the run started or one in the bar's process group |
 | `niri_msg …`, `shot <name>` | the nested niri's IPC; `niri msg action screenshot-screen` into the run directory, re-encoded to the 8-bit RGB PNG the pixel helpers read |
 | `pointer_to <x> <y>`, `button <down>` | `caustics-pointer` (a small client of `zwlr_virtual_pointer_manager_v1`, in `harness/pointer/`; not a sidecar and never installed) |
+| `keys <text>`, `key <[mod+…]keysym> [press\|release\|tap]` | `caustics-keyboard` (its sibling in `harness/keyboard/`, a client of `zwp_virtual_keyboard_manager_v1`): `keys` types a string into whatever niri has given keyboard focus, a newline as Return; `key` is one named key or chord (`Return`, `Escape`, `ctrl+u`) |
 | `journal`, `mark_journal`, `wait_for_journal*` | the bar's log from the cursor on; `bar_restart` moves a cursor to the new instance's first line, so the old bar's last lines are never read as the new one's |
 | `bar_env <group> K=V…`, `bar_env_clear <group>` | an environment file per group, sourced at each start (on a systemd target, a drop-in) |
 | `bar_restart`, `bar_stop`, `bar_active`, `bar_restarts`, `bar_pid` | the supervisor |
@@ -225,8 +232,15 @@ nothing in the steps knows which target it is on:
    step inherits what the ones before it left: put the state back at the end.
 3. **Reach the bar only through the transport surface** above. Never `ssh`,
    `systemctl` or a path under `$HOME` directly; use `T_*` and `on_target`.
+   Keys go to the focused window, so a step that types focuses its window by
+   niri id (`niri_msg action focus-window --id`) and waits until
+   `focused-window` names it before the first `keys`. Both targets type the
+   same characters: printable ASCII, newline and tab, on a US layout. Either
+   refuses anything else before sending a key, and `keys` returns non-zero.
 4. **Wait for a positive line, never a fixed sleep.** `wait_for_journal
-   <pattern> <bound>` returns as soon as the line is there. A step that
+   <pattern> <bound>` returns as soon as the line is there; `wait_until
+   <what> <bound> <command>` does the same for anything else (a file on the
+   target, a window's focus). A step that
    proves something did *not* happen waits for the line that says the
    decision was made (every such decision has a witness; add one in the
    caustic or the sidecar if it is missing) and then asserts nothing followed
@@ -260,7 +274,11 @@ niri, a headless sway and a GPU.
 
 `bar/targets/vm.sh` drives the same steps in a virtual machine: a topaz-os
 guest booted by that project's test harness, reached over ssh, driven with QMP for the
-pointer and screendumped through VNC. `bar/vm-run.sh` is its runner. It takes
+pointer and the keyboard and screendumped through VNC. Its `keys` and `key`
+send QMP key names (`send-key` per character, `input-send-event` for a press
+or release held across calls), and the guest's own keymap turns them into
+characters, so they type what the nested target types only while the
+guest's layout is US. `bar/vm-run.sh` is its runner. It takes
 one of `$CAUSTICS_VM_SLOTS` lock files (default 2, so two guests can run side by
 side), boots that slot's guest unless it is already up, runs `bar/bar-test.sh`
 with `CAUSTICS_TARGET=vm` and the whole output to a log whose path it prints
