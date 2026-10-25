@@ -5105,6 +5105,292 @@ else
     fi
 fi
 
+say "35i. the canvas locks the session on its lock surfaces, and only the right answer unlocks it"
+# The canvas with `caustics-lock` in its set, the sidecar in the dry run 35h
+# uses (no system bus, so no logind, and the socket's `lock` the only
+# trigger): now the canvas host is what locks the nested niri, through
+# `ext_session_lock_v1`, and the harness's keyboard types into the lock's
+# prompt. **niri refuses every action over its socket while locked, a
+# screenshot included** (its `do_action` returns early unless an action is
+# allowed when locked, and IPC never allows one): the request is answered
+# and no file is written. So the lock screen's look is the caustic's witness
+# and the oracle's, and a screenshot that never arrives is the proof that
+# niri is locked; one that does, after the unlock, is the proof it is not.
+# Both secrets are this run's own, and no log may hold either.
+LOCK_RUN=0
+if [[ "$CANVAS_RUN" -ne 1 ]]; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas is not in the guest's set yet"
+    SKIPS=$((SKIPS + 1))
+else
+    LOCK_RUN=1
+    canvas_right="gate-locked-$RANDOM$RANDOM-$RANDOM"
+    canvas_wrong="gate-astray-$RANDOM$RANDOM-$RANDOM"
+    # niri_shot_works <name>: 0 when niri wrote a screenshot within 3 s.
+    niri_shot_works() {
+        local raw="$RUN/.probe-$1" i
+        rm -f "$raw"
+        niri_msg action screenshot-screen --show-pointer false --path "$raw" >/dev/null 2>&1
+        for i in $(seq 30); do
+            [[ -s "$raw" ]] && { rm -f "$raw"; return 0; }
+            sleep 0.1
+        done
+        rm -f "$raw"
+        return 1
+    }
+    # The fixture: the canvas, its text and its lock sidecar, started the
+    # same way twice (the second start is the restarted host of 35j).
+    canvas_lock_start() {
+        fixture_start locked 'bash -c '"'"'cd "$1" && exec env \
+            CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload caustics-glyphs caustics-lock" \
+            CAUSTICS_LOCK_DRY_RUN_SECRET="$3" \
+            DBUS_SYSTEM_BUS_ADDRESS="unix:path=$1/no-system-bus" \
+            RUST_LOG=info "$2/caustics-canvas" 2>>"$1/canvas.log"'"'"' locked "$T_HOME" "$T_BIN" '"$canvas_right"
+    }
+    # canvas_lock_wait <name>: `lock --wait` in the background, its output
+    # and exit in `$T_HOME/<name>.out`; 0 when it returned 0 with `locked`.
+    canvas_lock_wait() {
+        on_target 10 "rm -f \"\$T_HOME/$1.out\"" >/dev/null
+        on_target 40 '"$T_BIN/caustics-canvasctl" lock --wait >"$T_HOME/'"$1"'.out" 2>&1
+            echo "exit=$?" >>"$T_HOME/'"$1"'.out"' >/dev/null 2>&1 &
+        local waiter=$! out
+        wait_until "lock --wait returned" 30 'on_target 5 "grep -q ^exit= \"\$T_HOME/'"$1"'.out\""' || {
+            wait "$waiter" 2>/dev/null
+            return 1
+        }
+        wait "$waiter" 2>/dev/null
+        out=$(on_target 5 "cat \"\$T_HOME/$1.out\"")
+        [[ "$out" == *"locked"* && "$out" == *"exit=0"* ]]
+    }
+    # No lock pane remains: as many gone as made.
+    lock_panes_gone() {
+        [[ "$(canvas_count "a lock surface")" -eq "$(canvas_count "its lock surface is gone")" ]]
+    }
+    for _ in 1 2 3 4 5; do
+        [[ "$(niri_msg --json focused-window 2>/dev/null)" == null ]] && break
+        niri_msg action focus-workspace-down >/dev/null 2>&1
+    done
+    on_target 10 'rm -f "$T_HOME/canvas.log"' >/dev/null
+    canvas_lock_start
+    if wait_until "the canvas's lock sidecar" 60 'canvas_log | jgrep -F "caustics-lock: listening on"' &&
+        wait_until "the canvas's font" 30 'canvas_log | jgrep -F "font: "'; then
+        pass "the canvas started caustics-lock in its dry run: $(canvas_last 'caustics-lock: no logind' | sed 's/^caustics-lock: //' | cut -c1-100)"
+    else
+        fail "the canvas's caustics-lock never listened: $(canvas_log | tail -4 | tr '\n' '|' | cut -c1-400)"
+        LOCK_RUN=0
+    fi
+    if canvas_log | jgrep -F "lock: ext_session_lock_manager_v1 is bound"; then
+        pass "the host bound ext_session_lock_manager_v1"
+    else
+        fail "the host did not bind the lock manager: $(canvas_log | grep -F 'lock:' | head -2 | tr '\n' '|')"
+        LOCK_RUN=0
+    fi
+    shows_before=$(canvas_count "canvas: show ")
+    canvasctl show '"$T_HOME/canvas-blue.png"' >/dev/null 2>&1 || fail "caustics-canvasctl show failed"
+    wait_until "the lock step's picture" 30 "canvas_more 'canvas: show ' $shows_before" ||
+        fail "the canvas never showed the picture"
+    sleep 0.5
+    shot lock-before.png
+fi
+if [[ "$LOCK_RUN" -eq 1 ]]; then
+    focus_before=$(canvas_count "seat: the keyboard is on the lock")
+    if canvas_lock_wait lock-wait-canvas; then
+        pass "caustics-canvasctl lock --wait returned 0 with 'locked', from the canvas host"
+    else
+        fail "lock --wait against the canvas: $(on_target 5 'cat "$T_HOME/lock-wait-canvas.out"' | tr '\n' '|' | cut -c1-200)"
+    fi
+    surfaces=$(canvas_count "a lock surface")
+    if [[ "$surfaces" -eq 1 ]] && canvas_log | jgrep -F "lock surface configured" &&
+        canvas_log | jgrep -F "lock: ext_session_lock_v1 asked for, with 1 lock surfaces"; then
+        pass "one lock surface, on the one output, configured: $(canvas_last 'lock surface configured' | sed -n 's/.*INFO [a-z_:]*: //p' | cut -c1-100)"
+    else
+        fail "$surfaces lock surfaces configured: $(canvas_log | grep -F 'lock' | head -4 | tr '\n' '|' | cut -c1-300)"
+    fi
+    missing=$(in_order "$(canvas_log)" "lock: caustics-lock asked to lock; locking" \
+        "lock: the compositor locked the session; told to caustics-lock" "caustics-lock: locked")
+    if [[ -z "$missing" ]]; then
+        pass "the lock asked, the compositor locked, and the sidecar was told: in that order"
+    else
+        fail "the lock's lines are not in order, from: $missing"
+    fi
+    if ! niri_shot_works locked; then
+        pass "niri is locked: it writes no screenshot"
+    else
+        fail "niri wrote a screenshot while the canvas held the lock"
+    fi
+    if wait_until "the lock's prompt" 20 'canvas_log | jgrep -F "prompt: conversation 1 from caustics-lock began"' &&
+        wait_until "the lock's prompt drawn" 15 'canvas_log | jgrep -E "canvas[a-z_:]*: prompt: conversation 1 asking \(echo 0, attempts 0\)"'; then
+        pass "the sidecar's title and ask reached the host, and the caustic drew conversation 1 asking on the lock"
+    else
+        fail "no lock prompt drawn: $(canvas_log | grep -F 'prompt' | tail -4 | tr '\n' '|' | cut -c1-400)"
+    fi
+    if canvas_log | jgrep -F "prompt surface"; then
+        fail "a top-layer prompt pane was made while locked"
+    else
+        pass "no top-layer prompt pane: the lock surface carries the prompt"
+    fi
+    if wait_until "the keyboard on the lock" 15 "canvas_more 'seat: the keyboard is on the lock' $focus_before"; then
+        pass "$(canvas_last 'seat: the keyboard is on the lock' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the keyboard never came to the lock surface"
+    fi
+    keys "$canvas_wrong"
+    key Return
+    if wait_until "the wrong answer's error line" 20 'canvas_log | jgrep -F "prompt: conversation 1: an error line after the answer (attempts 1)"' &&
+        wait_until "a fresh conversation" 20 'canvas_log | jgrep -E "canvas[a-z_:]*: prompt: conversation 2 asking \(echo 0, attempts 0\)"'; then
+        pass "the wrong secret: an error line, attempts 1, conversation 1 failed, and conversation 2 asking"
+    else
+        fail "after the wrong secret: $(canvas_log | grep -F 'prompt' | tail -5 | tr '\n' '|' | cut -c1-400)"
+    fi
+    assert_contains "conversation 1 ended as a failure" "$(canvas_log)" "prompt: conversation 1 done, failure"
+    if ! niri_shot_works wrong; then
+        pass "and niri is still locked"
+    else
+        fail "niri wrote a screenshot after a wrong secret"
+    fi
+    keys "$canvas_right"
+    key Return
+    if wait_until "the unlock" 20 'canvas_log | jgrep -F "caustics-lock: unlocked"'; then
+        missing=$(in_order "$(canvas_log)" "prompt: conversation 2 done, success" \
+            "lock: caustics-lock asked to unlock; unlocking" "its lock surface is gone" \
+            "lock: the session is unlocked; told to caustics-lock" "caustics-lock: unlocked")
+        if [[ -z "$missing" ]]; then
+            pass "the right secret: success, the unlock asked, the lock surface gone, unlocked told: in that order"
+        else
+            fail "the unlock's lines are not in order, from: $missing"
+        fi
+    else
+        fail "the session never unlocked: $(canvas_log | grep -E 'lock|prompt' | tail -5 | tr '\n' '|' | cut -c1-400)"
+    fi
+    if lock_panes_gone; then
+        pass "no lock surface remains ($(canvas_count 'a lock surface') made, as many gone)"
+    else
+        fail "$(canvas_count 'a lock surface') lock surfaces made, $(canvas_count 'its lock surface is gone') gone"
+    fi
+    if wait_until "niri unlocked" 10 'niri_shot_works unlocked'; then
+        pass "niri is unlocked: it writes a screenshot again"
+    else
+        fail "niri still refuses a screenshot after the unlock"
+    fi
+    sleep 0.5
+    shot lock-after.png
+    moved=$(png_pixel_diff "$SHOTS/lock-before.png" "$SHOTS/lock-after.png" 0 0 "$SCREEN_W" "$SCREEN_H")
+    corner=($(png_mean "$SHOTS/lock-after.png" 40 680 160 80))
+    if [[ "$moved" -ge 0 && "$moved" -lt 12800 ]] && ((corner[2] >= 240 && corner[0] <= 15 && corner[1] <= 15)); then
+        pass "the output after the unlock is the output before the lock ($moved px differ), the wallpaper undarkened: mean ${corner[*]}"
+    else
+        fail "after the unlock $moved px differ from before the lock, and the corner is ${corner[*]}"
+    fi
+    lock_status() { on_target 5 '"$T_BIN/caustics-canvasctl" status 2>/dev/null'; }
+    if wait_until "the lock's status" 20 '[[ "$(lock_status)" == *"locked=no attempts=1"* ]]'; then
+        pass "caustics-canvasctl status: $(grep -F 'locked=' <<<"$(lock_status)")"
+    else
+        fail "the lock's status: $(on_target 5 '"$T_BIN/caustics-canvasctl" status 2>&1' | tr '\n' '|' | cut -c1-200)"
+    fi
+    leaks=0
+    for secret in "$canvas_right" "$canvas_wrong"; do
+        n=$(on_target 10 "cat \"\$T_HOME/canvas.log\" \"\$T_HOME/lock-wait-canvas.out\" 2>/dev/null | grep -cF -- '$secret'")
+        leaks=$((leaks + ${n:-1}))
+        journal | jgrep -F -- "$secret" && leaks=$((leaks + 1))
+        grep -qF -- "$secret" "$RUN/fixture-locked.log" 2>/dev/null && leaks=$((leaks + 1))
+    done
+    if [[ "$leaks" -eq 0 ]]; then
+        pass "neither secret is in the canvas's log, the client's output, the fixture's or the journal"
+    else
+        fail "a secret is in $leaks of the canvas's, the client's, the fixture's or the bar's lines"
+    fi
+fi
+
+say "35j. a canvas killed while locked leaves the session locked, and its restart takes the lock over"
+# What niri does when its lock client dies (src/niri.rs, `lock`): the
+# session stays locked, and a new client's lock replaces the dead one at
+# once (`locked` straight away, no `finished`), since the outputs are blank
+# already. With no logind there is no `LockedHint` for the restarted lock
+# sidecar to read, so the restart is driven as the hint would drive it: the
+# fixture again, then `lock` on the new sidecar's socket.
+if [[ "$LOCK_RUN" -eq 1 ]]; then
+    locked_before=$(canvas_count "lock: the compositor locked the session")
+    if canvas_lock_wait lock-wait-again; then
+        pass "locked again: lock --wait returned 0"
+    else
+        fail "the second lock: $(on_target 5 'cat "$T_HOME/lock-wait-again.out"' | tr '\n' '|' | cut -c1-200)"
+    fi
+    dead_canvas=$(canvas_last "set: " | sed -n 's/.*, pid \([0-9]*\)$/\1/p')
+    niri_lines=$(wc -l <"$RUN/niri.log" 2>/dev/null || echo 0)
+    fixture_stop locked
+    if [[ -n "$dead_canvas" ]] &&
+        wait_until "the locked canvas gone" 20 "! on_target 5 'kill -0 $dead_canvas 2>/dev/null'"; then
+        pass "the canvas host (pid $dead_canvas) was killed while locked"
+    else
+        fail "the locked canvas (pid ${dead_canvas:-?}) outlived its kill"
+    fi
+    sleep 1
+    if ! niri_shot_works dead; then
+        pass "niri stays locked with its lock client dead: it writes no screenshot"
+    else
+        fail "niri unlocked when its lock client died"
+    fi
+    wait_until "the old lock sidecar's socket gone" 20 "! on_target 5 '[ -S \"\$XDG_RUNTIME_DIR/caustics-lock.sock\" ]'" ||
+        note "the old lock sidecar's socket outlived it"
+    listening_before=$(canvas_count "caustics-lock: listening on")
+    canvas_lock_start
+    if wait_until "the restarted lock sidecar" 60 "canvas_more 'caustics-lock: listening on' $listening_before"; then
+        pass "the canvas restarted, and its lock sidecar listens"
+    else
+        fail "the restarted canvas's lock sidecar never listened: $(canvas_log | tail -4 | tr '\n' '|' | cut -c1-400)"
+    fi
+    new_canvas=$(canvas_last "set: " | sed -n 's/.*, pid \([0-9]*\)$/\1/p')
+    focus_before=$(canvas_count "seat: the keyboard is on the lock")
+    if canvas_lock_wait lock-wait-taken; then
+        pass "the restarted host locked the still-locked session: lock --wait returned 0"
+    else
+        fail "the restarted host's lock: $(on_target 5 'cat "$T_HOME/lock-wait-taken.out"' | tr '\n' '|' | cut -c1-200)"
+    fi
+    if canvas_more "lock: the compositor locked the session" "$((locked_before + 1))" &&
+        ! canvas_log | jgrep -F "the compositor ended" &&
+        on_target 5 "kill -0 ${new_canvas:-0} 2>/dev/null"; then
+        pass "the compositor said locked to the new host, not finished, and the host runs (pid $new_canvas)"
+    else
+        fail "the new host's lock: $(canvas_log | grep -E 'lock: |exit:' | tail -4 | tr '\n' '|' | cut -c1-400)"
+    fi
+    if tail -n +$((niri_lines + 1)) "$RUN/niri.log" 2>/dev/null | jgrep -F "replacing existing dead lock"; then
+        pass "niri: locking session (replacing existing dead lock)"
+    else
+        note "niri's log does not say it replaced a dead lock"
+    fi
+    if wait_until "the restarted lock's prompt" 20 '[[ $(canvas_count "prompt: conversation 1 from caustics-lock began") -ge 2 ]]' &&
+        wait_until "the keyboard on the new lock" 15 "canvas_more 'seat: the keyboard is on the lock' $focus_before"; then
+        keys "$canvas_right"
+        key Return
+    else
+        fail "the restarted lock never asked: $(canvas_log | grep -F 'prompt' | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    if wait_until "the restarted lock's unlock" 20 "[[ \$(canvas_count 'caustics-lock: unlocked') -ge 2 ]]" &&
+        wait_until "niri unlocked again" 10 'niri_shot_works unlocked-again'; then
+        pass "the right secret on the restarted host unlocked the session, and niri writes a screenshot again"
+    else
+        fail "the session did not unlock after the restart: $(canvas_log | grep -E 'lock|prompt' | tail -4 | tr '\n' '|' | cut -c1-400)"
+    fi
+    lock_panes_gone || fail "a lock surface outlived the restarted host's unlock"
+    leaks=0
+    for secret in "$canvas_right" "$canvas_wrong"; do
+        n=$(on_target 10 "cat \"\$T_HOME/canvas.log\" \"\$T_HOME\"/lock-wait-*.out 2>/dev/null | grep -cF -- '$secret'")
+        leaks=$((leaks + ${n:-1}))
+    done
+    [[ "$leaks" -eq 0 ]] || fail "a secret reached the canvas's log after the restart"
+fi
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    # Torn down, as step 35 left the canvas: gone, with its sidecars, and
+    # the session unlocked.
+    last_canvas=$(canvas_last "set: " | sed -n 's/.*, pid \([0-9]*\)$/\1/p')
+    fixture_stop locked
+    if wait_until "the lock step's canvas gone" 20 "! on_target 5 'kill -0 ${last_canvas:-0} 2>/dev/null || [ -S \"\$XDG_RUNTIME_DIR/caustics-lock.sock\" ]'"; then
+        pass "the canvas stopped, and its lock sidecar with it"
+    else
+        fail "the lock step's canvas or its lock sidecar outlived the fixture"
+    fi
+    niri_msg action focus-workspace-up >/dev/null 2>&1
+fi
+
 say "36. verdict"
 journal > "$SHOTS/journal-full.txt"
 note "full journal: $SHOTS/journal-full.txt"

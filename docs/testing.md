@@ -273,6 +273,27 @@ a fresh ask, a successful end, the unlock), `status`'s `attempts=1` and
 `locked=no`, the witness of no logind, that no log holds either secret, and
 that the sidecar leaves with its host and takes its socket.
 
+**The canvas's lock steps** (35i and 35j) start the canvas with
+`caustics-glyphs` and `caustics-lock` in its set, the sidecar in the same
+dry run, so the canvas host locks the nested niri through
+`ext_session_lock_v1` and the harness's keyboard types into the lock's
+prompt. niri refuses every action over its socket while locked,
+screenshots included, so a screenshot that never arrives is the proof that
+it is locked and one that does is the proof that it is not; the lock
+screen's look is the caustic's witness here and the oracle's. They check:
+`lock --wait` returning 0 with `locked`; one lock surface configured and the
+lock, `locked` and the sidecar's word in that order; no screenshot; the
+caustic drawing conversation 1 asking on the lock and no top-layer pane;
+the keyboard on the lock surface; a wrong secret, an error line counted as
+an attempt and conversation 2 asking, still locked; the right secret, the
+unlock in order (success, the unlock asked, the lock surface gone,
+`unlocked` told); a screenshot again, the output what it was before the
+lock; `status`'s `locked=no attempts=1`; neither secret in any log. Then the
+host is killed while locked: niri stays locked, and a restarted host's lock
+(driven through the socket, as `LockedHint` would drive it with logind)
+is given `locked` at once in place of the dead one, with no `finished`;
+the right secret unlocks it, and the canvas is stopped at the end.
+
 ### Adding a step
 
 1. **Decide the tier first.** If what you want to prove is a property of the
