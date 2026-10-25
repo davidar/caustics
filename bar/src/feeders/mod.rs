@@ -498,7 +498,7 @@ impl Feeders {
         // exactly like a global that is not offered.
         let sidecars: Vec<pipe::Pipe> = pipe::commands()
             .iter()
-            .map(|command| pipe::Pipe::start(command, updates.clone()))
+            .map(|command| pipe::start(command, updates.clone()))
             .collect();
 
         Self {

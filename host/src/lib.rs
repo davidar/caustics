@@ -30,6 +30,7 @@
 
 pub mod images;
 pub mod modules;
+pub mod pipe;
 pub mod proc;
 pub mod strings;
 pub mod witness;
