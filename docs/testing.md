@@ -237,6 +237,15 @@ the canvas. The canvas's own alpha(t) and its dim's are tested on a device
 beside the bar's oracle:
 `CAUSTICS_CANVAS_ORACLE=1 cargo test -p caustics-canvas -- --test-threads=1`.
 
+**The polkit sink's step** (35b) runs `caustics-polkit` in its dry run, with
+no system bus at all: the agent object on the run's private session bus,
+`polkit/tests/fake-helper.sh` as its helper, and `polkit/examples/fake_host.rs`
+on its pipes in the canvas host's place, answering from a script. The step
+plays polkitd with `busctl --user call … BeginAuthentication`, and checks the
+prompt frames the fake host logged, the method's return, that the fake
+helper read exactly the run's secret, that a dismissed prompt fails the
+call, that no log holds the secret, and that the sink leaves with its host.
+
 ### Adding a step
 
 1. **Decide the tier first.** If what you want to prove is a property of the

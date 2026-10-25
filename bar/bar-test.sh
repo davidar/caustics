@@ -384,16 +384,17 @@ trap 'exit 130' INT TERM
 # --- step 1: build ----------------------------------------------------------
 
 say "1. build"
-# All fourteen binaries (the bar spawns each sidecar from beside itself, and
-# the canvas its own), and the rows demo.
+# All fifteen binaries (the bar spawns each sidecar from beside itself, and
+# the canvas its own), the rows demo, and the polkit sink's fake host.
 if (cd "$REPO" &&
     cargo build --offline -p caustics-bar -p caustics-sysmon -p caustics-tray -p caustics-power \
         -p caustics-audio -p caustics-network -p caustics-bluetooth -p caustics-notify -p caustics-apps -p caustics-glyphs \
-        -p caustics-reload -p caustics-canvas -p caustics-wallpaper &&
-    cargo build --offline -p caustics-bar-abi --example rows_demo); then
-    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, and the rows_demo example"
+        -p caustics-reload -p caustics-canvas -p caustics-wallpaper -p caustics-polkit &&
+    cargo build --offline -p caustics-bar-abi --example rows_demo &&
+    cargo build --offline -p caustics-polkit --example fake_host); then
+    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit sink, the rows_demo example and the fake host"
 else
-    fail "cargo build of the set or the rows_demo example"
+    fail "cargo build of the set, the rows_demo example or the fake host"
     exit 1
 fi
 
@@ -3886,7 +3887,7 @@ restart_bar "the compiled-in sidecar set restored"
 say "25d. install.sh installs a whole set, and a bar started through it runs that set"
 # VM only: on a nested run it would install into the developer's home.
 if vm_only "the install script runs only in the guest; on the nested target it would install into the developer's home"; then
-# `--from` mode (the guest has no cargo): the set's name, the fourteen installs,
+# `--from` mode (the guest has no cargo): the set's name, the fifteen installs,
 # the symlink, and a bar started through it finding its own set's sidecars.
 GUEST_HOME=$(gssh 20 'printf %s "$HOME"')
 gscp "$REPO/bar/install.sh" tester@127.0.0.1:install.sh >/dev/null
@@ -3894,15 +3895,15 @@ gssh 20 'chmod +x ~/install.sh; rm -rf ~/caustics-install-test' >/dev/null
 install_out=$(gssh 120 '$HOME/install.sh --from $HOME/.local/bin --prefix $HOME/caustics-install-test 2>&1')
 note "$(printf '%s' "$install_out" | tail -5)"
 assert_contains "the script named the set" "$install_out" "set $BAR_HASH"
-assert_contains "and installed fourteen binaries" "$install_out" "installed 14 of 14 into"
+assert_contains "and installed fifteen binaries" "$install_out" "installed 15 of 15 into"
 assert_contains "and did not restart a unit it does not point at" \
     "$install_out" "not restarting caustics-bar"
 
 installed=$(gssh 20 "ls \$HOME/caustics-install-test/lib/caustics-bar/$BAR_HASH | wc -l")
-if [[ "${installed:-0}" -eq 14 ]]; then
-    pass "fourteen binaries in the set directory"
+if [[ "${installed:-0}" -eq 15 ]]; then
+    pass "fifteen binaries in the set directory"
 else
-    fail "the set directory holds ${installed:-0} binaries, not fourteen"
+    fail "the set directory holds ${installed:-0} binaries, not fifteen"
 fi
 link=$(gssh 20 'readlink $HOME/caustics-install-test/bin/caustics-bar')
 assert_contains "the symlink points into the set" "$link" "/lib/caustics-bar/$BAR_HASH/caustics-bar"
@@ -4665,6 +4666,102 @@ if [[ "$CANVAS_RUN" -eq 1 ]]; then
         fail "the canvas or its socket outlived the fixture"
     fi
     niri_msg action focus-workspace-up >/dev/null 2>&1
+fi
+
+say "35b. the polkit sink asks through the wire, and the answer reaches its helper alone"
+# `caustics-polkit` in its dry run (polkit/README.md): the agent object on the
+# run's private session bus, no system bus at all (its address names a
+# socket that does not exist), `polkit/tests/fake-helper.sh` as the helper,
+# and `polkit/examples/fake_host.rs` on its pipes playing the canvas host,
+# which answers the first ask with the secret and dismisses the second. This
+# step plays polkitd with `busctl`. The secret is this run's own, and no log
+# may hold it.
+if [[ "$T_NAME" == vm ]]; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the polkit sink and its fake host are not in the guest's set yet"
+    SKIPS=$((SKIPS + 1))
+else
+    polkit_secret="gate-$RANDOM$RANDOM-$RANDOM"
+    polkit_log() { on_target 10 'cat "$T_HOME/polkit.log" 2>/dev/null'; }
+    to_target "$REPO/polkit/tests/fake-helper.sh" polkit-fake-helper.sh
+    on_target 10 'chmod +x "$T_HOME/polkit-fake-helper.sh"
+        rm -f "$T_HOME/polkit.log" "$T_HOME/polkit-record" "$T_HOME/polkit-cookies"' >/dev/null
+    fixture_start polkit 'bash -c '"'"'cd "$1" && exec env CAUSTICS_POLKIT_DRY_RUN=1 \
+        CAUSTICS_POLKIT_HELPER="$1/polkit-fake-helper.sh" \
+        DBUS_SYSTEM_BUS_ADDRESS="unix:path=$1/no-system-bus" \
+        FAKE_HELPER_SECRET="$3" FAKE_HELPER_RECORD="$1/polkit-record" \
+        FAKE_HELPER_COOKIES="$1/polkit-cookies" \
+        FAKE_HOST_SECRET="$3" FAKE_HOST_SCRIPT="text cancel" \
+        "$2/examples/fake_host" "$2/caustics-polkit" >>"$1/polkit.log" 2>&1'"'"' polkit "$T_HOME" "$T_BIN" '"$polkit_secret"
+    polkit_dest=""
+    if wait_until "the polkit sink's dry run" 30 'polkit_log | jgrep -F "dry run: the agent is at"'; then
+        polkit_dest=$(polkit_log | sed -n 's/.*dry run: the agent is at \([^ ]*\) .*/\1/p' | tail -1)
+        pass "$(polkit_log | grep -F 'dry run:' | tail -1 | sed 's/^caustics-polkit: //' | cut -c1-140)"
+    else
+        fail "caustics-polkit never said where its agent is: $(polkit_log | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    # polkit_call <cookie> <message>: BeginAuthentication as polkitd makes
+    # it, for this uid; the reply and busctl's exit status.
+    polkit_call() {
+        on_target 40 "busctl --user call --timeout=30 '$polkit_dest' \
+            /org/freedesktop/PolicyKit1/AuthenticationAgent \
+            org.freedesktop.PolicyKit1.AuthenticationAgent BeginAuthentication \
+            'sssa{ss}sa(sa{sv})' org.caustics.test.polkit '$2' '' 0 '$1' \
+            1 unix-user 1 uid u \$(id -u) 2>&1; echo \"exit=\$?\""
+    }
+    if [[ -n "$polkit_dest" ]]; then
+        reply=$(polkit_call cookie-1 "The nested gate asks")
+        assert_contains "BeginAuthentication answered with the secret returned" "$reply" "exit=0"
+        log=$(polkit_log)
+        assert_contains "the title is polkit's message" "$log" \
+            'prompt id=1 kind=title arg=1 message="The nested gate asks"'
+        assert_contains "a PROMPT_SECRET arrived with the fake helper's message" "$log" \
+            'prompt id=1 kind=secret arg=0 message="Password: "'
+        assert_contains "the host answered it" "$log" "answered id=1 with text"
+        assert_contains "and PROMPT_DONE said success" "$log" 'prompt id=1 kind=done arg=1'
+        record=$(on_target 10 'cat "$T_HOME/polkit-record" 2>/dev/null')
+        if [[ "$record" == "$polkit_secret" ]]; then
+            pass "the fake helper read exactly the secret, and nothing else"
+        else
+            fail "the fake helper's record is ${#record} bytes, not the ${#polkit_secret}-byte secret"
+        fi
+
+        reply=$(polkit_call cookie-2 "The nested gate asks again")
+        if [[ "$reply" != *"exit=0"* && "$reply" == *"dismissed"* ]]; then
+            pass "a dismissed prompt fails the call: $(printf '%s' "$reply" | head -1 | cut -c1-100)"
+        else
+            fail "the dismissed call: $(printf '%s' "$reply" | tr '\n' '|' | cut -c1-200)"
+        fi
+        log=$(polkit_log)
+        assert_contains "the host dismissed the second ask" "$log" "answered id=2 with cancel"
+        assert_contains "and PROMPT_DONE said failure" "$log" 'prompt id=2 kind=done arg=0'
+        record=$(on_target 10 'cat "$T_HOME/polkit-record" 2>/dev/null')
+        cookies=$(on_target 10 'cat "$T_HOME/polkit-cookies" 2>/dev/null | tr "\n" " "')
+        if [[ "$record" == "$polkit_secret" && "$cookies" == "cookie-1 cookie-2 " ]]; then
+            pass "the dismissed helper read no answer; each helper read its own cookie"
+        else
+            fail "after the dismissal the record is ${#record} bytes and the cookies are '$cookies'"
+        fi
+    fi
+    leaks=$(on_target 10 "grep -cF -- '$polkit_secret' \"\$T_HOME/polkit.log\"")
+    if [[ "${leaks:-1}" -eq 0 ]] && ! journal | jgrep -F -- "$polkit_secret"; then
+        pass "no witness, no host line and no bar line holds the secret"
+    else
+        fail "the secret is in ${leaks:-?} lines of the sink's log, or in the bar's journal"
+    fi
+    if polkit_log | jgrep -iE 'system-bus|system bus: '; then
+        fail "the dry run spoke of the system bus: $(polkit_log | grep -iE 'system-bus|system bus: ' | head -1 | cut -c1-160)"
+    else
+        pass "the dry run never reached for the system bus"
+    fi
+    # The fake host goes, and the sink leaves with it: stdin's EOF.
+    polkit_pid=$(polkit_log | sed -n 's/^fake-host: started .* as pid \([0-9]*\)$/\1/p' | tail -1)
+    fixture_stop polkit
+    if [[ -n "$polkit_pid" ]] &&
+        wait_until "the polkit sink gone" 20 "! on_target 5 'kill -0 $polkit_pid 2>/dev/null'"; then
+        pass "the sink exited when its host went: $(polkit_log | grep -F 'stdin closed' | tail -1 | sed 's/^caustics-polkit: //')"
+    else
+        fail "caustics-polkit (pid ${polkit_pid:-?}) outlived its host"
+    fi
 fi
 
 say "36. verdict"

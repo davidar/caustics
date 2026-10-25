@@ -152,7 +152,7 @@ systemctl --user enable --now caustics-bar
 journalctl --user -u caustics-bar -f                        # every decision is one line
 ```
 
-`bar/install.sh` builds the workspace in release mode, checks that all fourteen
+`bar/install.sh` builds the workspace in release mode, checks that all fifteen
 binaries came from that build, installs them into
 `~/.local/lib/caustics-bar/<abi-hash>/`, moves the symlink, restarts the unit if
 it is installed, and prints the bar's first `set:` and `health` lines.
@@ -284,10 +284,12 @@ ray-splat ground truth beside the shader's approximation.
 - docs/testing.md — the tests, the oracle, the nested gate and the VM target.
 - docs/roadmap.md — what is not built yet.
 - docs/canvas.md — the wallpaper, idle fade, lock screen, polkit prompt and
-  greeter as one caustic on a second host (the wallpaper is built; the rest
-  is design).
+  greeter as one caustic on a second host (the wallpaper and the polkit
+  sink are built; the rest is design).
 - `canvas/README.md` — the canvas host as a user unit: the wallpaper, its
   socket and its client.
+- `polkit/README.md` — the polkit sink: the authentication agent, its
+  conversations over the wire, its dry run.
 - docs/wire.md — the wire contract that replaces the ABI hash with an
   append-only rule, so sidecars from other trees can talk to the host
   (design).

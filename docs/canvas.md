@@ -2,7 +2,10 @@
 
 Steps 0 to 2 of *Order* are built: the host crate, the canvas host with its
 wallpaper sidecar (`canvas/`, `wallpaper/`, `caustics/canvas*.slang`;
-canvas/README.md runs it), and the fade on its overlay. The rest is design. The bar's complement: where the bar is a strip along
+canvas/README.md runs it), and the fade on its overlay. Of step 3, the
+polkit sink and the wire it asks over are built (`polkit/`, docs/abi.md,
+*Prompt*, *Answer*); the host's half, the prompt itself, is not, so nothing
+starts the sink yet. The rest is design. The bar's complement: where the bar is a strip along
 one edge, the canvas is everything else a session paints that is not a
 window. docs/architecture.md is the bar; this document borrows its model
 and says where the canvas departs from it. docs/roadmap.md, *The canvas*,
@@ -103,7 +106,7 @@ and the rule above are the protection, not the process lifetime.
 The departure from the bar is in the roster: the host's sidecars are not
 data sources that publish rows but *jobs* that ask the host for a surface
 and an answer, so the wire gains request frames in both directions
-(docs/abi.md, *The wire*, once built).
+(docs/abi.md, *Prompt*, *Answer*).
 
 ### Surfaces
 
@@ -224,11 +227,13 @@ enforces them. Failed attempts are counted, never described, in any log.
   `CanvasEvent` for that id: dimmed once, or cancelled by input, after which
   the sidecar undims (docs/abi.md, *Canvas event*). The background never
   darkens: one dim, on the overlay, with one owner.
-- **polkit**: register `org.freedesktop.PolicyKit1.AuthenticationAgent` on
-  the session bus at `/org/freedesktop/PolicyKit1/AuthenticationAgent`, call
-  `Authority.RegisterAuthenticationAgent(unix-session subject, locale, path)`
-  on the system bus, handle `BeginAuthentication(action_id, message,
-  icon_name, details, cookie, identities)` and `CancelAuthentication(cookie)`.
+- **polkit**: call `Authority.RegisterAuthenticationAgent(unix-session
+  subject, locale, path)` on the system bus, and serve
+  `org.freedesktop.PolicyKit1.AuthenticationAgent` at
+  `/org/freedesktop/PolicyKit1/AuthenticationAgent` on that same connection:
+  it is the one polkitd calls the agent back on. Handle
+  `BeginAuthentication(action_id, message, icon_name, details, cookie,
+  identities)` and `CancelAuthentication(cookie)`.
   One prompt at a time; the rest queue. A request that arrives while the
   session is locked waits until it is not. No identity picker at first:
   authenticate as the first identity matching the session user, else the

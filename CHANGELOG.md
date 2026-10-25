@@ -26,7 +26,8 @@ and checked against Slang's reflection; and the wire between the bar and its
 sidecars, length-prefixed binary frames read by a reader that skips what it
 does not know. One hash over both, carried by every binary and checked on a
 sidecar's first frame. `bar/install.sh` installs the bar, its ten sidecars,
-the canvas host, its sidecar and its client as one set named by that hash.
+the canvas host, its sidecar, its client and its polkit sink as one set
+named by that hash.
 Every payload crosses as one frame: a compiled entry point, an output-sized
 picture and a font's buffer each go whole, with nothing cut into pieces and
 put back together. The reader takes a body in bounded steps as it arrives, so
@@ -72,6 +73,17 @@ carries an id in what was a reserved word; both moved the ABI hash, so the
 bar, its sidecars and the canvas are rebuilt and installed together. The
 canvas's surfaces no longer allocate the visibility buffer only the bar's
 caustic binds.
+
+**The canvas's polkit sink** (`caustics-polkit`, polkit/README.md). The
+session's polkit authentication agent as a sidecar: it registers with
+polkitd, turns each request into a prompt conversation with the canvas host
+over two new wire kinds, `Prompt` and `Answer`, drives polkit's own helper
+with what was typed, and reports the outcome; one conversation at a time,
+the rest queued. The typed bytes are zeroed by every copy the wire makes
+and are never logged. A dry run touches no system bus, for the tests. The
+two kinds moved the ABI hash, so the whole set (now fifteen binaries) is
+rebuilt and installed together; the canvas does not start the sink until
+it can show a prompt.
 
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout
