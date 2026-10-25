@@ -236,13 +236,11 @@ dependencies = [
  "caustics-glyphs",
  "caustics-host",
  "libc",
- "pollster",
  "punchcutter-core",
  "punchcutter-fonts",
  "punchcutter-shape",
  "punchcutter-slang",
  "punchcutter-text",
- "raw-window-handle",
  "serde_json",
  "smithay-client-toolkit",
  "tracing",
@@ -286,10 +284,15 @@ dependencies = [
 name = "caustics-host"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "caustics-bar-abi",
  "libc",
+ "pollster",
+ "punchcutter-core",
  "punchcutter-slang",
+ "raw-window-handle",
  "tracing",
+ "wgpu",
 ]
 
 [[package]]

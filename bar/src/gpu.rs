@@ -1,5 +1,12 @@
 //! The bar's GPU side: two surfaces, seven pipelines, three bind group layouts.
 //!
+//! The mechanism is `caustics-host`'s: the device and its refusals
+//! (`caustics_host::device`), the reflection-driven layouts, the pipelines and
+//! the reload swap (`caustics_host::program`), and the swapchain of one target
+//! (`caustics_host::surface`). What is here is what makes them this bar: which
+//! buffers it allocates and binds by which name, the seven entry points and
+//! the order they dispatch in, the shape pass and its watchdog.
+//!
 //! Three shapes here are deliberate:
 //!
 //! - **passthrough SPIR-V.** The caustic is Slang; wgpu takes the module
@@ -7,7 +14,7 @@
 //!   of its own, so every pipeline build sits inside a validation error scope
 //!   and a reload is all-or-nothing ([`Gpu::reload_all`]).
 //! - **the mirror.** The caustic owns [`State`]; the CPU reads it one frame
-//!   late out of a `MAP_READ` readback buffer, through `surface::refresh_mirror`. Nothing on the CPU ever writes it, and it is the *only* buffer read back at all (docs/abi.md, *Who writes what*).
+//!   late out of a `MAP_READ` readback buffer, through `caustics_host::surface::refresh_mirror`. Nothing on the CPU ever writes it, and it is the *only* buffer read back at all (docs/abi.md, *Who writes what*).
 //! - **format variants.** Storage-image formats are baked into SPIR-V, so the
 //!   surface format decides which of build.rs's two sets of seven modules loads.
 //!
@@ -37,30 +44,25 @@
 //! ([`storage_texture_format`]) and which buffer to bind.
 //!
 //! **And the bind *groups* are built the same way**
-//! ([`group_entries`], docs/abi.md, *Bindings and the oracle*): each entry takes its number from
+//! (`caustics_host::program::group_entries`, docs/abi.md, *Bindings and the oracle*): each entry takes its number from
 //! the reflected [`Binding`] and its resource from a `match` on that binding's
 //! name, so no number is written on this side at all. A binding added in Slang
 //! needs one arm here and nothing else; a binding that moves moves in one file.
 //!
 //! Fifteen storage buffers across the three, which is well past wgpu's default
-//! per-stage limit of eight — [`Gpu::new`] raises it to whatever the adapter
-//! allows and says so, counting from the reflection.
+//! per-stage limit of eight — `caustics_host::device::Device::open` raises it
+//! to whatever the adapter allows and says so, counting from the reflection.
 
-use std::num::NonZeroU64;
 use std::ptr::NonNull;
 
 use anyhow::{Context, Result, anyhow, bail};
-use punchcutter_core::gpu::{passthrough_pipeline, storage_buffer};
+use caustics_host::device::{self, Device, Presentation};
+use caustics_host::program::{Entry, Program, Refused, group_entries};
+use caustics_host::surface::{self, ID_FORMAT, Surface, acquire, create_surface, refresh_mirror};
+use punchcutter_core::gpu::storage_buffer;
 use punchcutter_slang::{Binding, BindingKind, Reflection};
-use raw_window_handle::{
-    RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
-};
 
 use crate::abi::{self, Command, FrameInputs, Params, State};
-
-use self::surface::{ID_FORMAT, acquire, create_id_texture, refresh_mirror};
-
-mod surface;
 
 /// The debug label on this bar's visibility buffer.
 const IDS_LABEL: &str = "caustics-bar-ids";
@@ -102,45 +104,79 @@ const CURVE_HEADROOM: f32 = 0.125;
 /// `text.slang`'s reflection.
 const GLYPH_RECORD: u32 = 64;
 
-// The seven entry-point names come from `abi::ENTRIES`, the one list build.rs bakes and `caustics-reload` recompiles; the indices below are that list's order, which `reload_all` also takes.
-const BUILD_ENTRY: &str = abi::ENTRIES[0];
-const COMPOSE_ENTRY: &str = abi::ENTRIES[1];
-const SHAPE_ENTRY: &str = abi::ENTRIES[2];
-const APPLY_ENTRY: &str = abi::ENTRIES[3];
-const VISIBILITY_ENTRY: &str = abi::ENTRIES[4];
-const SAMPLE_ENTRY: &str = abi::ENTRIES[5];
-const DRAW_ENTRY: &str = abi::ENTRIES[6];
+// The seven entry points' positions in `abi::ENTRIES`, the one list build.rs
+// bakes and `caustics-reload` recompiles: a pipeline is named by its index in
+// that list, which is also the order `reload_all` takes the modules in.
+const BUILD: usize = 0;
+const COMPOSE: usize = 1;
+const SHAPE: usize = 2;
+const APPLY: usize = 3;
+const VISIBILITY: usize = 4;
+const SAMPLE: usize = 5;
+const DRAW: usize = 6;
 
-/// The seven baked modules for one swapchain format.
-struct BakedSpv<'a> {
-    build: &'a [u8],
-    compose: &'a [u8],
-    shape: &'a [u8],
-    apply: &'a [u8],
-    visibility: &'a [u8],
-    sample: &'a [u8],
-    draw: &'a [u8],
-}
+/// The seven entry points, in `abi::ENTRIES` order: each one's name, its
+/// pipeline's label, and its `[numthreads]`.
+static ENTRY_POINTS: [Entry; abi::ENTRIES.len()] = [
+    Entry {
+        name: abi::ENTRIES[BUILD],
+        label: "caustics-bar-build",
+        workgroup: (1, 1, 1),
+    },
+    Entry {
+        name: abi::ENTRIES[COMPOSE],
+        label: "caustics-bar-compose",
+        workgroup: (1, 1, 1),
+    },
+    Entry {
+        name: abi::ENTRIES[SHAPE],
+        label: "caustics-bar-shape",
+        workgroup: (SHAPE_GROUP, 1, 1),
+    },
+    Entry {
+        name: abi::ENTRIES[APPLY],
+        label: "caustics-bar-apply",
+        workgroup: (1, 1, 1),
+    },
+    Entry {
+        name: abi::ENTRIES[VISIBILITY],
+        label: "caustics-bar-visibility",
+        workgroup: (TILE, TILE, 1),
+    },
+    Entry {
+        name: abi::ENTRIES[SAMPLE],
+        label: "caustics-bar-sample",
+        workgroup: (1, 1, 1),
+    },
+    Entry {
+        name: abi::ENTRIES[DRAW],
+        label: "caustics-bar-draw",
+        workgroup: (TILE, TILE, 1),
+    },
+];
 
-const SPV_RGBA8UNORM: BakedSpv<'static> = BakedSpv {
-    build: include_bytes!(concat!(env!("OUT_DIR"), "/bar_build.rgba8unorm.spv")),
-    compose: include_bytes!(concat!(env!("OUT_DIR"), "/bar_compose.rgba8unorm.spv")),
-    shape: include_bytes!(concat!(env!("OUT_DIR"), "/bar_shape.rgba8unorm.spv")),
-    apply: include_bytes!(concat!(env!("OUT_DIR"), "/bar_apply.rgba8unorm.spv")),
-    visibility: include_bytes!(concat!(env!("OUT_DIR"), "/bar_visibility.rgba8unorm.spv")),
-    sample: include_bytes!(concat!(env!("OUT_DIR"), "/bar_sample.rgba8unorm.spv")),
-    draw: include_bytes!(concat!(env!("OUT_DIR"), "/bar_draw.rgba8unorm.spv")),
-};
+/// The seven baked modules for one swapchain format, in `abi::ENTRIES` order.
+type BakedSpv = [&'static [u8]; abi::ENTRIES.len()];
 
-const SPV_BGRA8UNORM: BakedSpv<'static> = BakedSpv {
-    build: include_bytes!(concat!(env!("OUT_DIR"), "/bar_build.bgra8unorm.spv")),
-    compose: include_bytes!(concat!(env!("OUT_DIR"), "/bar_compose.bgra8unorm.spv")),
-    shape: include_bytes!(concat!(env!("OUT_DIR"), "/bar_shape.bgra8unorm.spv")),
-    apply: include_bytes!(concat!(env!("OUT_DIR"), "/bar_apply.bgra8unorm.spv")),
-    visibility: include_bytes!(concat!(env!("OUT_DIR"), "/bar_visibility.bgra8unorm.spv")),
-    sample: include_bytes!(concat!(env!("OUT_DIR"), "/bar_sample.bgra8unorm.spv")),
-    draw: include_bytes!(concat!(env!("OUT_DIR"), "/bar_draw.bgra8unorm.spv")),
-};
+const SPV_RGBA8UNORM: BakedSpv = [
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_build.rgba8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_compose.rgba8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_shape.rgba8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_apply.rgba8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_visibility.rgba8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_sample.rgba8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_draw.rgba8unorm.spv")),
+];
+
+const SPV_BGRA8UNORM: BakedSpv = [
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_build.bgra8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_compose.bgra8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_shape.bgra8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_apply.bgra8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_visibility.bgra8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_sample.bgra8unorm.spv")),
+    include_bytes!(concat!(env!("OUT_DIR"), "/bar_draw.bgra8unorm.spv")),
+];
 
 /// The four curve buffers the engine's `text.slang` reads, and how much they hold.
 ///
@@ -202,56 +238,6 @@ impl Target {
     }
 }
 
-/// One swapchain and the per-target resources that hang off it.
-struct Surface {
-    /// `None` only for a headless device — the oracle's, which presents
-    /// nothing. Everything else about the target is real,
-    /// because the passes bind its `params` and its `ids` like any other.
-    surface: Option<wgpu::Surface<'static>>,
-    config: wgpu::SurfaceConfiguration,
-    ids: wgpu::TextureView,
-    params: wgpu::Buffer,
-    /// Has a suboptimal acquire already been answered with a reconfigure
-    /// against *this* configuration? Cleared whenever the config changes.
-    refit: bool,
-}
-
-impl Surface {
-    /// Answer a suboptimal acquire with one reconfigure, and only one.
-    ///
-    /// A suboptimal swapchain is still drawable, so the frame is presented
-    /// first and the surface rebuilt after it. Rebuilding on *every* frame
-    /// would be worse than the warning it replaces — on some drivers every
-    /// acquire reports suboptimal — so the answer
-    /// happens once per configuration, and a genuine resize re-arms it.
-    fn refit_once(&mut self, device: &wgpu::Device) {
-        let Some(surface) = &self.surface else {
-            return;
-        };
-        if self.refit {
-            return;
-        }
-        self.refit = true;
-        tracing::debug!(
-            width = self.config.width,
-            height = self.config.height,
-            "reconfiguring a suboptimal swapchain"
-        );
-        surface.configure(device, &self.config);
-    }
-}
-
-/// The seven pipelines, swapped together or not at all.
-struct Pipelines {
-    build: wgpu::ComputePipeline,
-    compose: wgpu::ComputePipeline,
-    shape: wgpu::ComputePipeline,
-    apply: wgpu::ComputePipeline,
-    visibility: wgpu::ComputePipeline,
-    sample: wgpu::ComputePipeline,
-    draw: wgpu::ComputePipeline,
-}
-
 /// How much more a software adapter's shape pass may take than the caustic's
 /// `SHAPE_WATCHDOG_MS` says: see [`Gpu::set_watchdog_ms`].
 pub const WATCHDOG_CPU_SCALE: f64 = 8.0;
@@ -265,27 +251,18 @@ pub struct Gpu {
     /// whether the shaper gets a wall-clock deadline.
     shader_clock: punchcutter_core::gpu::ShaderClock,
 
-    /// The negotiated swapchain format; both surfaces use it, and it decides
-    /// which SPIR-V variant the pipelines were built from.
-    format: wgpu::TextureFormat,
-    alpha_mode: wgpu::CompositeAlphaMode,
-    /// Mailbox where the surface offers it, Fifo otherwise. Fifo is the
-    /// trap: Mesa's Wayland WSI implements it by blocking the *next* present
-    /// on the previous commit's frame callback, and a popup the compositor
-    /// has just unmapped never gets one, so the bar hangs (seen on niri).
-    /// Under Mailbox nothing in `present`
-    /// waits on the compositor; pacing is the embassy's own frame callback.
-    present_mode: wgpu::PresentMode,
+    /// The negotiated swapchain format, alpha mode and present mode; both
+    /// surfaces use them, and the format decides which SPIR-V variant the
+    /// pipelines were built from.
+    presentation: Presentation,
 
-    bind_group_layout: wgpu::BindGroupLayout,
-    /// Group 1: the engine's `text.slang`'s four curve buffers, at the bindings that
-    /// module declares for itself.
-    text_layout: wgpu::BindGroupLayout,
-    /// Group 2: the engine's `shape.slang`'s font tables and the strings buffer, at
-    /// the bindings `bar.slang` chose for them.
-    shape_layout: wgpu::BindGroupLayout,
-    pipeline_layout: wgpu::PipelineLayout,
-    pipelines: Pipelines,
+    /// The three layouts (group 0, the bar's own; group 1, the engine's
+    /// `text.slang`'s four curve buffers at the bindings that module declares
+    /// for itself; group 2, the engine's `shape.slang`'s font tables and the
+    /// strings buffer at the bindings `bar.slang` chose for them), the
+    /// pipeline layout over them, the seven pipelines, and the bindings they
+    /// were built from, which a reload is checked against.
+    program: Program,
 
     /// The one buffer the embassy reads back (docs/abi.md, *Who writes what*): the
     /// caustic's polled words and its two rings. Written by the caustic and
@@ -362,11 +339,6 @@ pub struct Gpu {
     /// What the last build/compose/shape submission cost, until the mirror
     /// carrying what it built comes back and the two are logged together.
     model_pass_ms: Option<f64>,
-    /// The bindings the three layouts above were built from, as the baked
-    /// reflection declared them. A reload compares its own compile's against
-    /// these and refuses rather than swap in modules the layouts do not
-    /// describe.
-    bindings: Vec<Binding>,
     /// `Params.cap_height`, in em; set by `set_cap_height` when a font is
     /// known and 0 before.
     cap_height: f32,
@@ -431,10 +403,7 @@ impl Gpu {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
+        let instance = device::instance();
         // SAFETY: the caller's contract, above.
         let bar_surface = unsafe { create_surface(&instance, display, surface)? };
         Gpu::bring_up(instance, Some(bar_surface), width, height)
@@ -450,11 +419,7 @@ impl Gpu {
     /// production path, which is the whole point: the oracle tests what ships.
     #[cfg(test)]
     pub fn headless(width: u32, height: u32) -> Result<Self> {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::VULKAN,
-            ..wgpu::InstanceDescriptor::new_without_display_handle()
-        });
-        Gpu::bring_up(instance, None, width, height)
+        Gpu::bring_up(device::instance(), None, width, height)
     }
 
     fn bring_up(
@@ -463,277 +428,53 @@ impl Gpu {
         width: u32,
         height: u32,
     ) -> Result<Self> {
-        let adapter = match &bar_surface {
-            Some(surface) => {
-                pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-                    // A status bar is a handful of texels a second. Never the
-                    // dGPU.
-                    power_preference: wgpu::PowerPreference::LowPower,
-                    force_fallback_adapter: false,
-                    compatible_surface: Some(surface),
-                    ..Default::default()
-                }))
-                .context("no Vulkan adapter can present to the bar's layer surface")?
-            }
-            // A CPU adapter is taken for the same reason the discrete one is
-            // refused: a software rasteriser cannot be the dGPU, which is what
-            // lets the oracle run in a VM whose only Vulkan driver is lavapipe.
-            None => pollster::block_on(instance.enumerate_adapters(wgpu::Backends::VULKAN))
-                .into_iter()
-                .find(|adapter| {
-                    let info = adapter.get_info();
-                    let usable = info.device_type == wgpu::DeviceType::IntegratedGpu
-                        || info.device_type == wgpu::DeviceType::Cpu;
-                    if !usable || info.name.to_ascii_uppercase().contains("NVIDIA") {
-                        tracing::info!(adapter = %info.name, device_type = ?info.device_type,
-                                       "adapter refused");
-                        return false;
-                    }
-                    true
-                })
-                .context(
-                    "no integrated or CPU Vulkan adapter; refusing to run the caustic on a \
-                     discrete GPU. Pin the Vulkan loader to the integrated GPU's ICD with \
-                     VK_DRIVER_FILES (bar/systemd/dropins/igpu-only.conf shows how); \
-                     CAUSTICS_BAR_ALLOW_DGPU does not apply to the headless device",
-                )?,
-        };
-
-        let info = adapter.get_info();
-        tracing::info!(
-            adapter = %info.name,
-            driver = %info.driver_info,
-            device_type = ?info.device_type,
-            backend = ?info.backend,
-            "wgpu adapter"
-        );
-
-        // docs/architecture.md, *Power and the discrete GPU*: the unit pins VK_DRIVER_FILES at
-        // the integrated ICD, and this is the belt to those braces. Waking a
-        // discrete GPU to draw a status bar is the one failure the bar must
-        // never commit on a hybrid laptop.
-        if info.name.to_ascii_uppercase().contains("NVIDIA")
-            && std::env::var_os("CAUSTICS_BAR_ALLOW_DGPU").is_none()
-        {
-            tracing::error!(
-                adapter = %info.name,
-                "refusing to run the bar on a discrete GPU: it would keep the dGPU awake for \
-                 the life of the session. Pin VK_DRIVER_FILES at the integrated ICD, or set \
-                 CAUSTICS_BAR_ALLOW_DGPU=1 to override."
-            );
-            std::process::exit(2);
-        }
-
-        if !adapter
-            .features()
-            .contains(wgpu::Features::PASSTHROUGH_SHADERS)
-        {
-            bail!(
-                "adapter '{}' lacks PASSTHROUGH_SHADERS; the bar's Slang->SPIR-V caustic \
-                 cannot be loaded here",
-                info.name
-            );
-        }
-
-        let mut features = wgpu::Features::PASSTHROUGH_SHADERS;
-        if adapter
-            .features()
-            .contains(wgpu::Features::BGRA8UNORM_STORAGE)
-        {
-            features |= wgpu::Features::BGRA8UNORM_STORAGE;
-        }
-        // The shape pass's watchdog. Both adapters the bar is tested on have it — RADV and lavapipe — and one that does not gets a
-        // warning and no watchdog rather than no bar.
-        let timing = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
-        if timing {
-            features |= wgpu::Features::TIMESTAMP_QUERY;
-        }
-
-        // The bar binds more storage buffers than wgpu's default per-stage limit
-        // of eight allows — the bar's own nine, `text.slang`'s four curves and
-        // `shape.slang`'s tables — so it asks for what the adapter has rather
-        // than for a number: RADV's ceiling is in the millions and lavapipe's is
-        // its own business, and a bar that asked for 32 would fail on a driver
-        // that offered 31 for no reason. The counts come from Slang's
-        // reflection of the caustic itself, so a binding added in Slang is
-        // counted here without anyone editing this file.
+        // The device, its refusals and its exit on loss are the crate's
+        // (`caustics_host::device`). Its storage-buffer limit is counted from
+        // the reflection of the caustic itself, so a binding added in Slang is
+        // counted without anyone editing this file.
         let reflected = baked_bindings();
-        assert_sets(&reflected);
-        let (bindings, groups, storage_buffers) = binding_counts(&reflected);
-        let mut limits = wgpu::Limits::default();
-        limits.max_storage_buffers_per_shader_stage = adapter
-            .limits()
-            .max_storage_buffers_per_shader_stage
-            .max(limits.max_storage_buffers_per_shader_stage);
-        tracing::info!(
-            storage_buffers_allowed = limits.max_storage_buffers_per_shader_stage,
-            bind_groups = limits.max_bind_groups,
-            bindings,
-            storage_buffers,
-            "device limits (the bar declares {bindings} bindings across {groups} groups, \
-             {storage_buffers} of them storage buffers)"
-        );
-
-        // **Owns a file descriptor** (the first membership test, docs/architecture.md, *The bar process*): the device is the bar's,
-        // and it is opened through the text engine's device helper
-        // rather than `request_device` — because wgpu will not ask for
-        // `VK_KHR_shader_clock` and the shaper's SPIR-V carries the
-        // capability. The shaper holds a wall-clock deadline inside the shader with it, which is what stands between a bar fed
-        // a bad arena and a reset graphics ring.
-        let (device, queue, clock) = punchcutter_core::gpu::open_device(
-            &adapter,
-            &wgpu::DeviceDescriptor {
-                label: Some("caustics-bar-device"),
-                required_features: features,
-                required_limits: limits,
-                ..Default::default()
-            },
-        )
-        .context("Vulkan device creation failed")?;
-        // **The device is the bar's, and its loss is the bar's exit.**
-        // wgpu's default for both of these is a panic,
-        // which under `Restart=always` is a bar that comes back, is handed the
-        // same bytes by the same sidecars, and dies again. One witness and
-        // status 3 is what the unit's `RestartPreventExitStatus` can act on.
-        //
-        // `Destroyed` is the ordinary teardown and says nothing.
-        device.set_device_lost_callback(|reason, message| {
-            if reason == wgpu::DeviceLostReason::Destroyed {
-                tracing::info!("gpu: the device was destroyed ({message})");
-                return;
-            }
-            tracing::error!(
-                "gpu: the device is gone ({reason:?}): {message}. Exiting; this bar is not \
-                 coming back on its own (exit 3; the unit does not restart it)."
-            );
-            std::process::exit(crate::EXIT_DEVICE);
-        });
-        device.on_uncaptured_error(std::sync::Arc::new(|error| {
-            tracing::error!("gpu: {error}. Exiting (exit 3; the unit does not restart it).");
-            std::process::exit(crate::EXIT_DEVICE);
-        }));
-
-        match clock {
-            punchcutter_core::gpu::ShaderClock::Device => {
-                tracing::info!("gpu: VK_KHR_shader_clock is on; the shaper holds a deadline")
-            }
-            // Never silent: a bar without it runs on the operation budget alone,
-            // and the operation budget is only as good as its accounting.
-            punchcutter_core::gpu::ShaderClock::Absent => tracing::warn!(
-                "gpu: this adapter has no VK_KHR_shader_clock — the shaper's run deadline \
-                 is off and the caps and the operation budget are the only bound"
-            ),
-        }
+        let Device {
+            instance,
+            adapter,
+            device,
+            queue,
+            shader_clock: clock,
+            features,
+        } = Device::open(
+            instance,
+            bar_surface.as_ref(),
+            &reflected,
+            "caustics-bar-device",
+        )?;
+        let timing = features.contains(wgpu::Features::TIMESTAMP_QUERY);
 
         // What the surface will take, when there is one. Headless — the
-        // oracle — fixes all three instead: it compares a table and not a
-        // picture, and `Rgba8Unorm` is the variant the baked SPIR-V
-        // declares explicitly.
-        let (format, alpha_mode, present_mode) = match bar_surface.as_ref() {
-            Some(negotiate) => {
-                let caps = negotiate.get_capabilities(&adapter);
-                if !caps.usages.contains(wgpu::TextureUsages::STORAGE_BINDING) {
-                    bail!(
-                        "the layer surface does not support STORAGE_BINDING (usages: {:?}); the bar \
-                     draws the swapchain from a compute pass and has no fallback",
-                        caps.usages
-                    );
-                }
-                let format = if caps.formats.contains(&wgpu::TextureFormat::Rgba8Unorm) {
-                    wgpu::TextureFormat::Rgba8Unorm
-                } else if caps.formats.contains(&wgpu::TextureFormat::Bgra8Unorm)
-                    && features.contains(wgpu::Features::BGRA8UNORM_STORAGE)
-                {
-                    wgpu::TextureFormat::Bgra8Unorm
-                } else {
-                    bail!(
-                        "no storage-writable surface format available (formats: {:?}, \
-                     BGRA8UNORM_STORAGE: {})",
-                        caps.formats,
-                        features.contains(wgpu::Features::BGRA8UNORM_STORAGE)
-                    );
-                };
-
-                // The slab is translucent, so the alpha the caustic writes has to mean
-                // something. PreMultiplied is what the caustic writes; anything else
-                // and the bar will look wrong, which is worth a warning and not worth
-                // refusing to run over.
-                let alpha_mode = if caps
-                    .alpha_modes
-                    .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
-                {
-                    wgpu::CompositeAlphaMode::PreMultiplied
-                } else {
-                    let fallback = *caps
-                        .alpha_modes
-                        .first()
-                        .context("the surface offers no alpha mode at all")?;
-                    tracing::warn!(
-                        offered = ?caps.alpha_modes,
-                        chosen = ?fallback,
-                        "the surface does not offer PreMultiplied alpha; the translucent slab will \
-                         composite wrong, but the bar still runs"
-                    );
-                    fallback
-                };
-
-                let present_mode = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
-                    wgpu::PresentMode::Mailbox
-                } else {
-                    tracing::warn!(
-                        offered = ?caps.present_modes,
-                        "the surface does not offer Mailbox presentation; falling back to Fifo, \
-                         which can block on an unmapped popup's frame callback"
-                    );
-                    wgpu::PresentMode::Fifo
-                };
-
-                tracing::info!(
-                    ?format,
-                    ?alpha_mode,
-                    ?present_mode,
-                    offered_formats = ?caps.formats,
-                    offered_alpha = ?caps.alpha_modes,
-                    offered_present = ?caps.present_modes,
-                    "surface format negotiated"
-                );
-                (format, alpha_mode, present_mode)
-            }
-            None => (
-                wgpu::TextureFormat::Rgba8Unorm,
-                wgpu::CompositeAlphaMode::Opaque,
-                wgpu::PresentMode::Fifo,
-            ),
+        // oracle — fixes all three instead.
+        let presentation = match bar_surface.as_ref() {
+            Some(negotiate) => Presentation::negotiate(negotiate, &adapter, features)?,
+            None => Presentation::HEADLESS,
         };
+        let format = presentation.format;
 
-        let bind_group_layout =
-            create_layout(&device, "caustics-bar-bgl", &reflected, SET_BAR, format);
-        let text_layout = create_layout(
+        // Three layouts from the reflection, the pipeline layout over them
+        // and the seven pipelines, in one validation scope
+        // (`caustics_host::program`). The sets the reflection declares must
+        // be exactly these three, or this stops here.
+        let program = Program::new(
             &device,
-            "caustics-bar-text-bgl",
-            &reflected,
-            SET_TEXT,
-            format,
-        );
-        let shape_layout = create_layout(
-            &device,
-            "caustics-bar-shape-bgl",
-            &reflected,
-            SET_SHAPE,
-            format,
-        );
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("caustics-bar-pipeline-layout"),
-            bind_group_layouts: &[
-                Some(&bind_group_layout),
-                Some(&text_layout),
-                Some(&shape_layout),
+            reflected,
+            &[
+                "caustics-bar-bgl",
+                "caustics-bar-text-bgl",
+                "caustics-bar-shape-bgl",
             ],
-            immediate_size: 0,
-        });
-        let baked = baked_spv(format);
-        let pipelines = build_pipelines(&device, &pipeline_layout, baked)
-            .context("the bar caustic baked in at build time does not load")?;
+            "caustics-bar-pipeline-layout",
+            &|name| storage_texture_format(name, format),
+            &ENTRY_POINTS,
+            baked_spv(format),
+        )
+        .context("the bar caustic baked in at build time does not load")?;
+        let reflected = program.bindings();
 
         let state = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("caustics-bar-state"),
@@ -749,7 +490,7 @@ impl Gpu {
         // readback, no upload, and the usage flags say so.
         let private = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("caustics-bar-private"),
-            size: private_stride(&reflected),
+            size: private_stride(reflected),
             // `COPY_DST` only in a test build, where `set_menu_level` writes
             // one field of it so a scenario can name an open menu without a
             // click. A shipped bar cannot write this buffer at all, and the
@@ -816,7 +557,7 @@ impl Gpu {
             band_curves: growable_buffer(&device, "caustics-bar-band-curves", 4),
             glyphs: growable_buffer(&device, "caustics-bar-glyphs", 64),
         };
-        let text_group = create_text_group(&device, &text_layout, &reflected, &curves);
+        let text_group = create_text_group(&device, program.layout(SET_TEXT), reflected, &curves);
         let shape = ShapeBuffers {
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("caustics-bar-shape-params"),
@@ -833,7 +574,13 @@ impl Gpu {
                 punchcutter_shape::OT_TABLES_START as u64,
             ),
         };
-        let shape_group = create_shape_group(&device, &shape_layout, &reflected, &shape, &strings);
+        let shape_group = create_shape_group(
+            &device,
+            program.layout(SET_SHAPE),
+            reflected,
+            &shape,
+            &strings,
+        );
 
         // Two timestamps, one pass: the device's own answer to "how long did
         // `bar_shape` run". Eight bytes each, and the
@@ -906,9 +653,7 @@ impl Gpu {
         let bar = configure_surface(
             &device,
             bar_surface,
-            format,
-            alpha_mode,
-            present_mode,
+            &presentation,
             width,
             height,
             Target::Bar,
@@ -929,14 +674,8 @@ impl Gpu {
             device,
             queue,
             shader_clock: clock,
-            format,
-            alpha_mode,
-            present_mode,
-            bind_group_layout,
-            text_layout,
-            shape_layout,
-            pipeline_layout,
-            pipelines,
+            presentation,
+            program,
             state,
             runs,
             commands,
@@ -959,7 +698,6 @@ impl Gpu {
             shape_blocked: false,
             shape_cold: true,
             model_pass_ms: None,
-            bindings: reflected,
             cap_height: 0.0,
             curve_glyphs: 0,
             curve_totals: [0; 4],
@@ -982,11 +720,11 @@ impl Gpu {
     /// The define and the format-unknown switch matching the live swapchain
     /// format, for a compile on this device (the oracle's). Mirrors build.rs, which compiles one set per `DstFormat::ALL` with `format.args()`.
     pub fn dst_format_args(&self) -> (&'static str, bool) {
-        surface::dst_format(self.format)
+        surface::dst_format(self.presentation.format)
             .unwrap_or_else(|| {
                 unreachable!(
                     "surface format {:?} is not one this bar can select",
-                    self.format
+                    self.presentation.format
                 )
             })
             .args()
@@ -1008,34 +746,19 @@ impl Gpu {
     }
 
     pub fn bar_size(&self) -> (u32, u32) {
-        (self.bar.config.width, self.bar.config.height)
+        self.bar.size()
     }
 
     pub fn popup_size(&self) -> (u32, u32) {
         match &self.popup {
-            Some(popup) => (popup.config.width, popup.config.height),
+            Some(popup) => popup.size(),
             None => (0, 0),
         }
     }
 
     /// Resize the bar's swapchain (and its ids texture) after a configure.
     pub fn resize_bar(&mut self, width: u32, height: u32) {
-        if (self.bar.config.width, self.bar.config.height) == (width.max(1), height.max(1)) {
-            return;
-        }
-        self.bar.config.width = width.max(1);
-        self.bar.config.height = height.max(1);
-        if let Some(surface) = &self.bar.surface {
-            surface.configure(&self.device, &self.bar.config);
-        }
-        // A new configuration; the next suboptimal acquire deserves an answer.
-        self.bar.refit = false;
-        self.bar.ids = create_id_texture(
-            &self.device,
-            IDS_LABEL,
-            self.bar.config.width,
-            self.bar.config.height,
-        );
+        self.bar.resize(&self.device, width, height, IDS_LABEL);
     }
 
     /// Attach the popup's `wl_surface` as the second target.
@@ -1055,19 +778,17 @@ impl Gpu {
         // SAFETY: the caller's contract, above.
         let wgpu_surface = unsafe { create_surface(&self.instance, display, surface)? };
         let caps = wgpu_surface.get_capabilities(&self.adapter);
-        if !caps.formats.contains(&self.format) {
+        if !caps.formats.contains(&self.presentation.format) {
             bail!(
                 "the popup surface does not offer the bar's format {:?} (offers {:?})",
-                self.format,
+                self.presentation.format,
                 caps.formats
             );
         }
         self.popup = Some(configure_surface(
             &self.device,
             Some(wgpu_surface),
-            self.format,
-            self.alpha_mode,
-            self.present_mode,
+            &self.presentation,
             width,
             height,
             Target::Popup,
@@ -1082,22 +803,7 @@ impl Gpu {
         let Some(popup) = self.popup.as_mut() else {
             return false;
         };
-        if (popup.config.width, popup.config.height) == (width.max(1), height.max(1)) {
-            return false;
-        }
-        popup.config.width = width.max(1);
-        popup.config.height = height.max(1);
-        if let Some(surface) = &popup.surface {
-            surface.configure(&self.device, &popup.config);
-        }
-        popup.refit = false;
-        popup.ids = create_id_texture(
-            &self.device,
-            IDS_LABEL,
-            popup.config.width,
-            popup.config.height,
-        );
-        true
+        popup.resize(&self.device, width, height, IDS_LABEL)
     }
 
     /// Drop the popup's swapchain. Must happen before the `xdg_popup` and its
@@ -1293,15 +999,15 @@ impl Gpu {
         if curve_index(buffer).is_some() {
             self.text_group = create_text_group(
                 &self.device,
-                &self.text_layout,
-                &self.bindings,
+                self.program.layout(SET_TEXT),
+                self.program.bindings(),
                 &self.curves,
             );
         } else {
             self.shape_group = create_shape_group(
                 &self.device,
-                &self.shape_layout,
-                &self.bindings,
+                self.program.layout(SET_SHAPE),
+                self.program.bindings(),
                 &self.shape,
                 &self.strings,
             );
@@ -1457,35 +1163,19 @@ impl Gpu {
     /// produce is a dispatch whose descriptors and whose `[[vk::binding]]`
     /// literals disagree — a device-lost on one driver, silently wrong buffers
     /// on another.
-    #[allow(clippy::too_many_arguments)]
-    pub fn reload_all(
-        &mut self,
-        reflection: &Reflection,
-        build: &[u8],
-        compose: &[u8],
-        shape: &[u8],
-        apply: &[u8],
-        visibility: &[u8],
-        sample: &[u8],
-        draw: &[u8],
-    ) -> Result<()> {
-        if let Some(witness) = first_difference(&self.bindings, &reflection.bindings) {
-            bail!("reload refused: bindings changed ({witness}); restart the bar");
+    ///
+    /// `spirv` is one module per entry point, in `abi::ENTRIES` order. The
+    /// swap and its refusal are `caustics_host::program::Program::reload`'s;
+    /// what is the bar's is the wording of a refusal and the cold pass it
+    /// owes the watchdog.
+    pub fn reload_all(&mut self, reflection: &Reflection, spirv: &[&[u8]]) -> Result<()> {
+        match self.program.reload(&self.device, reflection, spirv) {
+            Ok(()) => {}
+            Err(Refused::Bindings(witness)) => {
+                bail!("reload refused: bindings changed ({witness}); restart the bar")
+            }
+            Err(Refused::Pipelines(err)) => return Err(err),
         }
-        let pipelines = build_pipelines(
-            &self.device,
-            &self.pipeline_layout,
-            &BakedSpv {
-                build,
-                compose,
-                shape,
-                apply,
-                visibility,
-                sample,
-                draw,
-            },
-        )?;
-        self.pipelines = pipelines;
         self.shape_cold = true;
         Ok(())
     }
@@ -1593,15 +1283,15 @@ impl Gpu {
             // apply runs once and lays out every target, so a popup frame
             // never needs a second one. It is bound with the bar's group;
             // it reads `params` only through `inputs`.
-            pass.set_pipeline(&self.pipelines.apply);
+            pass.set_pipeline(self.program.pipeline(APPLY));
             pass.dispatch_workgroups(1, 1, 1);
 
             let bar_dims = (self.bar.config.width, self.bar.config.height);
-            dispatch_target(&mut pass, &self.pipelines, &bar_group, bar_dims);
+            dispatch_target(&mut pass, &self.program, &bar_group, bar_dims);
             if let Some(group) = &popup_group {
                 let popup = self.popup.as_ref().expect("a group implies a surface");
                 let dims = (popup.config.width, popup.config.height);
-                dispatch_target(&mut pass, &self.pipelines, group, dims);
+                dispatch_target(&mut pass, &self.program, group, dims);
             }
         }
         // **The only readback in the bar** (docs/abi.md, *Who writes what*): the
@@ -1720,7 +1410,7 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.set_bind_group(1, &self.text_group, &[]);
             pass.set_bind_group(2, &self.shape_group, &[]);
-            pass.set_pipeline(&self.pipelines.build);
+            pass.set_pipeline(self.program.pipeline(BUILD));
             pass.dispatch_workgroups(1, 1, 1);
         }
         {
@@ -1731,7 +1421,7 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.set_bind_group(1, &self.text_group, &[]);
             pass.set_bind_group(2, &self.shape_group, &[]);
-            pass.set_pipeline(&self.pipelines.compose);
+            pass.set_pipeline(self.program.pipeline(COMPOSE));
             pass.dispatch_workgroups(1, 1, 1);
         }
         {
@@ -1761,7 +1451,7 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.set_bind_group(1, &self.text_group, &[]);
             pass.set_bind_group(2, &self.shape_group, &[]);
-            pass.set_pipeline(&self.pipelines.shape);
+            pass.set_pipeline(self.program.pipeline(SHAPE));
             pass.dispatch_workgroups(SHAPE_BLOCKS.div_ceil(SHAPE_GROUP), 1, 1);
         }
         if let Some(watchdog) = &self.watchdog {
@@ -1927,17 +1617,7 @@ impl Gpu {
     /// unchanged caustic: the swap without a compile.
     #[cfg(test)]
     pub fn reload_baked(&mut self) -> Result<()> {
-        let spv = baked_spv(self.format);
-        self.reload_all(
-            baked_reflection(),
-            spv.build,
-            spv.compose,
-            spv.shape,
-            spv.apply,
-            spv.visibility,
-            spv.sample,
-            spv.draw,
-        )
+        self.reload_all(baked_reflection(), baked_spv(self.presentation.format))
     }
 
     /// Bind group 0 for the shape pass: the bar's own resources, with a
@@ -1958,7 +1638,7 @@ impl Gpu {
         label: &str,
     ) -> wgpu::BindGroup {
         let entries: Vec<wgpu::BindGroupEntry> =
-            group_entries(&self.bindings, SET_BAR, |name| match name {
+            group_entries(self.program.bindings(), SET_BAR, |name| match name {
                 "state" => self.state.as_entire_binding(),
                 "runs" => self.runs.as_entire_binding(),
                 "commands" => self.commands.as_entire_binding(),
@@ -1979,7 +1659,7 @@ impl Gpu {
             });
         self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some(label),
-            layout: &self.bind_group_layout,
+            layout: self.program.layout(SET_BAR),
             entries: &entries,
         })
     }
@@ -2057,7 +1737,7 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.set_bind_group(1, &self.text_group, &[]);
             pass.set_bind_group(2, &self.shape_group, &[]);
-            pass.set_pipeline(&self.pipelines.apply);
+            pass.set_pipeline(self.program.pipeline(APPLY));
             pass.dispatch_workgroups(1, 1, 1);
         }
         encoder.copy_buffer_to_buffer(
@@ -2094,7 +1774,7 @@ impl Gpu {
         self.queue.submit(Some(encoder.finish()));
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         let mut words = vec![0u32; (size / 4) as usize];
-        refresh_mirror_slice(&self.device, &back, &mut words);
+        surface::read_words(&self.device, &back, &mut words);
         words.iter().flat_map(|word| word.to_le_bytes()).collect()
     }
 
@@ -2119,7 +1799,7 @@ impl Gpu {
         self.queue.submit(Some(encoder.finish()));
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         let mut words = vec![0u32; abi::MAX_STRING_WORDS];
-        refresh_mirror_slice(&self.device, &back, &mut words);
+        surface::read_words(&self.device, &back, &mut words);
         words.iter().flat_map(|word| word.to_le_bytes()).collect()
     }
 
@@ -2192,7 +1872,7 @@ impl Gpu {
         self.refresh_mirror();
         self.frame = self.frame.wrapping_add(1).max(1);
         let mut strings_back = vec![0u32; abi::MAX_STRING_WORDS];
-        refresh_mirror_slice(&self.device, &bytes, &mut strings_back);
+        surface::read_words(&self.device, &bytes, &mut strings_back);
         (
             self.mirror.clone(),
             strings_back
@@ -2225,7 +1905,7 @@ impl Gpu {
         self.queue.submit(Some(encoder.finish()));
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         let mut words = vec![0u32; abi::MAX_GLYPHS * 8];
-        refresh_mirror_slice(&self.device, &back, &mut words);
+        surface::read_words(&self.device, &back, &mut words);
         words
             .chunks_exact(8)
             .map(|w| punchcutter_shape::abi::ShapedGlyph {
@@ -2268,7 +1948,7 @@ impl Gpu {
         self.queue.submit(Some(encoder.finish()));
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
         let mut words = vec![0u32; (len / 4) as usize];
-        refresh_mirror_slice(&self.device, &back, &mut words);
+        surface::read_words(&self.device, &back, &mut words);
         words.iter().flat_map(|word| word.to_le_bytes()).collect()
     }
 
@@ -2277,19 +1957,19 @@ impl Gpu {
     /// baked SPIR-V never carries it.
     #[cfg(test)]
     pub fn set_check(&mut self, spirv: &[u8]) -> Result<()> {
-        let scope = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let pipeline = passthrough_pipeline(
+        let check = [Entry {
+            name: "bar_check",
+            label: "caustics-bar-check",
+            workgroup: (1, 1, 1),
+        }];
+        let mut pipelines = caustics_host::program::build_pipelines(
             &self.device,
-            &self.pipeline_layout,
-            "caustics-bar-check",
-            "bar_check",
-            spirv,
-            (1, 1, 1),
-        );
-        if let Some(err) = pollster::block_on(scope.pop()) {
-            bail!("bar_check does not load: {err}");
-        }
-        self.check = Some(pipeline);
+            self.program.pipeline_layout(),
+            &check,
+            &[spirv],
+        )
+        .map_err(|err| anyhow!("bar_check does not load: {err}"))?;
+        self.check = pipelines.pop();
         Ok(())
     }
     /// Pull the mirror out of the readback buffer, the device having already
@@ -2300,111 +1980,46 @@ impl Gpu {
     }
 }
 
-/// The same readback as `refresh_mirror`, over a slice of words: what the
-/// oracle pulls the strings buffer back with, since some of its bytes are the
-/// build pass's own.
-#[cfg(test)]
-fn refresh_mirror_slice(device: &wgpu::Device, buffer: &wgpu::Buffer, out: &mut [u32]) {
-    let (tx, rx) = std::sync::mpsc::sync_channel(1);
-    buffer
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |result| {
-            let _ = tx.send(result);
-        });
-    let _ = device.poll(wgpu::PollType::wait_indefinitely());
-    if !matches!(rx.try_recv(), Ok(Ok(()))) {
-        return;
-    }
-    {
-        if let Ok(view) = buffer.slice(..).get_mapped_range() {
-            for (word, chunk) in out.iter_mut().zip(view.chunks_exact(4)) {
-                *word = u32::from_le_bytes(chunk.try_into().expect("four bytes"));
-            }
-        }
-    }
-    buffer.unmap();
-}
-
 /// visibility → sample → draw for one target, in that order: `bar_sample`
 /// reads the ids this frame just wrote, so `hover_id` in the mirror is current
 /// as of the pointer position the CPU supplied for this frame.
 fn dispatch_target(
     pass: &mut wgpu::ComputePass<'_>,
-    pipelines: &Pipelines,
+    program: &Program,
     group: &wgpu::BindGroup,
     (width, height): (u32, u32),
 ) {
     let groups_x = width.div_ceil(TILE).max(1);
     let groups_y = height.div_ceil(TILE).max(1);
     pass.set_bind_group(0, group, &[]);
-    pass.set_pipeline(&pipelines.visibility);
+    pass.set_pipeline(program.pipeline(VISIBILITY));
     pass.dispatch_workgroups(groups_x, groups_y, 1);
-    pass.set_pipeline(&pipelines.sample);
+    pass.set_pipeline(program.pipeline(SAMPLE));
     pass.dispatch_workgroups(1, 1, 1);
-    pass.set_pipeline(&pipelines.draw);
+    pass.set_pipeline(program.pipeline(DRAW));
     pass.dispatch_workgroups(groups_x, groups_y, 1);
 }
 
-/// # Safety
-///
-/// `display` and `surface` must be a live `wl_display` and `wl_surface` that
-/// outlive the returned surface.
-unsafe fn create_surface(
-    instance: &wgpu::Instance,
-    display: NonNull<std::ffi::c_void>,
-    surface: NonNull<std::ffi::c_void>,
-) -> Result<wgpu::Surface<'static>> {
-    let raw_display_handle = Some(RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
-        display,
-    )));
-    let raw_window_handle = RawWindowHandle::Wayland(WaylandWindowHandle::new(surface));
-    // SAFETY: the caller's contract, above.
-    unsafe {
-        instance
-            .create_surface_unsafe(wgpu::SurfaceTargetUnsafe::RawHandle {
-                raw_display_handle,
-                raw_window_handle,
-            })
-            .context("failed to create a Vulkan surface on the wl_surface")
-    }
-}
-
+/// One target's swapchain (`caustics_host::surface::Surface`), with its ids
+/// texture under this bar's label and a `Params` uniform labelled by target.
 fn configure_surface(
     device: &wgpu::Device,
     surface: Option<wgpu::Surface<'static>>,
-    format: wgpu::TextureFormat,
-    alpha_mode: wgpu::CompositeAlphaMode,
-    present_mode: wgpu::PresentMode,
+    presentation: &Presentation,
     width: u32,
     height: u32,
     target: Target,
 ) -> Surface {
-    let config = wgpu::SurfaceConfiguration {
-        usage: wgpu::TextureUsages::STORAGE_BINDING,
-        format,
-        width: width.max(1),
-        height: height.max(1),
-        present_mode,
-        desired_maximum_frame_latency: 2,
-        alpha_mode,
-        color_space: wgpu::SurfaceColorSpace::Auto,
-        view_formats: vec![],
-    };
-    if let Some(surface) = &surface {
-        surface.configure(device, &config);
-    }
-    Surface {
+    Surface::configure(
+        device,
         surface,
-        refit: false,
-        ids: create_id_texture(device, IDS_LABEL, config.width, config.height),
-        params: device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some(target.label()),
-            size: size_of::<Params>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        }),
-        config,
-    }
+        presentation,
+        width,
+        height,
+        IDS_LABEL,
+        target.label(),
+        size_of::<Params>() as u64,
+    )
 }
 
 /// The image slots: [`abi::MAX_IMAGE_SLOTS`] layers of
@@ -2473,27 +2088,6 @@ fn create_shape_group(
     })
 }
 
-/// One descriptor set's bind-group entries, **by name**, from the same
-/// reflection the layout was built from (docs/abi.md, *Bindings and the oracle*).
-///
-/// The number is the caustic's; this reads it rather than transcribing it, so
-/// a binding that moves moves in one file. The `[[vk::binding]]` literals stay — an attribute argument cannot be
-/// a module constant — and the reflection they produce is what is read here.
-fn group_entries<'a>(
-    bindings: &[Binding],
-    set: u32,
-    mut resource: impl FnMut(&str) -> wgpu::BindingResource<'a>,
-) -> Vec<wgpu::BindGroupEntry<'a>> {
-    bindings
-        .iter()
-        .filter(|binding| binding.set == set)
-        .map(|binding| wgpu::BindGroupEntry {
-            binding: binding.index,
-            resource: resource(&binding.name),
-        })
-        .collect()
-}
-
 /// What a reflected name this side has no resource for reads as. A panic like
 /// `storage_texture_format`'s: the caustic wants a descriptor the embassy
 /// cannot name, and there is no frame worth drawing after that.
@@ -2550,11 +2144,7 @@ pub(crate) const BAKED_REFLECTION: &str =
 /// disagree — which is a build to fix, not a session to limp through.
 fn baked_reflection() -> &'static Reflection {
     static BAKED: std::sync::OnceLock<Reflection> = std::sync::OnceLock::new();
-    BAKED.get_or_init(|| {
-        Reflection::from_json(BAKED_REFLECTION).unwrap_or_else(|err| {
-            panic!("the reflection baked beside the bar's SPIR-V cannot be read: {err}")
-        })
-    })
+    BAKED.get_or_init(|| caustics_host::program::read_baked(BAKED_REFLECTION))
 }
 
 /// The bar's own bind group: the state buffer, the rings, the target's images, the facts, the arenas and the samples frame.
@@ -2566,7 +2156,9 @@ const SET_TEXT: u32 = 1;
 const SET_SHAPE: u32 = 2;
 
 /// Every descriptor set the bar builds a layout for, in the order the pipeline
-/// layout takes them.
+/// layout takes them: the three labels `bring_up` hands `Program::new`, which
+/// asserts the reflection declares exactly these.
+#[cfg(test)]
 const SETS: [u32; 3] = [SET_BAR, SET_TEXT, SET_SHAPE];
 
 /// The stride Slang reports for `Private`, which is how many bytes the
@@ -2622,89 +2214,6 @@ fn baked_bindings() -> Vec<Binding> {
     baked_reflection().bindings.clone()
 }
 
-/// One descriptor set's layout entries, in binding order, from the reflection.
-///
-/// **wgpu-hal numbers a Vulkan binding by an entry's position in this list**,
-/// so a gap renumbers every binding after it and the `[[vk::binding(n, g)]]`
-/// literals in the caustics — which cannot be expressions — would then name
-/// different buffers than the descriptors do, with no error anywhere. A gap is
-/// a panic at startup, which makes the hazard unshippable rather than tested
-/// for.
-fn layout_entries(
-    all: &[Binding],
-    set: u32,
-    format: wgpu::TextureFormat,
-) -> Vec<wgpu::BindGroupLayoutEntry> {
-    let group: Vec<&Binding> = all.iter().filter(|binding| binding.set == set).collect();
-    let mut entries = Vec::with_capacity(group.len());
-    for (position, binding) in group.iter().enumerate() {
-        if binding.index != position as u32 {
-            // `position` is the binding number that should have been here, so
-            // it names the hole; the neighbours say where to look for it.
-            let before = position
-                .checked_sub(1)
-                .and_then(|earlier| group.get(earlier))
-                .map_or("the start of the set", |earlier| earlier.name.as_str());
-            panic!(
-                "set {set} has no binding {position}: `{}` comes after `{}` but binds at {}. \
-                 wgpu-hal numbers a Vulkan binding by its entry's position in the layout, so a \
-                 gap silently renumbers every binding after it — the caustic and the \
-                 descriptors would name different buffers with nothing to report it.",
-                binding.name, before, binding.index
-            );
-        }
-        entries.push(layout_entry(binding, format));
-    }
-    entries
-}
-
-/// One reflected binding as a wgpu layout entry. Everything is `COMPUTE`: the
-/// bar has no other stage.
-fn layout_entry(binding: &Binding, format: wgpu::TextureFormat) -> wgpu::BindGroupLayoutEntry {
-    let ty = match binding.kind {
-        BindingKind::Uniform => wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Uniform,
-            has_dynamic_offset: false,
-            // The struct's size is pinned far more strictly than a floor here
-            // would: `bar/src/abi/tests.rs` compares Slang's own field offsets
-            // against `offset_of!` on the Rust half, every build.
-            min_binding_size: None,
-        },
-        BindingKind::Storage { read_only, stride } => wgpu::BindingType::Buffer {
-            ty: wgpu::BufferBindingType::Storage { read_only },
-            has_dynamic_offset: false,
-            // One element, which is what the caustic indexes by. The buffers
-            // are all bound whole.
-            min_binding_size: stride.and_then(|stride| NonZeroU64::new(u64::from(stride))),
-        },
-        BindingKind::StorageTexture { write_only } => wgpu::BindingType::StorageTexture {
-            access: if write_only {
-                wgpu::StorageTextureAccess::WriteOnly
-            } else {
-                wgpu::StorageTextureAccess::ReadWrite
-            },
-            format: storage_texture_format(&binding.name, format),
-            view_dimension: wgpu::TextureViewDimension::D2,
-        },
-        BindingKind::Texture { array } => wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-            view_dimension: if array {
-                wgpu::TextureViewDimension::D2Array
-            } else {
-                wgpu::TextureViewDimension::D2
-            },
-            multisampled: false,
-        },
-        BindingKind::Sampler => wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-    };
-    wgpu::BindGroupLayoutEntry {
-        binding: binding.index,
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty,
-        count: None,
-    }
-}
-
 /// The one fact about a binding the reflection cannot carry: a storage image's
 /// texel format.
 ///
@@ -2723,101 +2232,6 @@ fn storage_texture_format(name: &str, dst: wgpu::TextureFormat) -> wgpu::Texture
              knows `ids` (the visibility buffer) and `dst` (the swapchain image) and has to be \
              told about any third."
         ),
-    }
-}
-
-/// One descriptor set's layout.
-fn create_layout(
-    device: &wgpu::Device,
-    label: &str,
-    bindings: &[Binding],
-    set: u32,
-    format: wgpu::TextureFormat,
-) -> wgpu::BindGroupLayout {
-    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some(label),
-        entries: &layout_entries(bindings, set, format),
-    })
-}
-
-/// What the reflection says the bar asks a driver for: bindings, descriptor
-/// sets, and how many of the bindings are storage buffers — the two a driver
-/// has a limit on, and the third for the log line.
-///
-/// Counted rather than written down, because the number moves whenever a
-/// caustic adds a buffer.
-fn binding_counts(bindings: &[Binding]) -> (usize, usize, usize) {
-    let sets: std::collections::BTreeSet<u32> = bindings.iter().map(|b| b.set).collect();
-    let storage = bindings
-        .iter()
-        .filter(|binding| matches!(binding.kind, BindingKind::Storage { .. }))
-        .count();
-    (bindings.len(), sets.len(), storage)
-}
-
-/// The first place two binding lists disagree, named — or `None` when they are
-/// the same list.
-///
-/// Both are sorted by `(set, index)`, so this is a merge: a binding present in
-/// one and not the other is named with where it sits, and one present in both
-/// is compared whole (a `StructuredBuffer` that became `RWStructuredBuffer`, a
-/// texture that grew an array dimension, a renamed parameter). The witness
-/// goes into a log line a person has to act on, so it names one thing rather than
-/// summarising the diff.
-fn first_difference(old: &[Binding], new: &[Binding]) -> Option<String> {
-    let where_at = |binding: &Binding| format!("set {} binding {}", binding.set, binding.index);
-    let mut olds = old.iter().peekable();
-    let mut news = new.iter().peekable();
-    loop {
-        match (olds.peek(), news.peek()) {
-            (None, None) => return None,
-            (Some(was), None) => {
-                return Some(format!("`{}` at {} is gone", was.name, where_at(was)));
-            }
-            (None, Some(now)) => {
-                return Some(format!("`{}` at {} is new", now.name, where_at(now)));
-            }
-            (Some(was), Some(now)) => match (was.set, was.index).cmp(&(now.set, now.index)) {
-                std::cmp::Ordering::Less => {
-                    return Some(format!("`{}` at {} is gone", was.name, where_at(was)));
-                }
-                std::cmp::Ordering::Greater => {
-                    return Some(format!("`{}` at {} is new", now.name, where_at(now)));
-                }
-                std::cmp::Ordering::Equal => {
-                    if was != now {
-                        return Some(format!(
-                            "{} was `{}` {:?} and is now `{}` {:?}",
-                            where_at(was),
-                            was.name,
-                            was.kind,
-                            now.name,
-                            now.kind
-                        ));
-                    }
-                    olds.next();
-                    news.next();
-                }
-            },
-        }
-    }
-}
-
-/// The sets the reflection declares are exactly the three the pipeline layout
-/// binds, or the bar stops here.
-///
-/// A fourth set (or a missing one) means a caustic grew a descriptor space
-/// nothing on the CPU fills, which the pipeline layout would accept and the
-/// first dispatch would read as garbage.
-fn assert_sets(bindings: &[Binding]) {
-    let found: std::collections::BTreeSet<u32> = bindings.iter().map(|b| b.set).collect();
-    let expected: std::collections::BTreeSet<u32> = SETS.into_iter().collect();
-    if found != expected {
-        panic!(
-            "the bar's caustic declares descriptor sets {found:?}, but `bar/src/gpu.rs` builds \
-             layouts for {expected:?}; a set with no layout is a dispatch reading descriptors \
-             nobody wrote."
-        );
     }
 }
 
@@ -2866,90 +2280,12 @@ fn growable_buffer(device: &wgpu::Device, label: &str, size: u64) -> wgpu::Buffe
 /// The baked modules matching a swapchain format. Panics on a format
 /// [`Gpu::new`] cannot select, which is unreachable: the same match governs
 /// the surface-format choice.
-fn baked_spv(format: wgpu::TextureFormat) -> &'static BakedSpv<'static> {
+fn baked_spv(format: wgpu::TextureFormat) -> &'static BakedSpv {
     match format {
         wgpu::TextureFormat::Rgba8Unorm => &SPV_RGBA8UNORM,
         wgpu::TextureFormat::Bgra8Unorm => &SPV_BGRA8UNORM,
         other => unreachable!("surface format {other:?} is not one this bar can select"),
     }
-}
-
-/// All seven pipelines inside one validation error scope: either every one of
-/// them is good, or the caller keeps what it had.
-fn build_pipelines(
-    device: &wgpu::Device,
-    layout: &wgpu::PipelineLayout,
-    spv: &BakedSpv<'_>,
-) -> Result<Pipelines> {
-    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
-    let build = passthrough_pipeline(
-        device,
-        layout,
-        "caustics-bar-build",
-        BUILD_ENTRY,
-        spv.build,
-        (1, 1, 1),
-    );
-    let compose = passthrough_pipeline(
-        device,
-        layout,
-        "caustics-bar-compose",
-        COMPOSE_ENTRY,
-        spv.compose,
-        (1, 1, 1),
-    );
-    let shape = passthrough_pipeline(
-        device,
-        layout,
-        "caustics-bar-shape",
-        SHAPE_ENTRY,
-        spv.shape,
-        (SHAPE_GROUP, 1, 1),
-    );
-    let apply = passthrough_pipeline(
-        device,
-        layout,
-        "caustics-bar-apply",
-        APPLY_ENTRY,
-        spv.apply,
-        (1, 1, 1),
-    );
-    let visibility = passthrough_pipeline(
-        device,
-        layout,
-        "caustics-bar-visibility",
-        VISIBILITY_ENTRY,
-        spv.visibility,
-        (TILE, TILE, 1),
-    );
-    let sample = passthrough_pipeline(
-        device,
-        layout,
-        "caustics-bar-sample",
-        SAMPLE_ENTRY,
-        spv.sample,
-        (1, 1, 1),
-    );
-    let draw = passthrough_pipeline(
-        device,
-        layout,
-        "caustics-bar-draw",
-        DRAW_ENTRY,
-        spv.draw,
-        (TILE, TILE, 1),
-    );
-    if let Some(err) = pollster::block_on(scope.pop()) {
-        bail!("bar pipeline creation rejected: {err}");
-    }
-    Ok(Pipelines {
-        build,
-        compose,
-        shape,
-        apply,
-        visibility,
-        sample,
-        draw,
-    })
 }
 
 #[cfg(test)]

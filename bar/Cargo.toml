@@ -34,8 +34,6 @@ caustics-host = { path = "../host" }
 # No `punchcutter-text` or `punchcutter-fonts` here: the bar holds no curves,
 # parses no font and caches nothing about one. They are dev-dependencies below.
 punchcutter-shape.workspace = true
-pollster = "0.4"
-raw-window-handle = "0.6.2"
 # niri's IPC is line-delimited JSON. The feeder writes requests with `json!`
 # and walks replies as `Value` rather than depending on the `niri-ipc` crate,
 # which would pin the bar to niri's release cadence for a dozen wire shapes.
@@ -47,7 +45,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # `system` exposes `Backend::display_ptr` and `ObjectId::as_ptr`, which is the
 # only way to hand a `wl_surface` to wgpu as a raw window handle (the sctk
-# wgpu example's dance). wgpu-hal turns on wayland-sys's `dlopen`, so
+# wgpu example's dance; the handle itself is built in `caustics-host`). wgpu-hal turns on wayland-sys's `dlopen`, so
 # libwayland-client is loaded by name when the bar starts and nothing links
 # against it: building needs no development symlink.
 wayland-client = { version = "0.31.15", features = ["system"] }

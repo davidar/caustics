@@ -1,4 +1,5 @@
 use super::*;
+use caustics_host::program::{assert_sets, binding_counts, first_difference, layout_entries};
 
 /// The bar's three driver-visible totals, read out of the reflection baked
 /// beside the SPIR-V and pinned here — so a binding added to a caustic has to
@@ -22,7 +23,7 @@ fn the_binding_count_is_what_the_report_says() {
     );
     // The sets are the three the pipeline layout binds, in the order it binds
     // them. `Gpu::new` asserts this too, at startup, on the real reflection.
-    assert_sets(&bindings);
+    assert_sets(&bindings, &SETS);
 }
 
 /// The reflection and the layout agree about the shapes the bar depends on:
@@ -169,7 +170,9 @@ fn a_gap_in_a_set_names_itself_and_its_neighbours() {
         .into_iter()
         .filter(|binding| !(binding.set == SET_BAR && binding.index == 1))
         .collect();
-    layout_entries(&holed, SET_BAR, wgpu::TextureFormat::Rgba8Unorm);
+    layout_entries(&holed, SET_BAR, &|name| {
+        storage_texture_format(name, wgpu::TextureFormat::Rgba8Unorm)
+    });
 }
 
 /// A reload whose caustic moved a binding is refused with the witness, not

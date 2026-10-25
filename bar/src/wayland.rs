@@ -822,26 +822,7 @@ impl Bar {
             return;
         };
         let started = Instant::now();
-        let spirv = ready.spirv();
-        // `Modules` was made with `abi::ENTRIES`, so a ready generation is
-        // one module per entry point and this pattern always matches.
-        let &[build, compose, shape, apply, visibility, sample, draw] = spirv.as_slice() else {
-            tracing::error!(
-                "sidecar {sidecar}: generation {generation} has {} modules; keeping the old bar",
-                spirv.len()
-            );
-            return;
-        };
-        match gpu.reload_all(
-            &reflection,
-            build,
-            compose,
-            shape,
-            apply,
-            visibility,
-            sample,
-            draw,
-        ) {
+        match gpu.reload_all(&reflection, &ready.spirv()) {
             Ok(()) => {
                 // The modules are live, so the table that came with them is
                 // the one the mirror's hashes belong to.

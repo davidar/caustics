@@ -54,8 +54,9 @@ use wayland::{Bar, Edge, Exit};
 
 /// Exit codes. 0 is a clean stop, 1 is a protocol error or a fatal dispatch
 /// failure (the unit restarts), 2 is a refusal to run at all — the dGPU guard
-/// in `gpu.rs`, bad arguments, or an edge another caustics-bar already holds — and
-/// 3 is the device gone.
+/// in `caustics_host::device`, bad arguments, or an edge another caustics-bar
+/// already holds — and 3 is the device gone, which the device's own callbacks
+/// in `caustics_host::device` exit with.
 ///
 /// The unit's `RestartPreventExitStatus=2 3` makes both of the last two final.
 /// A lost device is not a transient fault: whatever produced it is in the
@@ -64,7 +65,10 @@ use wayland::{Bar, Edge, Exit};
 const EXIT_OK: i32 = 0;
 const EXIT_PROTOCOL: i32 = 1;
 const EXIT_REFUSE: i32 = 2;
-pub const EXIT_DEVICE: i32 = 3;
+// Not referenced here: the callbacks that exit with it are the crate's, and
+// this line keeps all four codes in one list.
+#[allow(dead_code)]
+const EXIT_DEVICE: i32 = caustics_host::device::EXIT_DEVICE;
 
 /// How long the bar waits for its first configure before giving up. Generous:
 /// a compositor that has not answered in ten seconds is not going to.

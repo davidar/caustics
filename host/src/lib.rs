@@ -28,10 +28,13 @@
 //! bar (`bar/`) is this crate's first client, and the code here is the code
 //! the bar ran before it was a client, moved rather than rewritten.
 
+pub mod device;
 pub mod images;
 pub mod modules;
 pub mod pacing;
 pub mod pipe;
 pub mod proc;
+pub mod program;
 pub mod strings;
+pub mod surface;
 pub mod witness;

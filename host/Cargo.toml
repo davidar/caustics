@@ -15,6 +15,13 @@ caustics-bar-abi = { path = "../bar/abi" }
 # never compiles. Without the default `compiler` feature nothing here links
 # Slang.
 punchcutter-slang = { workspace = true, default-features = false }
+# The engine's wgpu helpers (`gpu`): the device with the shader clock, the
+# passthrough pipeline, and the `Plain` byte views the mirror is read into.
+punchcutter-core = { workspace = true, features = ["gpu"] }
+pollster = "0.4"
+raw-window-handle = "0.6.2"
+wgpu = "30.0.0"
+anyhow = "1.0.104"
 # `sysconf` for the `/proc` reader's tick and page sizes.
 libc = "0.2.189"
 tracing = "0.1.44"
