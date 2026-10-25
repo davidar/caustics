@@ -32,8 +32,9 @@ the process unregisters and exits when stdin closes.
   over.
 - **A dismissal** (`ANSWER_CANCELLED`) ends the conversation as a failure,
   and polkitd's call gets `org.freedesktop.PolicyKit1.Error.Cancelled`. Any
-  other failure is `….Error.Failed`. One helper run per request: a wrong
-  password fails the request.
+  other failure is `….Error.Failed`. A wrong password is an error line and
+  a fresh ask in the same conversation, up to three attempts (the helper
+  runs again with the same cookie); only then does the request fail.
 - **Nothing typed is written anywhere but the helper's stdin**, and no
   witness carries an answer, a cookie or a helper line. Failed conversations
   are counted in the witness, never described.

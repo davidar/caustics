@@ -184,17 +184,52 @@ async fn the_right_answer_reaches_the_helper_and_authorizes() {
     agent.close().await;
 }
 
+/// A wrong answer is the helper's error line and a fresh ask under the same
+/// conversation (the helper runs again with the same cookie); the right one
+/// then authorizes, and the helper's record shows both.
 #[tokio::test]
-async fn a_wrong_answer_is_a_failure_with_the_helper_s_error() {
-    let scene = Scene::new("failure", "ask");
+async fn a_wrong_answer_is_an_error_line_and_a_fresh_ask() {
+    let scene = Scene::new("retry", "ask");
     let mut agent = Agent::start(&scene);
     let done = agent.begin("cookie-1");
     let id = agent.asked("cookie-1").await;
     agent.type_in(id, "wrong horse");
     assert_eq!(agent.expect(PROMPT_ERROR, 0, "wrong").await, id);
+    assert_eq!(agent.expect(PROMPT_SECRET, 0, "Password: ").await, id);
+    agent.type_in(id, SECRET);
+    assert_eq!(agent.expect(PROMPT_INFO, 0, "ok").await, id);
+    assert_eq!(agent.expect(PROMPT_DONE, 1, "").await, id);
+    assert_eq!(outcome(done).await, Outcome::Authorized);
+    assert_eq!(scene.record(), format!("wrong horse\n{SECRET}\n"));
+    assert_eq!(
+        scene.cookies(),
+        "cookie-1\ncookie-1\n",
+        "the same cookie, twice"
+    );
+    agent.close().await;
+}
+
+/// `MAX_ATTEMPTS` wrong answers fail the request, with the helper's error
+/// line each time and a done only after the last.
+#[tokio::test]
+async fn enough_wrong_answers_fail_the_request() {
+    let scene = Scene::new("failure", "ask");
+    let mut agent = Agent::start(&scene);
+    let done = agent.begin("cookie-1");
+    let id = agent.asked("cookie-1").await;
+    for attempt in 1..=caustics_polkit::conversation::MAX_ATTEMPTS {
+        agent.type_in(id, "wrong horse");
+        assert_eq!(agent.expect(PROMPT_ERROR, 0, "wrong").await, id);
+        if attempt < caustics_polkit::conversation::MAX_ATTEMPTS {
+            assert_eq!(agent.expect(PROMPT_SECRET, 0, "Password: ").await, id);
+        }
+    }
     assert_eq!(agent.expect(PROMPT_DONE, 0, "").await, id);
     assert_eq!(outcome(done).await, Outcome::Failed);
-    assert_eq!(scene.record(), "wrong horse\n");
+    assert_eq!(
+        scene.record(),
+        "wrong horse\n".repeat(caustics_polkit::conversation::MAX_ATTEMPTS as usize)
+    );
     agent.close().await;
 }
 

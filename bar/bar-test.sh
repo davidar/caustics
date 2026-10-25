@@ -4769,9 +4769,10 @@ say "35c. a polkit prompt rises on the canvas, over the darkened wallpaper, and 
 # set, the sink in the dry run 35b uses (the agent on the run's session bus,
 # no system bus, `polkit/tests/fake-helper.sh` as the helper). The canvas
 # host is the one answering now: these steps play polkitd with `busctl` and
-# the user with the keyboard. Each helper run takes one answer, so a wrong
-# secret fails its call and the right one is a second call. Both secrets are
-# this run's own, and no log may hold either.
+# the user with the keyboard. A wrong secret is an error line and a fresh ask
+# in the same call (the sink runs its helper again, up to three times), and
+# the right one then authorizes it. Both secrets are this run's own, and no
+# log may hold either.
 PROMPT_RUN=0
 if [[ "$CANVAS_RUN" -ne 1 ]]; then
     printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas is not in the guest's set yet"
@@ -4876,7 +4877,7 @@ print(' '.join(str(round(p + (q - p) * $darken)) for p, q in zip((0, 0, 255), d)
     fi
 fi
 
-say "35d. a wrong secret typed into the canvas fails its call, and the panel goes"
+say "35d. a wrong secret typed into the canvas is an error line and a fresh ask, in the same call"
 if [[ "$PROMPT_RUN" -eq 1 ]]; then
     if prompt_focused "$focus_before"; then
         pass "$(canvas_last 'seat: the keyboard is on the prompt' | sed -n 's/.*INFO [a-z_:]*: //p')"
@@ -4890,44 +4891,44 @@ if [[ "$PROMPT_RUN" -eq 1 ]]; then
     else
         fail "no error line after conversation 1's answer: $(canvas_log | grep -F 'prompt' | tail -4 | tr '\n' '|' | cut -c1-400)"
     fi
-    if wait_until "the failed call" 30 '[[ -s "$SHOTS/prompt-call-1" ]]' && [[ "$(prompt_reply 1)" != *"exit=0"* ]]; then
-        pass "the wrong secret failed BeginAuthentication: $(prompt_reply 1 | head -1 | cut -c1-100)"
+    if wait_until "the fresh ask" 20 'canvas_log | jgrep -E "canvas[a-z_:]*: prompt: conversation 1 asking \(echo 0, attempts 1\)"'; then
+        pass "the sink ran its helper again: conversation 1 asks again, attempts 1"
     else
-        fail "the wrong secret's call: $(prompt_reply 1 | tr '\n' '|' | cut -c1-200)"
+        fail "no fresh ask after the wrong secret: $(canvas_log | grep -F 'prompt' | tail -4 | tr '\n' '|' | cut -c1-400)"
     fi
-    assert_contains "and the conversation ended as a failure" "$(canvas_log)" "prompt: conversation 1 done, failure"
+    if [[ ! -s "$SHOTS/prompt-call-1" ]] && ! prompt_panes_gone; then
+        pass "the call is still open and the panel still up"
+    else
+        fail "the wrong secret ended the call ($(prompt_reply 1 | head -1 | cut -c1-80)) or took the panel down"
+    fi
+fi
+
+say "35e. the right secret typed into the canvas authorizes the same call, and reaches the helper alone"
+if [[ "$PROMPT_RUN" -eq 1 ]]; then
+    keys "$prompt_secret"
+    key Return
+    if wait_until "the authorized call" 30 '[[ -s "$SHOTS/prompt-call-1" ]]' && [[ "$(prompt_reply 1)" == *"exit=0"* ]]; then
+        pass "BeginAuthentication returned: the canvas's second answer authorized it"
+    else
+        fail "the right secret's call: $(prompt_reply 1 | tr '\n' '|' | cut -c1-200)"
+    fi
+    assert_contains "PROMPT_DONE said success" "$(canvas_log)" "prompt: conversation 1 done, success"
     if wait_until "the panel gone" 10 prompt_panes_gone; then
         pass "no prompt pane remains ($(canvas_count 'a prompt surface') made, as many gone)"
     else
         fail "$(canvas_count 'a prompt surface') prompt panes made, $(canvas_count 'its prompt surface is gone') gone"
     fi
-fi
-
-say "35e. the right secret typed into the canvas authorizes, and reaches the helper alone"
-if [[ "$PROMPT_RUN" -eq 1 ]]; then
-    panes_before=$(canvas_count "prompt surface configured")
-    focus_before=$(canvas_count "seat: the keyboard is on the prompt")
-    prompt_call 2 "The nested gate asks again"
-    if wait_until "the second prompt" 30 "canvas_log | jgrep -F 'prompt: conversation 2 asking'" &&
-        wait_until "its pane" 15 "canvas_more 'prompt surface configured' $panes_before" &&
-        prompt_focused "$focus_before"; then
-        keys "$prompt_secret"
-        key Return
-    else
-        fail "no prompt for conversation 2"
-    fi
-    if wait_until "the authorized call" 30 '[[ -s "$SHOTS/prompt-call-2" ]]' && [[ "$(prompt_reply 2)" == *"exit=0"* ]]; then
-        pass "BeginAuthentication returned: the canvas's answer authorized it"
-    else
-        fail "the right secret's call: $(prompt_reply 2 | tr '\n' '|' | cut -c1-200)"
-    fi
-    assert_contains "PROMPT_DONE said success" "$(canvas_log)" "prompt: conversation 2 done, success"
-    wait_until "the panel gone" 10 prompt_panes_gone || fail "a prompt pane outlived conversation 2"
     record=$(on_target 10 'cat "$T_HOME/prompt-record" 2>/dev/null')
     if [[ "$record" == "$prompt_wrong"$'\n'"$prompt_secret" ]]; then
         pass "the fake helper read exactly the wrong secret, then the right one, and nothing else"
     else
         fail "the fake helper's record is ${#record} bytes, not the wrong then the right secret"
+    fi
+    cookies=$(on_target 10 'cat "$T_HOME/prompt-cookies" 2>/dev/null | tr "\n" " "')
+    if [[ "$cookies" == "prompt-cookie-1 prompt-cookie-1 " ]]; then
+        pass "two helper runs, one cookie: the retry stayed inside the request"
+    else
+        fail "the helper's cookies are '$cookies', not the one request's twice"
     fi
 fi
 
@@ -4935,22 +4936,22 @@ say "35f. Escape dismisses the canvas's prompt, and the call fails as dismissed"
 if [[ "$PROMPT_RUN" -eq 1 ]]; then
     panes_before=$(canvas_count "prompt surface configured")
     focus_before=$(canvas_count "seat: the keyboard is on the prompt")
-    prompt_call 3 "The nested gate asks a third time"
-    if wait_until "the third prompt" 30 "canvas_log | jgrep -F 'prompt: conversation 3 asking'" &&
+    prompt_call 2 "The nested gate asks again"
+    if wait_until "the second prompt" 30 "canvas_log | jgrep -F 'prompt: conversation 2 asking'" &&
         wait_until "its pane" 15 "canvas_more 'prompt surface configured' $panes_before" &&
         prompt_focused "$focus_before"; then
         keys "x"
         key Escape
     else
-        fail "no prompt for conversation 3"
+        fail "no prompt for conversation 2"
     fi
-    if wait_until "the dismissed call" 30 '[[ -s "$SHOTS/prompt-call-3" ]]' &&
-        [[ "$(prompt_reply 3)" != *"exit=0"* && "$(prompt_reply 3)" == *"dismissed"* ]]; then
-        pass "a dismissed prompt fails the call: $(prompt_reply 3 | head -1 | cut -c1-100)"
+    if wait_until "the dismissed call" 30 '[[ -s "$SHOTS/prompt-call-2" ]]' &&
+        [[ "$(prompt_reply 2)" != *"exit=0"* && "$(prompt_reply 2)" == *"dismissed"* ]]; then
+        pass "a dismissed prompt fails the call: $(prompt_reply 2 | head -1 | cut -c1-100)"
     else
-        fail "the dismissed call: $(prompt_reply 3 | tr '\n' '|' | cut -c1-200)"
+        fail "the dismissed call: $(prompt_reply 2 | tr '\n' '|' | cut -c1-200)"
     fi
-    assert_contains "the host dismissed it" "$(canvas_log)" "prompt: conversation 3 dismissed; told to caustics-polkit"
+    assert_contains "the host dismissed it" "$(canvas_log)" "prompt: conversation 2 dismissed; told to caustics-polkit"
     if wait_until "the panel gone" 10 prompt_panes_gone; then
         pass "no prompt pane remains after the dismissal"
     else

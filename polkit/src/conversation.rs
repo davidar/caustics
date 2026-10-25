@@ -82,7 +82,21 @@ struct Active {
     asking: bool,
     /// The helper wrote `SUCCESS`.
     success: bool,
+    /// An answer has gone to this helper run: its `FAILURE` is a wrong
+    /// answer, not a helper that could not ask.
+    answered: bool,
+    /// Helper runs that ended in `FAILURE` after an answer, so far: a wrong
+    /// answer runs the helper again under the same conversation, up to
+    /// [`MAX_ATTEMPTS`].
+    attempts: u32,
 }
+
+/// How many answers one request may take before it fails: a mistyped
+/// password is an error line and a fresh ask in the same conversation, as
+/// the desktop agents allow it, and the request fails only after this many.
+/// polkitd's cookie stays good for the request, so each attempt is one more
+/// run of the helper with the same cookie.
+pub const MAX_ATTEMPTS: u32 = 3;
 
 /// What the conductor knows.
 pub struct Conductor {
@@ -250,6 +264,8 @@ impl Conductor {
             helper,
             asking: false,
             success: false,
+            answered: false,
+            attempts: 0,
         });
         if started {
             true
@@ -341,6 +357,7 @@ impl Conductor {
                 };
                 drop(bytes);
                 active.asking = false;
+                active.answered = true;
                 let written = match active.helper.as_mut() {
                     Some(helper) => helper.answer(line).await,
                     None => Err(std::io::ErrorKind::BrokenPipe.into()),
@@ -376,13 +393,56 @@ impl Conductor {
                         status.map_or_else(|| "unseen".to_owned(), |s| s.to_string())
                     ));
                 }
-                return self
-                    .finish(if ok {
-                        Outcome::Authorized
-                    } else {
-                        Outcome::Failed
-                    })
-                    .await;
+                if ok {
+                    return self.finish(Outcome::Authorized).await;
+                }
+                // A wrong answer: the helper said FAILURE after an ask was
+                // answered. The request is still polkitd's and the cookie
+                // still good, so the helper runs again under the same
+                // conversation; the error line it wrote is already on its way
+                // to the host, and the next ask follows it.
+                let again =
+                    (active.answered && !active.success && active.attempts + 1 < MAX_ATTEMPTS)
+                        .then(|| {
+                            active.attempts += 1;
+                            active.answered = false;
+                            active.asking = false;
+                            (
+                                active.attempts,
+                                active.begin.user.clone(),
+                                active.begin.cookie.clone(),
+                            )
+                        });
+                let Some((attempts, user, cookie)) = again else {
+                    return self.finish(Outcome::Failed).await;
+                };
+                witness(&format!(
+                    "conversation {id}: attempt {attempts} failed; the helper runs again"
+                ));
+                let events = self.events.clone();
+                let spawned = Helper::spawn(
+                    &self.helper_path,
+                    &self.helper_env,
+                    &user,
+                    &cookie,
+                    move |out| events.send(Event::Helper { id, out }).is_ok(),
+                )
+                .await;
+                return match spawned {
+                    Ok(helper) => {
+                        if let Some(active) = self.active.as_mut() {
+                            active.helper = Some(helper);
+                        }
+                        true
+                    }
+                    Err(err) => {
+                        witness(&format!(
+                            "conversation {id}: the helper {} would not start again: {err}",
+                            self.helper_path.display()
+                        ));
+                        self.finish(Outcome::Failed).await
+                    }
+                };
             }
         };
         match line {

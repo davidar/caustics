@@ -27,8 +27,9 @@
 //! - An `ANSWER_CANCELLED` (the user dismissed the prompt) kills the helper
 //!   and ends the conversation as a failure; the method returns
 //!   `org.freedesktop.PolicyKit1.Error.Cancelled`. Any other failure returns
-//!   `….Error.Failed`. One helper run per request: a wrong password is a
-//!   failure the caller sees, and a retry is the caller's.
+//!   `….Error.Failed`. A wrong password is an error line and a fresh ask in
+//!   the same conversation (the helper runs again with the same cookie), up
+//!   to `conversation::MAX_ATTEMPTS`; only then does the request fail.
 //! - **Nothing typed is ever written anywhere but the helper's stdin.** No
 //!   witness carries an answer, a cookie, or a line from the helper; failed
 //!   conversations are counted, never described. The host's stdin is read

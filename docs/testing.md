@@ -254,10 +254,11 @@ dry run, so the canvas host is what answers. They play polkitd with
 `busctl` and the user with the harness's keyboard, and check: the prompt's
 pane up and the keyboard on it; a screenshot whose corner is the wallpaper
 darkened by `PROMPT_DARKEN` (read from the tunables) and whose panel is not;
-a wrong secret, an error line counted as an attempt and the call failed
-(each helper run takes one answer, so the right secret is a second call);
-the right secret, the call returned and the fake helper's record exactly
-the wrong secret then the right one; Escape, the call failed as dismissed;
+a wrong secret, an error line counted as an attempt and a fresh ask in the
+same call (the sink runs its helper again, with the same cookie, up to
+three attempts); the right secret, the call returned and the fake helper's
+record exactly the wrong secret then the right one under one cookie;
+Escape on a second call, which fails as dismissed;
 no prompt pane left after each; and neither secret in the canvas's log (the
 sink's lines included) or the bar's journal. The canvas is stopped at the
 end, as step 35 left it.
