@@ -1,0 +1,44 @@
+[package]
+name = "caustics-polkit"
+version = "0.1.0"
+edition.workspace = true
+description = "The canvas's polkit sidecar: the session's authentication agent, its requests turned into prompt conversations over the wire, and polkit-agent-helper-1 driven with the answers"
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "caustics-polkit"
+path = "src/main.rs"
+
+[dependencies]
+# The wire: `Hello` and `Prompt` out, `Answer` in (docs/abi.md, *Prompt*,
+# *Answer*).
+caustics-bar-abi = { path = "../bar/abi" }
+# The witness line, and the drain the one signal stream this agent
+# subscribes to (polkitd's name changing hands) goes to the moment it exists
+# (docs/architecture.md, *Rules*).
+caustics-sidecar = { path = "../sidecar", features = ["drain"] }
+# `getuid` and `getpwuid_r`: whose identity to authenticate as, and that
+# user's name for the helper's argument.
+libc = "0.2.189"
+# One current-thread runtime for the bus and the helper, as the other D-Bus
+# sidecars; `process` and `io-util` for the helper's pipes.
+tokio = { version = "1.53.1", default-features = false, features = [
+    "rt",
+    "net",
+    "sync",
+    "time",
+    "macros",
+    "process",
+    "io-util",
+] }
+# The line written to the helper's stdin with the typed bytes in it, zeroed
+# once it is written.
+zeroize = "1.9.1"
+# The agent object, polkitd's authority and logind. `tokio` instead of the
+# default `async-io`, so the process carries one executor rather than two.
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+# The private `dbus-daemon` the agent's bus test runs against.
+caustics-sidecar = { path = "../sidecar", features = ["drain", "test-bus"] }
