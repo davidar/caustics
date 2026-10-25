@@ -47,8 +47,9 @@ fn a_show_is_the_picture_then_its_command() {
 #[test]
 fn dim_and_undim_are_canvas_frames() {
     assert_eq!(
-        dim(400, 9, 3000),
+        dim(5, 400, 9, 3000),
         Frame::Canvas(Canvas::Dim {
+            id: 5,
             alpha_milli: 400,
             start_ms: 9,
             duration_ms: 3000

@@ -267,6 +267,8 @@ fn serve(inbox: &Receiver<Input>, last: &Path) -> i32 {
     let mut size: Option<(u32, u32)> = None;
     let mut shown: Option<Shown> = None;
     let mut serial = 0u32;
+    // The dims this process has sent: each one's id on the wire.
+    let mut dims = 0u32;
     // The picture the session last showed, to be shown again once the host
     // has said how big its outputs are (or after RESTORE_WAIT).
     let mut restore: Option<(PathBuf, Instant)> = std::fs::read_to_string(last)
@@ -332,7 +334,8 @@ fn serve(inbox: &Receiver<Input>, last: &Path) -> i32 {
                         alpha_milli,
                         over_ms,
                     } => {
-                        let frame = frames::dim(alpha_milli, boottime_ms(), over_ms);
+                        dims = dims.wrapping_add(1).max(1);
+                        let frame = frames::dim(dims, alpha_milli, boottime_ms(), over_ms);
                         match wire::write(&mut out, &frame) {
                             Ok(()) => {
                                 witness(&format!("dim to {alpha_milli}/1000 over {over_ms} ms"));

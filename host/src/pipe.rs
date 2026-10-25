@@ -396,7 +396,7 @@ impl Pipe {
         }
     }
 
-    /// Write one frame of any kind the bar sends — an `Action` or a `Request` (docs/abi.md, *Request*) — under exactly the rules `send`
+    /// Write one frame of any kind a host sends — an `Action`, a `Request` (docs/abi.md, *Request*) or a `CanvasEvent` (*Canvas event*) — under exactly the rules `send`
     /// states: one non-blocking write, never a wait, one witness per way of
     /// failing. `what` names the frame in those witnesses.
     pub fn send_frame(&self, frame_to_send: &Frame, what: &str) -> bool {
@@ -810,9 +810,9 @@ fn pump(
                     };
                 }
             }
-            Frame::Action(_) | Frame::Request(_) => {
-                // The bar writes actions and requests; a sidecar writing one
-                // back is a confused sidecar, and the frame is dropped like
+            Frame::Action(_) | Frame::Request(_) | Frame::CanvasEvent(_) => {
+                // A host writes actions, requests and canvas events; a
+                // sidecar writing one back is a confused sidecar, and the frame is dropped like
                 // any other kind it has no use for.
                 if witnessed.insert((frame.kind(), 1)) {
                     tracing::warn!("sidecar {name}: a bar-to-sidecar frame on stdout; ignoring");

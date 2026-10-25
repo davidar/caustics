@@ -109,6 +109,7 @@ fn a_dim_is_its_own_fact() {
     slots.hold(image("x"));
     slots.apply(&show("x", 7, 0)).expect("arrived");
     let dim = Canvas::Dim {
+        id: 3,
         alpha_milli: 400,
         start_ms: 10,
         duration_ms: 3000,
@@ -116,6 +117,7 @@ fn a_dim_is_its_own_fact() {
     assert_eq!(slots.apply(&dim), Ok(Applied::Facts));
     assert_eq!(slots.facts().dim.command, CANVAS_DIM);
     assert_eq!(slots.facts().dim.alpha_milli, 400);
+    assert_eq!(slots.facts().dim.id, 3, "the dim's id is copied with it");
     assert_eq!(slots.facts().show.start_ms(), 7);
     assert_eq!(slots.apply(&Canvas::Undim), Ok(Applied::Facts));
     assert_eq!(slots.facts().dim.command, CANVAS_UNDIM);

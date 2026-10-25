@@ -49,9 +49,10 @@ pub fn write_show(
     Ok((2, start))
 }
 
-/// A dim towards `alpha_milli` from `start_ms` over `over_ms`.
-pub fn dim(alpha_milli: u32, start_ms: u64, over_ms: u32) -> Frame {
+/// Dim `id` towards `alpha_milli` from `start_ms` over `over_ms`.
+pub fn dim(id: u32, alpha_milli: u32, start_ms: u64, over_ms: u32) -> Frame {
     Frame::Canvas(Canvas::Dim {
+        id,
         alpha_milli,
         start_ms,
         duration_ms: over_ms,

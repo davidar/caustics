@@ -1214,6 +1214,7 @@ fn the_canvas_commands_round_trip() {
             fade_duration_ms: 4000,
         },
         Canvas::Dim {
+            id: 7,
             alpha_milli: 600,
             start_ms: start,
             duration_ms: 30_000,
@@ -1234,6 +1235,88 @@ fn the_canvas_commands_round_trip() {
     assert_eq!((body.start_lo, body.start_hi), (1234, 1));
     assert_eq!(body.start_ms(), start);
     assert_eq!(body.key_len, 1);
+    // A dim's id is the word that was `_rsvd0`, at byte 24 of the head.
+    let dim = Canvas::Dim {
+        id: 0xdead_beef,
+        alpha_milli: 1000,
+        start_ms: 0,
+        duration_ms: 0,
+    };
+    let raw = bytes(&Frame::Canvas(dim.clone()));
+    let at = WireHeader::SIZE + std::mem::offset_of!(CanvasBody, id);
+    assert_eq!(at - WireHeader::SIZE, 24);
+    assert_eq!(&raw[at..at + 4], &0xdead_beef_u32.to_le_bytes());
+    assert_eq!(dim.body().id, 0xdead_beef);
+    assert_eq!(Canvas::Undim.body().id, 0, "only a dim carries an id");
+}
+
+/// *Canvas event*: both events round-trip with their dim's id, and the body
+/// is the documented 16 bytes behind its header.
+#[test]
+fn a_canvas_event_round_trips_with_its_dim_s_id() {
+    for event in [CANVAS_EVENT_INPUT, CANVAS_EVENT_DIMMED] {
+        let frame = Frame::CanvasEvent(CanvasEventBody {
+            event,
+            id: 41,
+            ..CanvasEventBody::default()
+        });
+        assert_eq!(round_trip(frame.clone()), frame);
+        assert_eq!(frame.kind(), WIRE_CANVAS_EVENT);
+        assert_eq!(bytes(&frame).len(), WireHeader::SIZE + 16);
+    }
+    assert_eq!(size_of::<CanvasEventBody>(), 16);
+    assert_eq!(WIRE_CANVAS_EVENT, 14);
+}
+
+/// *Canvas event*'s reader rules: a body that is not 16 bytes is a skip
+/// (length), an event 0 or past `CANVAS_EVENT_LAST` a skip (body); and the
+/// writer refuses what the reader would skip.
+#[test]
+fn a_malformed_canvas_event_is_skipped_rule_by_rule() {
+    let event = Frame::CanvasEvent(CanvasEventBody {
+        event: CANVAS_EVENT_DIMMED,
+        id: 3,
+        ..CanvasEventBody::default()
+    });
+    let skipped = |raw: Vec<u8>| match read_one(raw) {
+        Frame::Skipped(Skipped {
+            kind: WIRE_CANVAS_EVENT,
+            why,
+        }) => Some(why),
+        _ => None,
+    };
+    assert_eq!(
+        skipped(with_words(&event, &[(0, 0)], &[])),
+        Some(Skip::Body),
+        "event 0"
+    );
+    assert_eq!(
+        skipped(with_words(&event, &[(0, CANVAS_EVENT_LAST + 1)], &[])),
+        Some(Skip::Body),
+        "an event past the last"
+    );
+    assert_eq!(
+        skipped(with_words(&event, &[], &[0; 4])),
+        Some(Skip::Length),
+        "a long body"
+    );
+    let mut short = bytes(&event);
+    short.truncate(WireHeader::SIZE + 12);
+    short[8..12].copy_from_slice(&12u32.to_le_bytes());
+    assert_eq!(skipped(short), Some(Skip::Length), "a short body");
+    for bad in [0, CANVAS_EVENT_LAST + 1] {
+        assert!(
+            write(
+                &mut Vec::new(),
+                &Frame::CanvasEvent(CanvasEventBody {
+                    event: bad,
+                    ..CanvasEventBody::default()
+                })
+            )
+            .is_err(),
+            "event {bad} was written"
+        );
+    }
 }
 
 /// *Canvas*'s reader rules: an unknown command, a show with no key, a key on
@@ -1246,6 +1329,7 @@ fn a_malformed_canvas_command_is_skipped_rule_by_rule() {
         fade_duration_ms: 0,
     });
     let dim = Frame::Canvas(Canvas::Dim {
+        id: 1,
         alpha_milli: 500,
         start_ms: 0,
         duration_ms: 0,
@@ -1291,6 +1375,7 @@ fn a_malformed_canvas_command_is_skipped_rule_by_rule() {
         write(
             &mut Vec::new(),
             &Frame::Canvas(Canvas::Dim {
+                id: 1,
                 alpha_milli: DIM_MAX_MILLI + 1,
                 start_ms: 0,
                 duration_ms: 0,

@@ -123,6 +123,9 @@ pub const WIRE_HELLO: u32 = 11;
 pub const WIRE_IMAGE: u32 = 12;
 /// A command for the canvas: show an image, dim, undim (docs/abi.md, *Canvas*).
 pub const WIRE_CANVAS: u32 = 13;
+/// **The canvas host → the sidecar that sent the dim**: what became of it
+/// (docs/abi.md, *Canvas event*).
+pub const WIRE_CANVAS_EVENT: u32 = 14;
 
 /// Which buffer a `Bytes` frame writes. The four curve buffers are
 /// the text engine's `text.slang`'s (`punchcutter-text`'s layout);
@@ -325,7 +328,9 @@ abi_consts! {
     /// already sent as an `Image`, from `start` over `duration_ms` (0 is a cut).
     pub const CANVAS_SHOW: u32 = 1;
     /// Dim towards `alpha_milli` thousandths of the dim colour, from `start`
-    /// over `duration_ms`.
+    /// over `duration_ms`, on an overlay that takes the pointer and the
+    /// keyboard until an undim or any input; `id` is the sidecar's name for
+    /// this dim, echoed in its `CanvasEvent`s.
     pub const CANVAS_DIM: u32 = 2;
     /// No dim, now.
     pub const CANVAS_UNDIM: u32 = 3;
@@ -334,6 +339,17 @@ abi_consts! {
     /// The most a dim may be: all dim colour.
     pub const DIM_MAX_MILLI: u32 = 1000;
 }
+
+/// `CanvasEventBody::event` (docs/abi.md, *Canvas event*): the dim `id` names
+/// was cancelled by input (a key, a button, a touch, the pointer moving over
+/// the overlay). The host has taken the overlay down already; the sidecar
+/// answers with a `CANVAS_UNDIM`, so the two agree the dim is over.
+pub const CANVAS_EVENT_INPUT: u32 = 1;
+/// The dim `id` names reached its depth. Said once a dim; the dim stays there
+/// until an undim or input.
+pub const CANVAS_EVENT_DIMMED: u32 = 2;
+/// The highest `CANVAS_EVENT_*`; an event naming more is skipped.
+pub const CANVAS_EVENT_LAST: u32 = 2;
 
 abi_consts! {
     REQUESTS = "`RequestBody::kind` (docs/abi.md, *Request*): what the bar asks a sidecar to resolve";
@@ -1132,7 +1148,10 @@ abi_struct! {
         /// `CANVAS_DIM`: how far, 0..=DIM_MAX_MILLI thousandths of the dim
         /// colour. 0 for the others.
         pub alpha_milli: u32,
-        pub _rsvd0: u32,
+        /// `CANVAS_DIM`: the sidecar's counter for this dim, echoed in every
+        /// `CanvasEvent` about it, so an event for a dim that a newer one has
+        /// replaced is told apart. 0 for the others. Once a reserved word.
+        pub id: u32,
         pub _rsvd1: u32,
     }
 }
@@ -1157,6 +1176,8 @@ pub enum Canvas {
     },
     /// Dim towards `alpha_milli` thousandths of the dim colour.
     Dim {
+        /// The sidecar's counter for this dim ([`CanvasBody::id`]).
+        id: u32,
         alpha_milli: u32,
         /// `CLOCK_BOOTTIME` ms.
         start_ms: u64,
@@ -1188,6 +1209,7 @@ impl Canvas {
                 }
             }
             Canvas::Dim {
+                id,
                 alpha_milli,
                 start_ms,
                 duration_ms,
@@ -1199,6 +1221,7 @@ impl Canvas {
                     start_hi,
                     duration_ms: *duration_ms,
                     alpha_milli: *alpha_milli,
+                    id: *id,
                     ..CanvasBody::default()
                 }
             }
@@ -1217,6 +1240,21 @@ impl Canvas {
         }
     }
 }
+
+/// *Canvas event* — the whole of a `WIRE_CANVAS_EVENT` body, which the canvas
+/// host writes to the stdin of the sidecar whose dim it is about, as the bar
+/// writes an [`ActionBody`]. Fixed size, 16 B.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CanvasEventBody {
+    /// `CANVAS_EVENT_*`.
+    pub event: u32,
+    /// The dim's [`CanvasBody::id`], as the sidecar sent it.
+    pub id: u32,
+    pub _rsvd0: u32,
+    pub _rsvd1: u32,
+}
+unsafe impl Plain for CanvasEventBody {}
 
 /// *Module* — the fixed head of a `WIRE_MODULE` body, and behind it the whole
 /// of one entry point: `name_len` bytes of name, then `spirv_len` bytes of
@@ -1382,6 +1420,9 @@ pub enum Frame {
     Image(Image),
     /// *Canvas*: a command for the canvas.
     Canvas(Canvas),
+    /// *Canvas event*: the canvas host telling a sidecar what became of its
+    /// dim.
+    CanvasEvent(CanvasEventBody),
     /// Read whole, understood not at all — and that is fine (docs/abi.md, *Framing*, rules 5–7).
     Skipped(Skipped),
 }
@@ -1403,6 +1444,7 @@ impl Frame {
             Frame::Hello(_) => WIRE_HELLO,
             Frame::Image(_) => WIRE_IMAGE,
             Frame::Canvas(_) => WIRE_CANVAS,
+            Frame::CanvasEvent(_) => WIRE_CANVAS_EVENT,
             Frame::Skipped(skipped) => skipped.kind,
         }
     }
@@ -1530,6 +1572,10 @@ pub fn read<R: Read>(input: &mut R) -> io::Result<Option<Frame>> {
         },
         WIRE_CANVAS => match decode_canvas(&body) {
             Ok(canvas) => Ok(Some(Frame::Canvas(canvas))),
+            Err(why) => skip(why),
+        },
+        WIRE_CANVAS_EVENT => match decode_canvas_event(&body) {
+            Ok(event) => Ok(Some(Frame::CanvasEvent(event))),
             Err(why) => skip(why),
         },
         _ => skip(Skip::Kind),
@@ -1782,6 +1828,7 @@ fn decode_canvas(body: &[u8]) -> Result<Canvas, Skip> {
             fade_duration_ms: head.duration_ms,
         }),
         CANVAS_DIM if key.is_empty() && head.alpha_milli <= DIM_MAX_MILLI => Ok(Canvas::Dim {
+            id: head.id,
             alpha_milli: head.alpha_milli,
             start_ms: start,
             duration_ms: head.duration_ms,
@@ -1789,6 +1836,22 @@ fn decode_canvas(body: &[u8]) -> Result<Canvas, Skip> {
         CANVAS_UNDIM if key.is_empty() => Ok(Canvas::Undim),
         _ => Err(Skip::Body),
     }
+}
+
+/// *Canvas event*'s rules: exactly its 16 bytes, and an event this crate
+/// numbers.
+fn decode_canvas_event(body: &[u8]) -> Result<CanvasEventBody, Skip> {
+    if body.len() != size_of::<CanvasEventBody>() {
+        return Err(Skip::Length);
+    }
+    let mut event = CanvasEventBody::default();
+    if !write_from_bytes(&mut event, body) {
+        return Err(Skip::Length);
+    }
+    if event.event == 0 || event.event > CANVAS_EVENT_LAST {
+        return Err(Skip::Body);
+    }
+    Ok(event)
 }
 
 /// *Hello*: two words of hash and a name that is UTF-8 and not longer than a
@@ -2163,6 +2226,15 @@ pub fn write<W: Write>(out: &mut W, frame: &Frame) -> io::Result<()> {
             buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_CANVAS, len as u32)));
             buf.extend_from_slice(as_bytes(&head));
             buf.extend_from_slice(key);
+        }
+        Frame::CanvasEvent(event) => {
+            if event.event == 0 || event.event > CANVAS_EVENT_LAST {
+                return Err(invalid("a canvas event names no CANVAS_EVENT_*"));
+            }
+            let len = size_of::<CanvasEventBody>();
+            buf.reserve(WireHeader::SIZE + len);
+            buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_CANVAS_EVENT, len as u32)));
+            buf.extend_from_slice(as_bytes(event));
         }
         Frame::Skipped(skipped) => {
             return Err(invalid(&format!(
