@@ -57,11 +57,12 @@ script; the nested gate runs the two together (docs/testing.md).
 ## In the canvas's set
 
 `caustics-polkit` is installed with the rest of the set by `bar/install.sh`.
-The canvas host starts its sidecars from `$CAUSTICS_SIDECARS` on its unit
-(canvas/README.md), and this one belongs there once the host can show a
-prompt. **It is not started by the canvas yet**: until the host reads
-`Prompt` frames, a registered agent would take the session's requests and
-nobody could answer them, so the desktop's own agent stays.
+The canvas host answers its prompts (docs/canvas.md, *The prompt core*), but
+**does not start it by default**: a session's polkit prompts are how it
+installs software and changes settings, so the agent is taken on by choice,
+through `$CAUSTICS_SIDECARS` in a drop-in on the canvas's unit, with the
+desktop's own agent stopped first and a unit edit away (canvas/README.md,
+*Enabling the polkit agent*).
 
 ## Exit codes
 
