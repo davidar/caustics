@@ -774,9 +774,10 @@ a named buffer untouched. `Pixmap` (*Pixmap*) is pixels for a texture, `Font`
 what the process writes. The canvas host reads two kinds the bar never sees:
 `Image` (*Image*), pixels for one of its two textures, and `Canvas`
 (*Canvas*), whose head it copies into its caustic's `facts`. It writes one
-kind, `CanvasEvent` (*Canvas event*), to the sidecar whose dim it is; and it
-has one pair for the prompt, `Prompt` (*Prompt*) from a sink sidecar and
-`Answer` (*Answer*) back to it.
+kind, `CanvasEvent` (*Canvas event*), to the sidecar whose dim or lock it
+is; it has one pair for the prompt, `Prompt` (*Prompt*) from a sink sidecar
+and `Answer` (*Answer*) back to it; and it reads `Lock` (*Lock*) from the
+lock sidecar.
 
 ### Framing
 
@@ -797,7 +798,8 @@ struct WireHeader {     // 12 B
 `WIRE_PIXMAP` 9 (*Pixmap*), `WIRE_MODULE` 10 (*Module*), `WIRE_HELLO` 11 (*Hello*),
 `WIRE_IMAGE` 12 (*Image*), `WIRE_CANVAS` 13 (*Canvas*), `WIRE_CANVAS_EVENT`
 14 (*Canvas event*, the canvas host → a sidecar), `WIRE_PROMPT` 15
-(*Prompt*), `WIRE_ANSWER` 16 (*Answer*, the canvas host → a sink sidecar).
+(*Prompt*), `WIRE_ANSWER` 16 (*Answer*, the canvas host → a sink sidecar),
+`WIRE_LOCK` 17 (*Lock*).
 
 **Every payload is one frame.** A whole compiled entry point is one `Module`,
 a whole picture one `Image`, a whole run of a GPU buffer one `Bytes`, and
@@ -1550,14 +1552,14 @@ key bytes the head does not count → skip (length).
 
 ### Canvas event: `WIRE_CANVAS_EVENT`
 
-**The canvas host → the sidecar whose dim it is**, on that sidecar's stdin,
-as the bar writes an `Action` (*Action*): what became of the dim. Fixed
-size, 16 B.
+**The canvas host → the sidecar whose dim or lock it is**, on that sidecar's
+stdin, as the bar writes an `Action` (*Action*): what became of the dim, or
+of the lock. Fixed size, 16 B.
 
 ```
 struct CanvasEventBody { // 16 B
     uint event;          // 0   CANVAS_EVENT_*
-    uint id;             // 4   the dim's CanvasBody.id, as the sidecar sent it
+    uint id;             // 4   the dim's CanvasBody.id, as the sidecar sent it; 0 for the lock's two
     uint _rsvd0, _rsvd1; // 8
 }
 ```
@@ -1566,6 +1568,11 @@ struct CanvasEventBody { // 16 B
 |---|---|---|
 | 1 | `CANVAS_EVENT_INPUT` | input cancelled the dim: the pointer moved over an overlay, a button, a scroll or a touch on one, or a key. The host has taken the overlays down already; the sidecar answers with a `CANVAS_UNDIM`, so the two ends agree the dim is over |
 | 2 | `CANVAS_EVENT_DIMMED` | the dim reached its depth, said once a dim; it stays there until an undim or input |
+| 3 | `CANVAS_EVENT_LOCKED` | to the lock sidecar, after its `LOCK_LOCK`: the compositor confirmed the lock and every output has its lock surface (*Lock*) |
+| 4 | `CANVAS_EVENT_UNLOCKED` | to the lock sidecar, after its `LOCK_UNLOCK`: the session is unlocked and the lock surfaces are gone |
+
+`CANVAS_EVENT_LAST` is 4. The host does not say the lock's two yet: the
+lock surfaces are not built; the sidecar is (`lock/README.md`).
 
 The host learns the dim reached its depth from the caustic's readback
 (`CanvasState::dim_reached` for the head's `id`, *The canvas's buffer*), not
@@ -1656,6 +1663,33 @@ allocator that looks into every block it frees.
 Reader rules: `status` 0 or past `ANSWER_LAST`, `len` past
 `MAX_ANSWER_LEN`, or bytes on a cancel → skip (body); bytes the head does
 not count → skip (length). A skipped answer's body is zeroed too.
+
+### Lock: `WIRE_LOCK`
+
+**The lock sidecar → the canvas host**: lock the session, or unlock it
+(docs/canvas.md, *How each job is wired*). Fixed size, 16 B.
+
+```
+struct LockBody {        // 16 B
+    uint command;        // 0   LOCK_*
+    uint _rsvd0, _rsvd1, _rsvd2; // 4
+}
+```
+
+| `LOCK_*` | | means |
+|---|---|---|
+| 1 | `LOCK_LOCK` | lock the session: the host takes `ext_session_lock_v1`, puts a lock surface on every output, and says `CANVAS_EVENT_LOCKED` (*Canvas event*) when the compositor confirms |
+| 2 | `LOCK_UNLOCK` | the conversation succeeded: the host unlocks and says `CANVAS_EVENT_UNLOCKED` |
+
+`LOCK_LAST` is 2. **Nothing else unlocks**: not a signal, not a reload, not
+a compositor event, and not the host on its own; a `LOCK_UNLOCK` is written
+only after a conversation (*Prompt*) that PAM said succeeded. A `LOCK_LOCK`
+while locked is no change. The prompt drawn on the lock surfaces is the
+same conversation as a sink's (*Prompt*, *Answer*), from the same sidecar.
+
+Reader rules: a body other than 16 bytes → skip (length); `command` 0 or
+past `LOCK_LAST` → skip (body). The writer refuses what the reader would
+skip.
 
 ### The ABI hash
 

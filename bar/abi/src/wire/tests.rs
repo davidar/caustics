@@ -1254,7 +1254,12 @@ fn the_canvas_commands_round_trip() {
 /// is the documented 16 bytes behind its header.
 #[test]
 fn a_canvas_event_round_trips_with_its_dim_s_id() {
-    for event in [CANVAS_EVENT_INPUT, CANVAS_EVENT_DIMMED] {
+    for event in [
+        CANVAS_EVENT_INPUT,
+        CANVAS_EVENT_DIMMED,
+        CANVAS_EVENT_LOCKED,
+        CANVAS_EVENT_UNLOCKED,
+    ] {
         let frame = Frame::CanvasEvent(CanvasEventBody {
             event,
             id: 41,
@@ -1556,4 +1561,78 @@ fn an_answer_s_debug_shows_none_of_its_bytes() {
     assert!(!shown.contains("correct"), "{shown}");
     assert!(!shown.contains("13"), "{shown}");
     assert!(shown.contains("Secret(..)"), "{shown}");
+}
+
+// -- Lock (docs/abi.md, *Lock*) ----------------------------------------------
+
+fn lock(command: u32) -> Frame {
+    Frame::Lock(LockBody {
+        command,
+        ..LockBody::default()
+    })
+}
+
+/// *Lock*: both commands round-trip, the body is the documented 16 bytes
+/// behind its header, and the lock's two events are numbered after the dim's.
+#[test]
+fn a_lock_round_trips_with_its_command() {
+    for command in [LOCK_LOCK, LOCK_UNLOCK] {
+        let frame = lock(command);
+        assert_eq!(round_trip(frame.clone()), frame);
+        assert_eq!(frame.kind(), WIRE_LOCK);
+        assert_eq!(bytes(&frame).len(), WireHeader::SIZE + 16);
+    }
+    assert_eq!(size_of::<LockBody>(), 16);
+    assert_eq!(
+        (WIRE_LOCK, LOCK_LOCK, LOCK_UNLOCK, LOCK_LAST),
+        (17, 1, 2, 2)
+    );
+    assert_eq!(
+        (
+            CANVAS_EVENT_LOCKED,
+            CANVAS_EVENT_UNLOCKED,
+            CANVAS_EVENT_LAST
+        ),
+        (3, 4, 4)
+    );
+}
+
+/// *Lock*'s reader rules: a body that is not 16 bytes is a skip (length), a
+/// command 0 or past `LOCK_LAST` a skip (body); and the writer refuses what
+/// the reader would skip.
+#[test]
+fn a_malformed_lock_is_skipped_rule_by_rule() {
+    let frame = lock(LOCK_LOCK);
+    let skipped = |raw: Vec<u8>| match read_one(raw) {
+        Frame::Skipped(Skipped {
+            kind: WIRE_LOCK,
+            why,
+        }) => Some(why),
+        _ => None,
+    };
+    assert_eq!(
+        skipped(with_words(&frame, &[(0, 0)], &[])),
+        Some(Skip::Body),
+        "command 0"
+    );
+    assert_eq!(
+        skipped(with_words(&frame, &[(0, LOCK_LAST + 1)], &[])),
+        Some(Skip::Body),
+        "a command past the last"
+    );
+    assert_eq!(
+        skipped(with_words(&frame, &[], &[0; 4])),
+        Some(Skip::Length),
+        "a long body"
+    );
+    let mut short = bytes(&frame);
+    short.truncate(WireHeader::SIZE + 12);
+    short[8..12].copy_from_slice(&12u32.to_le_bytes());
+    assert_eq!(skipped(short), Some(Skip::Length), "a short body");
+    for bad in [0, LOCK_LAST + 1] {
+        assert!(
+            write(&mut Vec::new(), &lock(bad)).is_err(),
+            "command {bad} was written"
+        );
+    }
 }

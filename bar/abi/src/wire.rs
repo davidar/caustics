@@ -123,8 +123,8 @@ pub const WIRE_HELLO: u32 = 11;
 pub const WIRE_IMAGE: u32 = 12;
 /// A command for the canvas: show an image, dim, undim (docs/abi.md, *Canvas*).
 pub const WIRE_CANVAS: u32 = 13;
-/// **The canvas host → the sidecar that sent the dim**: what became of it
-/// (docs/abi.md, *Canvas event*).
+/// **The canvas host → the sidecar that sent the dim or the lock**: what
+/// became of it (docs/abi.md, *Canvas event*).
 pub const WIRE_CANVAS_EVENT: u32 = 14;
 
 /// Which buffer a `Bytes` frame writes. The four curve buffers are
@@ -348,8 +348,14 @@ pub const CANVAS_EVENT_INPUT: u32 = 1;
 /// The dim `id` names reached its depth. Said once a dim; the dim stays there
 /// until an undim or input.
 pub const CANVAS_EVENT_DIMMED: u32 = 2;
+/// **To the sidecar that sent the `LOCK_LOCK`**: the compositor confirmed the
+/// lock, every output has its lock surface. `id` is 0.
+pub const CANVAS_EVENT_LOCKED: u32 = 3;
+/// To the sidecar that sent the `LOCK_UNLOCK`: the session is unlocked and
+/// the lock surfaces are gone. `id` is 0.
+pub const CANVAS_EVENT_UNLOCKED: u32 = 4;
 /// The highest `CANVAS_EVENT_*`; an event naming more is skipped.
-pub const CANVAS_EVENT_LAST: u32 = 2;
+pub const CANVAS_EVENT_LAST: u32 = 4;
 
 abi_consts! {
     REQUESTS = "`RequestBody::kind` (docs/abi.md, *Request*): what the bar asks a sidecar to resolve";
@@ -1242,14 +1248,15 @@ impl Canvas {
 }
 
 /// *Canvas event* — the whole of a `WIRE_CANVAS_EVENT` body, which the canvas
-/// host writes to the stdin of the sidecar whose dim it is about, as the bar
-/// writes an [`ActionBody`]. Fixed size, 16 B.
+/// host writes to the stdin of the sidecar whose dim or lock it is about, as
+/// the bar writes an [`ActionBody`]. Fixed size, 16 B.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CanvasEventBody {
     /// `CANVAS_EVENT_*`.
     pub event: u32,
-    /// The dim's [`CanvasBody::id`], as the sidecar sent it.
+    /// The dim's [`CanvasBody::id`], as the sidecar sent it; 0 for
+    /// [`CANVAS_EVENT_LOCKED`] and [`CANVAS_EVENT_UNLOCKED`].
     pub id: u32,
     pub _rsvd0: u32,
     pub _rsvd1: u32,
@@ -1453,6 +1460,52 @@ fn decode_answer(body: &[u8]) -> Result<Answer, Skip> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// *Lock*: the lock sidecar asking the canvas host to lock the session or
+// unlock it (docs/abi.md, *Lock*; docs/canvas.md, *How each job is wired*)
+// ---------------------------------------------------------------------------
+
+/// **The lock sidecar → the canvas host**: lock the session, or unlock it
+/// (docs/abi.md, *Lock*; docs/canvas.md, *How each job is wired*).
+pub const WIRE_LOCK: u32 = 17;
+
+/// `LockBody::command`: lock the session. The host takes
+/// `ext_session_lock_v1`, puts a lock surface on every output, and says
+/// [`CANVAS_EVENT_LOCKED`] when the compositor confirms.
+pub const LOCK_LOCK: u32 = 1;
+/// The conversation succeeded: the host unlocks and says
+/// [`CANVAS_EVENT_UNLOCKED`]. Nothing else unlocks a locked session.
+pub const LOCK_UNLOCK: u32 = 2;
+/// The highest `LOCK_*`; a `Lock` naming more is skipped.
+pub const LOCK_LAST: u32 = 2;
+
+/// *Lock* — the whole of a `WIRE_LOCK` body. Fixed size, 16 B.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LockBody {
+    /// `LOCK_*`.
+    pub command: u32,
+    pub _rsvd0: u32,
+    pub _rsvd1: u32,
+    pub _rsvd2: u32,
+}
+unsafe impl Plain for LockBody {}
+
+/// *Lock*'s rules: exactly its 16 bytes, and a command this crate numbers.
+fn decode_lock(body: &[u8]) -> Result<LockBody, Skip> {
+    if body.len() != size_of::<LockBody>() {
+        return Err(Skip::Length);
+    }
+    let mut lock = LockBody::default();
+    if !write_from_bytes(&mut lock, body) {
+        return Err(Skip::Length);
+    }
+    if lock.command == 0 || lock.command > LOCK_LAST {
+        return Err(Skip::Body);
+    }
+    Ok(lock)
+}
+
 /// *Module* — the fixed head of a `WIRE_MODULE` body, and behind it the whole
 /// of one entry point: `name_len` bytes of name, then `spirv_len` bytes of
 /// SPIR-V, then `reflection_len` bytes of the program's reflection as JSON
@@ -1625,6 +1678,8 @@ pub enum Frame {
     Prompt(Prompt),
     /// *Answer*: the canvas host's answer to a sink sidecar.
     Answer(Answer),
+    /// *Lock*: the lock sidecar asking the canvas host to lock or unlock.
+    Lock(LockBody),
     /// Read whole, understood not at all — and that is fine (docs/abi.md, *Framing*, rules 5–7).
     Skipped(Skipped),
 }
@@ -1649,6 +1704,7 @@ impl Frame {
             Frame::CanvasEvent(_) => WIRE_CANVAS_EVENT,
             Frame::Prompt(_) => WIRE_PROMPT,
             Frame::Answer(_) => WIRE_ANSWER,
+            Frame::Lock(_) => WIRE_LOCK,
             Frame::Skipped(skipped) => skipped.kind,
         }
     }
@@ -1798,6 +1854,10 @@ pub fn read<R: Read>(input: &mut R) -> io::Result<Option<Frame>> {
                 Err(why) => skip(why),
             }
         }
+        WIRE_LOCK => match decode_lock(&body) {
+            Ok(lock) => Ok(Some(Frame::Lock(lock))),
+            Err(why) => skip(why),
+        },
         _ => skip(Skip::Kind),
     }
 }
@@ -2502,6 +2562,15 @@ pub fn write<W: Write>(out: &mut W, frame: &Frame) -> io::Result<()> {
             buf.extend_from_slice(bytes);
             out.write_all(&buf)?;
             return out.flush();
+        }
+        Frame::Lock(lock) => {
+            if lock.command == 0 || lock.command > LOCK_LAST {
+                return Err(invalid("a Lock frame names no LOCK_*"));
+            }
+            let len = size_of::<LockBody>();
+            buf.reserve(WireHeader::SIZE + len);
+            buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_LOCK, len as u32)));
+            buf.extend_from_slice(as_bytes(lock));
         }
         Frame::Skipped(skipped) => {
             return Err(invalid(&format!(
