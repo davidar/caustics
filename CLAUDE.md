@@ -61,11 +61,13 @@ of the tree it was built from, `caustics/bar_tunables.slang` included.
 ## Dependency hygiene
 
 - **Never run bare `cargo update` or `cargo add`.** Anything that can change
-  `Cargo.lock` goes through `cargo cooldown update` / `cargo cooldown add
-  <crate>` (policy in `cooldown.toml`: registry versions younger than 7 days
-  are rejected; versions already in the lockfile are exempt). `cargo cooldown
-  add` cannot carry feature flags: add plain, hand-edit the features, then
-  `cargo cooldown check`.
+  `Cargo.lock` goes through `cargo cooldown` (policy in `cooldown.toml`:
+  registry versions younger than 7 days are rejected; versions already in the
+  lockfile are exempt). Its own subcommands are `check`, `build`, `test`,
+  `run` and `update`; any other cargo command is forwarded through it, so
+  `cargo cooldown add <crate>` works but is not in its `--help`. Add plain,
+  hand-edit feature flags, then `cargo cooldown check`, which is the step
+  that proves the lockfile against the policy.
 - `cargo cooldown` copies the workspace into `$TMPDIR`, and `/tmp` here is a
   quota'd tmpfs backed by RAM: run it as
   `TMPDIR=$HOME/.cache/cooldown-tmp cargo cooldown check`. Scratch builds of
