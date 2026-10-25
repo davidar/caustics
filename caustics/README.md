@@ -157,15 +157,18 @@ clock's words, the springs, the shape watchdog) is read by the caustic alone.
 ## The canvas
 
 The directory holds a second caustic: the canvas's (docs/canvas.md), which
-draws the wallpaper on every output, cross-fades between two pictures, and
-draws the idle dim on the overlay the host puts over every window while a dim
-is up. It is three files, all named `canvas*`, and imports nothing above:
+draws the wallpaper on every output, cross-fades between two pictures, draws
+the idle dim on the overlay the host puts over every window while a dim is
+up, and draws the prompt's panel on the pane the host puts up while a prompt
+is. It is four files, all named `canvas*`, and imports nothing above but the
+text engine's modules:
 
 | file | what it is |
 |---|---|
-| `canvas.slang` | the two entry points (`canvas_apply`, once per frame: the fade's alpha and the dim's from the last show, the last dim and the time, the witnesses, `wants_redraw` for the surface drawn and whether the dim is at its depth; `canvas_draw`, over one surface by `params.target`: on the background the two source pictures at that alpha, opaque; on the overlay the same wallpaper, darkened towards the dim colour by `DIM_DARKEN`, at the dim's alpha, premultiplied) |
-| `canvas_state.slang` | the canvas's bindings (`state`, `params`, `facts`, `dst`, `image_a`, `image_b`, `tex_sampler`, `private`), `CanvasPrivate`, the witness ring, the two-word time arithmetic |
-| `canvas_tunables.slang` | **the canvas's configuration**: the dim colour, how far a dim darkens the wallpaper, the fade's curve, how a picture is fitted to an output |
+| `canvas.slang` | the three entry points (`canvas_shape`, before a frame when the text changed: one text block a thread; `canvas_apply`, once per frame: the fade's alpha and the dim's from the last show, the last dim and the time, the witnesses, `wants_redraw` for the surface drawn, whether the dim is at its depth, the prompt's layout and the runs to cover; `canvas_draw`, over one surface by `params.target`: on the background the two source pictures at that alpha, opaque; on the overlay the same wallpaper, darkened towards the dim colour by `DIM_DARKEN`, at the dim's alpha, premultiplied, and nothing while a prompt is up; on the prompt's pane the wallpaper darkened by `PROMPT_DARKEN` and the panel) |
+| `canvas_state.slang` | the canvas's bindings (`state`, `params`, `facts`, `dst`, `image_a`, `image_b`, `tex_sampler`, `private`, `runs`, `literals`, `prompt_text`, and in set 2 the shaper's `shapeParams`, `shapeOt`, `shapeUtf8`), the gathered `ShapeTables`, the literal lookup, `CanvasPrivate` with the shaped runs and the prompt's layout, the witness ring, the two-word time arithmetic |
+| `canvas_text.slang` | the text: five fixed blocks (title, ask, echoed text, line, dot), shaped by the engine at one reference size into the canvas's own small arena, painted one left-aligned line at a position in a colour, a long line wrapped once at a space, an echo-off answer as one dot glyph drawn a count of times, and the runs the font lacks a glyph for |
+| `canvas_tunables.slang` | **the canvas's configuration**: the dim colour, how far a dim and a prompt darken the wallpaper, the fade's curve, how a picture is fitted to an output, the prompt's sizes and inks, the shape pass's watchdog |
 
 Its contract is `canvas_abi`, rendered from `bar/abi/src/canvas.rs` as the
 bar's two are rendered (docs/abi.md, *The canvas's buffer*). `caustics-reload`
@@ -173,19 +176,25 @@ compiles it when the canvas host asks for its program, and watches only the
 `canvas*` files for it; the bar's caustic is every other file, so a save of one
 never recompiles the other.
 
+**The secret never enters it.** An echo-off ask reaches `canvas_draw` as a
+count of characters, and the dots are one shaped glyph drawn that many
+times; the typed bytes stay in the host (docs/canvas.md, *Why a caustic*).
+
 **Why it shares no module with the bar.** Every `bar_*` module, the paint
 rules in `bar_paint` included, imports `bar_state`, which declares the bar's
 bindings; a module that imports it binds the bar's whole descriptor set. So
 the canvas carries its own small paint (one sample and one blend a pixel,
-in `canvas.slang`). A paint module both could share would have to be
-**binding-free**: functions of their arguments alone (colours, coverage, a
-rounded rect's distance, the premultiplied rules), with every buffer and
-texture passed in as a parameter, the way the text engine's `shape` takes its
-tables as handles, and with its constants either passed in or read from a
-tunables module both import. The bar's `bar_paint` is not that today: its
-functions read `params`, `private` and `images` as globals. Splitting it is a
-refactor of the bar, and is worth doing when the canvas first draws something
-the bar already draws (a panel, text, an icon), which the prompt will.
+a rounded rect, in `canvas.slang`) and its own text layout
+(`canvas_text.slang`); what the two caustics share is the text engine's
+`text` and `shape`, which declare no bindings of the caustic's and are
+handed their buffers under the same names in both. A paint module both
+could share would have to be **binding-free** the same way: functions of
+their arguments alone (colours, coverage, a rounded rect's distance, the
+premultiplied rules), with every buffer and texture passed in as a
+parameter, and with its constants either passed in or read from a tunables
+module both import. The bar's `bar_paint` is not that today: its functions
+read `params`, `private` and `images` as globals. Splitting it is a
+refactor of the bar.
 
 ## Hot reload
 

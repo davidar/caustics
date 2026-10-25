@@ -638,22 +638,31 @@ No functions live in the ABI, and the process mints no hash at all.
 ### The canvas's buffer
 
 The canvas host (`caustics-canvas`, docs/canvas.md) and its caustic
-(`caustics/canvas.slang`) share four bindings, declared in
-`caustics/canvas_state.slang` and bound by name from the reflection as the
+(`caustics/canvas.slang`) share the bindings declared in
+`caustics/canvas_state.slang`, bound by name from the reflection as the
 bar's are. Their layouts are `caustics_bar_abi::canvas`, rendered into
 `canvas_abi.slang`, which imports nothing of the bar's: the few names both
-caustics use (`Note`, `NO_INDEX`, `WITNESS_*`) are rendered there again from
-the same Rust declarations, and `CanvasBody` is the wire's `WIRE_CANVAS` head
-(*Canvas*).
+caustics use (`Note`, `Literal`, `NO_INDEX`, `WITNESS_*`) are rendered there
+again from the same Rust declarations, and `CanvasBody` is the wire's
+`WIRE_CANVAS` head (*Canvas*).
 
-| binding (set 0, by name) | struct / bytes | writer | reader |
+| binding (by name) | struct / bytes | writer | reader |
 |---|---|---|---|
-| `params` | `CanvasParams`, 32 B, one per surface (an output's background, and its overlay while a dim is up) | the host, before every frame it draws on that surface | both entries |
-| `facts` | `CanvasFacts`, 80 B | the host, whole, when a `Canvas` frame lands, and when a dim ends without an undim | both entries |
-| `state` | `CanvasState`: `wants_redraw`, the dim's depth and a witness ring, 1568 B | the caustic | the host, after every frame (the only readback) |
+| `params` | `CanvasParams`, 32 B, one per surface (an output's background, its overlay while a dim is up, its prompt pane while a prompt is) | the host, before every frame it draws on that surface | the entries |
+| `facts` | `CanvasFacts`, 144 B | the host, whole, whenever the picture, the dim, the literal pool or the prompt changes | the entries |
+| `state` | `CanvasState`: `wants_redraw`, the dim's depth, the shape pass's threshold, the runs to cover and a witness ring, 1648 B | the caustic | the host, after every frame (the only readback) |
 | `private` | the caustic's own, stride from reflection | the caustic | the caustic; tests by reflection |
+| `runs` | `CANVAS_GLYPHS` (512) shaped glyphs, 32 B each | `canvas_shape` | `canvas_draw` |
+| `literals` | `MAX_CANVAS_LITERALS` (256) `Literal`s: `(hash, off, len)` into the strings buffer | the host, from the running caustic's literal table, at start and on every reload | the caustic |
+| `prompt_text` | `PROMPT_TEXT_BYTES` (4096) of the prompt's text, as its sink sent it | the host, whole, when it changes | `canvas_shape` |
 | `image_a`, `image_b`, `tex_sampler` | two textures of straight RGBA8, each the size of the image in it | the host (`write_texture`) | `canvas_draw` |
-| `dst` | storage texture, the output's swapchain image | `canvas_draw` | the swapchain |
+| `dst` | storage texture, the surface's swapchain image | `canvas_draw` | the swapchain |
+| set 1: `textPoints`, `textBands`, `textBandCurves`, `textGlyphs` | the text engine's curve buffers (punchcutter/docs/arena.md) | the host, from the canvas's own `caustics-glyphs` (*Bytes*) | the caustic |
+| set 2: `shapeParams`, `shapeOt`, `shapeUtf8` | the shaper's `ShapeParams`, the arena, and the strings buffer (`CANVAS_STRINGS_BYTES`, 16384, the literal pool's bytes) | the host | `canvas_shape` |
+
+Sets 1 and 2 are the bar's sets under the bar's names, held by the same
+host code (`caustics_host::text`); a host binds them by name, so one table
+of the engine's buffers serves both caustics.
 
 ```
 struct CanvasParams {   // 32 B — one surface's frame facts
@@ -661,24 +670,46 @@ struct CanvasParams {   // 32 B — one surface's frame facts
     uint scale;         // 8   the output's scale in 120ths (240 at scale 2)
     uint frame;         // 12  ≥ 1, the witness ring's stamp (rule 1)
     uint now_lo, now_hi;// 16  CLOCK_BOOTTIME ms when the frame is drawn
-    uint target;        // 24  TARGET_BACKGROUND 0 or TARGET_OVERLAY 1: which surface this is
+    uint target;        // 24  TARGET_BACKGROUND 0, TARGET_OVERLAY 1 or TARGET_PROMPT 2
     uint _pad1;         // 28
 }
-struct CanvasFacts {    // 80 B — what the host was told
+struct CanvasPrompt {   // 64 B — the prompt up now
+    uint id;            // 0   the conversation, as its sink numbered it; 0 when idle
+    uint state;         // 4   PROMPT_IDLE 0, PROMPT_ASKING 1, PROMPT_VERIFYING 2, PROMPT_FAILED 3
+    uint echo;          // 8   1 for an echo-on ask
+    uint typed;         // 12  characters typed; frozen while verifying
+    uint attempts;      // 16  answers an error line followed, this conversation
+    uint generation;    // 20  bumped whenever any of it changes
+    uint title_off, title_len;   // 24  ranges into prompt_text
+    uint line_off, line_len;     // 32  the last line shown
+    uint line_error;             // 40  1 when that line is an error
+    uint ask_off, ask_len;       // 44  the ask's words; empty for the caustic's own
+    uint echo_off, echo_len;     // 52  what was typed, for an echo-on ask only
+    uint _pad0;                  // 60
+}
+struct CanvasFacts {    // 144 B — what the host knows
     CanvasBody show;    // 0   the last CANVAS_SHOW, as it crossed the wire; zero before one
     CanvasBody dim;     // 32  the last CANVAS_DIM or CANVAS_UNDIM; zero before one
     uint from_slot;     // 64  SLOT_A / SLOT_B: the picture the show fades from; NO_INDEX for none
     uint to_slot;       // 68  the picture it fades to; NO_INDEX before any
     uint shows;         // 72  shows applied: a new value is a new fade
-    uint _pad0;         // 76
+    uint literal_count; // 76  entries live in `literals`
+    CanvasPrompt prompt;// 80
 }
-struct CanvasState {    // 1568 B — read back
+struct CanvasCover {    // 16 B — a run the font could not draw
+    uint source;        // 0   TEXT_LITERALS 0 (the strings buffer) or TEXT_PROMPT 1
+    uint off, len;      // 4   its bytes there
+    uint _pad0;         // 12
+}
+struct CanvasState {    // 1648 B — read back
     uint wants_redraw;  // 0   the surface just drawn has more to show: its fade, or its dim on the way
     uint witness_frame, witness_count, witness_lost; // 4
     uint dim_reached;   // 16  facts.dim is a CANVAS_DIM at its depth
     uint dim_id;        // 20  the id of the dim dim_reached is about
-    uint _pad0, _pad1;  // 24
-    Note witnesses[MAX_CANVAS_WITNESSES];            // 32  32 of them
+    uint shape_watchdog_ms;    // 24  SHAPE_WATCHDOG_MS, for the host's watchdog
+    uint cover_count;          // 28
+    CanvasCover covers[CANVAS_TEXT_BLOCKS];          // 32  5 of them
+    Note witnesses[MAX_CANVAS_WITNESSES];            // 112 32 of them
 }
 ```
 
@@ -696,13 +727,37 @@ and whether it is at its depth, which the host reads back in
 `dim_reached` and `dim_id` to tell the dim's sidecar once (*Canvas
 event*). `wants_redraw` is the host's only reason to draw a frame that no
 event asked for, and it is the drawn surface's own: the background's while
-its fade runs, the overlay's while its alpha moves. `canvas_draw` reads
+its fade runs, the overlay's while its alpha moves; the prompt's pane
+redraws only when the host writes something new. `canvas_draw` reads
 `params.target`: on the background, the pictures, opaque, and no dim; on
 the overlay, the same wallpaper from the same slots, fit and cross-fade,
 darkened towards `DIM_COLOUR` by the tunable `DIM_DARKEN`, at the dim's
 alpha, premultiplied: transparent where the alpha is 0, and at alpha 1 with
-`DIM_DARKEN` 0 pixel for pixel the background. `CANVAS_ENTRIES` (`bar/abi/src/entries.rs`) are
-`canvas_apply`, once per frame, and `canvas_draw` over the surface drawn.
+`DIM_DARKEN` 0 pixel for pixel the background; and transparent while
+`facts.prompt` is not idle, so a prompt shows over a dim. On the prompt's
+pane, the wallpaper darkened by `PROMPT_DARKEN`, opaque, and the panel.
+
+**The prompt** is the host's conversation as `facts.prompt` (docs/canvas.md,
+*The prompt core*). **The secret is not in it**: for an echo-off ask the
+caustic gets `typed`, a count, and draws that many dots; `prompt_text` holds
+the title, the ask's words, the last line and, for an echo-on ask only,
+what was typed. The host writes `prompt_text` and `facts` together, the text
+first, and only when either changed.
+
+**Text.** `canvas_shape` shapes five fixed blocks (the title, the ask's
+words, the echoed text, the last line, and the dot) at one reference size,
+one thread each, into their own slots of `runs`, in a submission of its
+own before a frame whenever the prompt's text, the literal pool or the font
+changed; the host times it on the device and stops shaping when a pass
+takes longer than the `SHAPE_WATCHDOG_MS` the caustic states in `state`,
+until the arena's front block is written again, as the bar's watchdog does.
+A block flagged `SHAPE_RUN_NOTDEF` while another block draws is listed in
+`state.covers` as its bytes' range, and the host sends those bytes to its
+glyphs sidecar as a `REQ_COVER` (*Request*), once per string.
+
+`CANVAS_ENTRIES` (`bar/abi/src/entries.rs`) are `canvas_shape`, before a
+frame when the text changed; `canvas_apply`, once per frame; and
+`canvas_draw` over the surface drawn.
 
 ## The wire
 
@@ -1369,7 +1424,7 @@ reflection arrive as bytes like a font does, and go to the device.
 struct ModuleHeader {   // 28 B
     uint generation;    // 0   which compile; complete when `count` entry points have arrived
     uint index;         // 4   this entry point's place in the caustic's entry list; < count
-    uint count;         // 8   entry points in this generation (`BAR_ENTRIES`, seven; `CANVAS_ENTRIES`, two)
+    uint count;         // 8   entry points in this generation (`BAR_ENTRIES`, seven; `CANVAS_ENTRIES`, three)
     uint format;        // 12  wire::format_code() of the define this was built for
     uint spirv_len;     // 16
     uint reflection_len;// 20

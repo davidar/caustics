@@ -2,9 +2,10 @@
 
 caustics-canvas is the canvas host (docs/canvas.md): the wallpaper on every
 output, drawn by a caustic (`caustics/canvas.slang`) and cross-faded on
-command, and the idle fade over every window. It is a layer-shell client on
-the **background** layer, and on the **overlay** layer while a dim is up, and
-replaces swaybg and chayang. In a session it runs as a **systemd user unit**,
+command, the idle fade over every window, and the prompt a sink sidecar
+asks for (a polkit authentication). It is a layer-shell client on the
+**background** layer, on the **overlay** layer while a dim is up and on the
+**top** layer while a prompt is, and replaces swaybg and chayang. In a session it runs as a **systemd user unit**,
 `caustics-canvas.service`, which restarts it whatever it exits with and sends
 its log to the journal.
 
@@ -91,6 +92,42 @@ the canvas is the dim colour; the path last shown is kept in
 again. The look (the dim colour, the fade's curve, cover or contain) is
 `caustics/canvas_tunables.slang`: save it and the running canvas changes.
 
+## The prompt
+
+A sink sidecar asks the canvas for a typed answer over the wire
+(docs/abi.md, *Prompt*, *Answer*); the canvas takes the keyboard, draws a
+panel over the darkened wallpaper on every output, and writes what was typed
+down that sidecar's stdin, then zeroes it (docs/canvas.md, *The prompt
+core*). Return answers, Escape dismisses, BackSpace takes a character,
+Control-U clears the line. One prompt at a time: a second sink asking while
+one is up is told no at once. The panel's sizes and inks are
+`canvas_tunables.slang`'s (`PROMPT_*`). The keymap is the seat's, compiled by
+libxkbcommon, which the canvas opens at run time.
+
+The text is drawn by the text engine, from the canvas's own
+`caustics-glyphs` child, which is in the default set.
+
+### Enabling the polkit agent
+
+`caustics-polkit` (polkit/README.md) is the session's polkit agent as a sink
+of the canvas. It is installed with the set but is **not** in the canvas's
+default sidecars yet: a session's polkit prompts are how it installs
+software and changes settings, and a new agent should be taken on by
+choice, with the previous one a unit edit away, until it has been used for
+a while. To take it on, stop the desktop's own agent (two agents cannot be
+registered for one session) and name the canvas's sidecars in a drop-in,
+the default set and the sink:
+
+```ini
+# ~/.config/systemd/user/caustics-canvas.service.d/polkit.conf
+[Service]
+Environment=CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload caustics-glyphs caustics-polkit"
+```
+
+then `systemctl --user daemon-reload && systemctl --user restart
+caustics-canvas`. Removing the file (and starting the previous agent again)
+undoes it.
+
 ## The journal lines worth knowing
 
 ```
@@ -103,5 +140,15 @@ dim 2: cancelled by a key; told to caustics-wallpaper, the overlays go
 output winit: background surface configured …       one per output
 output winit: overlay surface configured …          one per output, while a dim is up
 output size: 2880x1800 px, told to caustics-wallpaper
-sidecar caustics-reload: generation 2, 2 modules, swapped …   a tunables save
+sidecar caustics-reload: generation 2, 3 modules, swapped …   a tunables save
+prompt: conversation 1 from caustics-polkit began                a sink's conversation
+prompt: conversation 1 asking (echo 0, attempts 0)               the caustic drew its ask
+output winit: prompt surface configured …                        one per output, while a prompt is up
+seat: the keyboard is on the prompt (output winit)
+prompt: conversation 1 answered; told to caustics-polkit         Return
+prompt: conversation 1: an error line after the answer (attempts 1)
+prompt: conversation 1 done, success
+prompt: conversation 1 dismissed; told to caustics-polkit        Escape
 ```
+
+No line carries what was typed, how much was typed, or a prompt's message.

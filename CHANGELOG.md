@@ -82,8 +82,27 @@ with what was typed, and reports the outcome; one conversation at a time,
 the rest queued. The typed bytes are zeroed by every copy the wire makes
 and are never logged. A dry run touches no system bus, for the tests. The
 two kinds moved the ABI hash, so the whole set (now fifteen binaries) is
-rebuilt and installed together; the canvas does not start the sink until
-it can show a prompt.
+rebuilt and installed together. The canvas answers it since its prompt
+(below), with the sink added to the canvas's set by a drop-in.
+
+**The canvas's prompt.** The canvas now answers its sinks: a conversation's
+first ask puts a pane on the top layer of every output, opaque, the
+wallpaper darkened by `PROMPT_DARKEN` with a panel on it (the title, the
+ask's words, the answer's field, the last line, an error in red), and takes
+the keyboard. The seat's keymap is compiled by libxkbcommon, opened at run
+time, with compose; Return answers, Escape dismisses, BackSpace takes a
+character, Control-U clears. What is typed lives in one zeroing buffer in
+the host and leaves it once, down the asking sidecar's pipe; the caustic is
+given a count for an echo-off ask and draws dots. One conversation at a
+time; a failed attempt is counted, never described; the sink's pipe closing
+takes the prompt down; while a prompt is up a dim stays as it was. The
+canvas draws text as the bar does, shaped and cut on the device, from its
+own `caustics-glyphs`, now in its default set; the engine's buffers, the
+cover requests and the shape watchdog moved from the bar into
+`caustics-host` so both hosts run the same code. `caustics-polkit` is not
+in the canvas's default set yet (canvas/README.md says how to add it). The
+canvas's buffer contract and entry list grew, which moved the ABI hash, so
+the set is rebuilt and installed together.
 
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout

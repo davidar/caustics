@@ -233,7 +233,9 @@ second into a six-second dim, each answered with exit 2 within half a
 second; and the wallpaper sidecar killed mid-dim, after which its waiting
 client exits 1, the overlay is gone and the sidecar restarts. Each of
 those ends with no overlay left and the picture as it was; the last stops
-the canvas. The canvas's own alpha(t) and its dim's are tested on a device
+the canvas. The canvas's own alpha(t) and its dim's, and its text (a title
+and a literal shaped against a real font and drawn on the prompt's pane, ink
+inside each run's box and bare panel around it), are tested on a device
 beside the bar's oracle:
 `CAUSTICS_CANVAS_ORACLE=1 cargo test -p caustics-canvas -- --test-threads=1`.
 
@@ -245,6 +247,20 @@ plays polkitd with `busctl --user call … BeginAuthentication`, and checks the
 prompt frames the fake host logged, the method's return, that the fake
 helper read exactly the run's secret, that a dismissed prompt fails the
 call, that no log holds the secret, and that the sink leaves with its host.
+
+**The canvas's prompt steps** (35c to 35g) start the canvas again, with
+`caustics-glyphs` and `caustics-polkit` in its set and the sink in the same
+dry run, so the canvas host is what answers. They play polkitd with
+`busctl` and the user with the harness's keyboard, and check: the prompt's
+pane up and the keyboard on it; a screenshot whose corner is the wallpaper
+darkened by `PROMPT_DARKEN` (read from the tunables) and whose panel is not;
+a wrong secret, an error line counted as an attempt and the call failed
+(each helper run takes one answer, so the right secret is a second call);
+the right secret, the call returned and the fake helper's record exactly
+the wrong secret then the right one; Escape, the call failed as dismissed;
+no prompt pane left after each; and neither secret in the canvas's log (the
+sink's lines included) or the bar's journal. The canvas is stopped at the
+end, as step 35 left it.
 
 ### Adding a step
 

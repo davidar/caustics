@@ -1,11 +1,11 @@
 # The canvas
 
-Steps 0 to 2 of *Order* are built: the host crate, the canvas host with its
+Steps 0 to 3 of *Order* are built: the host crate, the canvas host with its
 wallpaper sidecar (`canvas/`, `wallpaper/`, `caustics/canvas*.slang`;
-canvas/README.md runs it), and the fade on its overlay. Of step 3, the
-polkit sink and the wire it asks over are built (`polkit/`, docs/abi.md,
-*Prompt*, *Answer*); the host's half, the prompt itself, is not, so nothing
-starts the sink yet. The rest is design. The bar's complement: where the bar is a strip along
+canvas/README.md runs it), the fade on its overlay, and the prompt core with
+its polkit sink (`polkit/`, docs/abi.md, *Prompt*, *Answer*). The sink is
+not in the canvas's default set yet; canvas/README.md says how to add it and
+why the default waits. The rest is design. The bar's complement: where the bar is a strip along
 one edge, the canvas is everything else a session paints that is not a
 window. docs/architecture.md is the bar; this document borrows its model
 and says where the canvas departs from it. docs/roadmap.md, *The canvas*,
@@ -132,8 +132,16 @@ neither can be added later.
   desktop's picture is what remains, darkened towards the dim colour by
   `DIM_DARKEN` in `canvas_tunables.slang` (0 leaves it as it is). The
   dim's alpha is how far the windows have gone, not the darkening.
-- **Top**, with exclusive keyboard interactivity: the polkit prompt's
-  panel, over the dimmed wallpaper the host already holds.
+- **Top** (`zwlr_layer_shell_v1` on the top layer, anchored to all edges,
+  exclusive zone −1, exclusive keyboard, namespace
+  `caustics-canvas-prompt`): the prompt. It exists only while a prompt is
+  up: made on every output at a conversation's first ask and on an output
+  that appears mid-prompt, gone when the conversation ends or is
+  dismissed. It is opaque: the wallpaper from the slots, darkened towards
+  the dim colour by `PROMPT_DARKEN` (a little more than `DIM_DARKEN`), and
+  the panel on it. While it is up, an overlay that is also up draws nothing,
+  so the panel is what shows, and comes back as it was when the prompt
+  goes. No decorations and no buttons: the keys are the whole interaction.
 - **`ext-session-lock-v1`**: `lock`, then one lock surface per output, each
   configured and committed before the compositor sends `locked`; outputs
   that appear while locked get a surface too; `unlock_and_destroy` only on
@@ -170,14 +178,61 @@ caustic stops asking and the host stops drawing.
 
 ### The prompt core
 
-`Idle → Prompting(message, echo) → Verifying → (Done | Failed(attempts) →
-Prompting)`. The keys are the host's: keymap from the seat through
-xkbcommon, compose support, backspace, ctrl-u, escape. The buffer is the
-host's; the caustic sees the count and the message. A prompt is a request
-frame from a sidecar (an id, the message, whether to echo) and the answer
-is the typed bytes written to that sidecar's stdin under the same id, then
-zeroed. Timeouts and attempt limits belong to the sink; PAM already
-enforces them. Failed attempts are counted, never described, in any log.
+`canvas/src/prompt.rs` is the state machine, and `canvas/src/keys.rs` the
+keys and the buffer:
+
+```
+Held ─ask→ Asking ─Return→ Verifying ─error line→ Failed ─ask→ Asking …
+  done or cancel from the sink: the panes go, the conversation ends
+  Escape while the panes are up: ANSWER_CANCELLED, the panes go
+```
+
+- **A conversation** is a sink's `Prompt` frames under one id (docs/abi.md,
+  *Prompt*). Its title and any line before the first ask are **held**:
+  nothing is drawn and the keyboard is not taken, so a helper that fails
+  before it asks flashes no panel. The first `PROMPT_SECRET` or
+  `PROMPT_ECHO` raises the pane on every output and takes the keyboard.
+- **Asking**: keys type into the host's buffer. Return writes
+  `Answer::Text` down the asking sidecar's stdin, one write, and the buffer
+  is zeroed as the answer leaves it; **Verifying** follows, with the dots
+  frozen and every key but Escape ignored. An error line then is a failed
+  attempt, **Failed**, counted (`attempts`) and never described; the next
+  ask is asking again, with the error line still shown. `PROMPT_DONE` or
+  `PROMPT_CANCEL` ends the conversation and the panes go.
+- **Escape**, any time the panes are up, writes `ANSWER_CANCELLED` and the
+  panes go; the conversation waits for the sink's end, and an ask under it
+  meanwhile is dismissed again.
+- **One conversation at a time per host.** A `Prompt` under another id, or
+  from another sink, while one is held or up is answered `ANSWER_CANCELLED`
+  at once and changes nothing on screen (the sinks queue their own; this is
+  the backstop). An end for a conversation that is not this one is ignored.
+- **The sink's pipe closing** ends its conversation and takes the panes
+  down (*Failure model*).
+- **The keys are the host's**: the seat's keymap compiled by libxkbcommon,
+  opened at run time, with compose from the locale and no repeat (a held
+  key is one key). Return or keypad Enter submits, Escape dismisses,
+  BackSpace takes one character (not one byte), Control-U clears; text is
+  whatever the keymap and compose produce, up to `MAX_ANSWER_LEN` bytes.
+  Without libxkbcommon the host reads Return, Escape and BackSpace by their
+  codes and types nothing, so a prompt can still be dismissed.
+- **Input priority.** While the panes are up, keys go to the prompt and the
+  pointer and touch cancel nothing: a dim that is also up stays as it was,
+  and is as it was when the prompt closes.
+- **What the caustic sees** (docs/abi.md, *The canvas's buffer*): the
+  conversation's state, whether the ask echoes, the attempts, and ranges
+  into `prompt_text` for the title, the ask's words, the last line (and
+  whether it is an error), and for an echo-on ask what was typed. For an
+  echo-off ask it sees a count of characters and draws that many dots,
+  each one shaped glyph; the bytes never enter a GPU buffer, a log line, a
+  witness or a `Debug`. The caustic's own words are literals: the dot, and
+  "Password" for an ask that has no words of its own.
+- **What is drawn**: the panel, centred, `PROMPT_WIDTH` wide: the title
+  (wrapped once at a space if it is too long, then cut at the edge), the
+  ask's words, the answer's field with the dots or the echoed text, and
+  the last line under it, red when it is an error. Sizes and colours are
+  `canvas_tunables.slang`'s.
+
+Timeouts and attempt limits belong to the sink; PAM already enforces them.
 
 ### Sinks
 
@@ -283,7 +338,7 @@ process holding a secret is the canvas host, and the bar is not it.
 | `caustics-wallpaper` | mid-dim | the overlay goes with it (a dim without its owner is undone, so a crashed sidecar never leaves a dark screen); the picture stays; the host restarts it, and it comes back with no dim |
 | a fade | mid-fade | the waiting client gets EOF on the socket and exits 1; the idle stage locks anyway |
 | `caustics-lock` | locked | the host stays locked (it never unlocks on its own); the sidecar restarts, reads `LockedHint`, resumes the conversation |
-| `caustics-polkit` | mid-prompt | polkitd times out the request; the caller sees "not authorized"; the sidecar restarts and re-registers |
+| `caustics-polkit` | mid-prompt | the host takes the prompt down with its pipe; polkitd times out the request; the caller sees "not authorized"; the sidecar restarts and re-registers |
 | the host | greeting | the display manager restarts it; nothing was logged in |
 
 The nested gate (docs/testing.md, *The nested gate*) covers the wallpaper,
@@ -302,9 +357,10 @@ suspend cycle and a relogin.
    schedule its cross-fade.
 2. **Fade.** `dim`/`undim` on the overlay, cancelled by input, replacing
    chayang.
-3. **Prompt core + polkit.** The first job that takes a password; a failure
-   denies one action, and the previous agent is one unit edit away. Its
-   test prerequisite is a harness tool that can type (docs/testing.md).
+3. **Prompt core + polkit.** Built. The first job that takes a password; a
+   failure denies one action, and the previous agent is one unit edit away.
+   The nested gate types into it with the harness's keyboard
+   (docs/testing.md).
 4. **Lock.** Lock surfaces, the lock sidecar, logind's hint. Keep the
    previous locker installed until the new one has locked and unlocked
    through a suspend.
@@ -327,8 +383,9 @@ suspend cycle and a relogin.
 - Which compositor hosts the greeter: cage, or the session's own compositor
   with a greeter configuration.
 - Whether the canvas and the bar can share paint modules: today every bar
-  module below the subjects imports the bar's bindings, so the first canvas
-  carries its own small paint module (`caustics/README.md`).
+  module below the subjects imports the bar's bindings, so the canvas
+  carries its own small paint and text modules (`caustics/README.md`); the
+  text engine's modules are the one thing both import.
 
 ## References
 
