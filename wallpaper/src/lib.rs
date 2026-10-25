@@ -381,8 +381,8 @@ fn show(
 ) -> Result<Shown, String> {
     let started = Instant::now();
     let pixels = picture::load(path)?;
-    let (width, height) = picture::fitted_size(pixels.width, pixels.height, size);
-    let fitted = picture::shrink(&pixels, width, height);
+    let (from_width, from_height) = (pixels.width, pixels.height);
+    let fitted = picture::fit(pixels, size);
     *serial = serial.wrapping_add(1);
     let key = frames::key(std::process::id(), *serial);
     let (width, height) = (fitted.width, fitted.height);
@@ -392,8 +392,8 @@ fn show(
         "showing {} as {key}: {width}x{height} from {}x{}, {sent} frames, fading over {fade_ms} ms \
          ({} ms to decode and fit)",
         path.display(),
-        pixels.width,
-        pixels.height,
+        from_width,
+        from_height,
         started.elapsed().as_millis()
     ));
     if let Err(err) = std::fs::write(last, path.as_os_str().as_encoded_bytes()) {
