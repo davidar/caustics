@@ -666,7 +666,11 @@ fn pump(
     stats: &Stats,
 ) -> Ended {
     // Buffered: a wire frame is a header read and a body read, and an unbuffered
-    // pipe would make that two syscalls per frame per sidecar.
+    // pipe would make that two syscalls per frame per sidecar. A large body
+    // (a picture is tens of mebibytes) is read in `wire::WIRE_READ_STEP`
+    // steps larger than this buffer, so once the bytes it already holds are
+    // spent `BufReader` passes each step to the pipe directly; the read blocks
+    // on this sidecar's own thread and nothing else waits for it.
     let mut input = BufReader::new(stdout);
     let mut shape: Option<u32> = None;
     let mut rows_shape: Option<(u32, u32, u32)> = None;

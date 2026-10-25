@@ -27,6 +27,14 @@ sidecars, length-prefixed binary frames read by a reader that skips what it
 does not know. One hash over both, carried by every binary and checked on a
 sidecar's first frame. `bar/install.sh` installs the bar, its ten sidecars,
 the canvas host, its sidecar and its client as one set named by that hash.
+Every payload crosses as one frame: a compiled entry point, an output-sized
+picture and a font's buffer each go whole, with nothing cut into pieces and
+put back together. The reader takes a body in bounded steps as it arrives, so
+a header that lies about its length costs only what its writer really sent,
+and the frame cap is the largest honest body (a picture at the largest texture
+size), computed from the wire's own bounds. That change moved the ABI hash: a
+set from before it refuses the sidecars of a set after it, and the bar and
+every sidecar are rebuilt and installed together.
 
 **The sidecars.** `caustics-sysmon` (CPU, temperature, memory, network, disk and
 GPU charts, with a guard that never wakes a suspended NVIDIA GPU), `caustics-tray`

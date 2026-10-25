@@ -723,11 +723,28 @@ struct WireHeader {     // 12 B
 `WIRE_PIXMAP` 9 (*Pixmap*), `WIRE_MODULE` 10 (*Module*), `WIRE_HELLO` 11 (*Hello*),
 `WIRE_IMAGE` 12 (*Image*), `WIRE_CANVAS` 13 (*Canvas*).
 
-`WIRE_MAX_BODY` = **1 MiB** (`1 << 20`): a body longer than that is a broken
-writer. Every fixed body is small (`Samples` is 8336 B), so this bounds only
-the variable-size kinds, and it bounds them before a byte of one is
-allocated. A `Module` larger than the cap is chunked (*Module*), and so are a
-`Bytes` run (*Bytes*) and an `Image` (*Image*).
+**Every payload is one frame.** A whole compiled entry point is one `Module`,
+a whole picture one `Image`, a whole run of a GPU buffer one `Bytes`, and
+nothing on the wire is cut up and put back together.
+
+`WIRE_MAX_BODY` is **the largest honest body**, and it is computed rather than
+chosen: the largest frame any writer can send is an `Image` at
+`IMAGE_MAX_PX`² in straight RGBA8, behind its head and the longest key,
+
+```
+WIRE_MAX_BODY = size_of(ImageHeader) + MAX_NAME_LEN + IMAGE_MAX_PX² × 4
+              = 12 + 1024 + 8192² × 4 = 268 436 492 B   (a little over 256 MiB)
+```
+
+which fits in `len`'s `u32`. Every other kind is far smaller: the fixed
+bodies are tiny (`Samples` is 8336 B), a `Rows` body is bounded by the bar's
+region of the rows arena, and a `Module` (`bar_shape` with its reflection is
+about 1.7 MiB) or a font's arena as one `Bytes` run is a few mebibytes. A
+body longer than the cap is a broken writer.
+
+The cap does not have to be small to make a lying header cheap; the reader
+does that (rule 4). A header claiming the cap from a writer that then sends
+ten bytes costs the reader those ten bytes and one step.
 
 **Reader rules** (`wire::read`, used by the bar and available to sidecars for
 their stdin):
@@ -738,7 +755,12 @@ their stdin):
    child. (A sidecar that prints to stdout has confused stdout with stderr,
    which is the one mistake this catches on the first byte.)
 3. `len > WIRE_MAX_BODY`: error, as above.
-4. Read `len` bytes.
+4. Read `len` bytes **as they arrive**: at most `WIRE_READ_STEP` (64 KiB, a
+   Linux pipe's default capacity) asked of the stream at a time, into a
+   buffer grown with the bytes in hand (doubling, never past `len`), never
+   allocated from the header's word ahead of them. A header that lies costs
+   what its writer really sent, at most doubled, and one step. The body is
+   consumed whole before the kind is looked at.
 5. `kind` unknown: skip, with one witness per kind per child. A sidecar from
    a tree with more kinds in it may write one this bar has not got; it
    passed *Hello*'s gate, so the kind is genuinely additional.
@@ -1039,8 +1061,10 @@ proof that the rows path works without any real applet.
 A run of bytes for one of the caustic's buffers, at an offset. This is the
 frame that lets a sidecar *fill a GPU buffer* without the bar understanding
 what is in it: the curves sidecar writes the font this way, and appends an
-icon's curves the same way later. A body larger than `WIRE_MAX_BODY` is
-chunked by the writer into several frames at consecutive offsets.
+icon's curves the same way later. A run crosses as **one frame** whatever
+its length; `offset` and `total` are not for cutting a run up but say where
+in the buffer it lands and how long the buffer is live, which is what lets a
+later run append to or rewrite part of what an earlier one wrote.
 
 ```
 struct BytesHeader {    // 16 B
@@ -1087,7 +1111,7 @@ time*).
 After the first full write, `caustics-glyphs` sends only what changed, the
 way punchcutter/docs/arena.md, *Keeping a GPU copy current*, describes: each
 curve buffer's tail, the glyph records a cover filled in place below what was
-already sent, and for `BUF_OT` three pieces: the front block at offset 0
+already sent, and for `BUF_OT` three runs: the front block at offset 0
 (rewritten whenever a face is opened), a face's fill bitmap in the middle,
 and the new face's tables as a tail. The tails go first and everything that
 names a glyph after them, because the wire has no transaction.
@@ -1315,26 +1339,23 @@ fast), then `REQ_ICON`, which the store answers.
 ### Module: `WIRE_MODULE`
 
 The compiler sidecar's answer to `REQ_PROGRAM`, and to every save thereafter:
-**one piece of one entry point of a fresh compile of the bar caustic**. The
+**one whole entry point of a fresh compile of the bar caustic**. The
 bar reads no `.slang` file, watches no mtime and links no compiler. SPIR-V and
 reflection arrive as bytes like a font does, and go to the device.
 
 ```
-struct ModuleHeader {   // 40 B
-    uint generation;    // 0   which compile; complete when `count` entry points have arrived whole
+struct ModuleHeader {   // 28 B
+    uint generation;    // 0   which compile; complete when `count` entry points have arrived
     uint index;         // 4   this entry point's place in the caustic's entry list; < count
     uint count;         // 8   entry points in this generation (`BAR_ENTRIES`, seven; `CANVAS_ENTRIES`, two)
     uint format;        // 12  wire::format_code() of the define this was built for
-    uint spirv_len;     // 16  the whole module's runs, repeated in every piece
+    uint spirv_len;     // 16
     uint reflection_len;// 20
     uint name_len;      // 24  the entry point's name, from the entry list
-    uint offset;        // 28  byte offset of this piece within the payload
-    uint total;         // 32  name_len + spirv_len + reflection_len
-    uint _rsvd0;        // 36
 }
-// then this piece of the payload, which is `name_len` bytes of entry
-// point, then `spirv_len` bytes of SPIR-V, then `reflection_len` bytes
-// of the program's reflection as JSON, in that order
+// then `name_len` bytes of entry point, then `spirv_len` bytes of SPIR-V,
+// then `reflection_len` bytes of the program's reflection as JSON, in that
+// order: exactly the rest of the body
 ```
 
 **The reflection** is `punchcutter_slang::Reflection` as its `to_json`
@@ -1346,12 +1367,9 @@ Each carries it all the same, so that a module stays one self-contained
 record and this layout one per entry point. `bar/build.rs` bakes the same
 JSON once beside the bar's SPIR-V.
 
-**Chunked.** A module is one frame where it fits under `WIRE_MAX_BODY` and
-several, **in order**, where it does not (`bar_shape` with its reflection is
-over 1.7 MiB). A writer cuts it (`Module::chunks`), a reader puts it back
-together (`wire::ModuleAssembly`), and a piece whose `offset` is not where
-the last one ended starts the payload over rather than splicing two compiles
-together.
+**One frame per entry point.** A module is one frame whatever its size
+(`bar_shape` with its reflection is about 1.7 MiB, a small fraction of
+`WIRE_MAX_BODY`), so a generation is `count` frames.
 
 The entry lists are `BAR_ENTRIES` and `CANVAS_ENTRIES` in `caustics-bar-abi`,
 the ABI crate rather than either host, because each is a thing two separately
@@ -1362,7 +1380,7 @@ own.
 
 **A generation is all or nothing.** `Gpu::reload_all` rebuilds every pipeline
 or none, so the bar collects entry points by generation and swaps only when
-`count` have arrived **whole**, with the bindings of index 0's reflection
+`count` have arrived, with the bindings of index 0's reflection
 and the `getStringHash` literals merged from every module's (identical when
 the generation came from one link, and a union all the same, so a writer
 that compiled its entry points apart still hands the bar the caustic's whole
@@ -1377,8 +1395,8 @@ verbatim, which the bar's unit inherits, so they land in the journal.
 Reader rules: `count` 0, past `MAX_MODULES` (16), or `index >= count` → skip
 (body); `spirv_len` 0 or not a multiple of four → skip (body); a `name_len`
 of 0 or past `MAX_NAME_LEN` → skip (body); the three runs not adding up to
-`total`, or `offset + len` past `total` → skip (body). Then the bar's own
-three, each one witness and no swap, applied to the assembled module: a
+the bytes after the head → skip (length). Then the bar's own three, each one
+witness and no swap: a
 `format` that is not this session's, a `count` that is not this bar's entry
 count, a name that is not the host's entry list at `index`.
 
@@ -1387,31 +1405,26 @@ count, a name that is not the host's entry list at `index`.
 A keyed image for the canvas: any size up to `IMAGE_MAX_PX`² (8192², wgpu's
 default largest texture), **straight** RGBA8 like a `Pixmap`, and not one:
 a `Pixmap` is a 64² slot of the bar's fixed array, an `Image` is a picture
-the canvas covers an output with. It crosses **in pieces**, in order, the way
-a `Module` does (*Module*): an image the size of an output is tens of
-mebibytes, and the frame cap stays where *Framing* put it.
+the canvas covers an output with. It crosses as **one frame**: an image the
+size of an output is tens of mebibytes, and the largest the reader passes is
+what *Framing* sizes `WIRE_MAX_BODY` by.
 
 ```
-struct ImageHeader {    // 16 B
-    uint key_len;       // 0   the key following, in every piece
+struct ImageHeader {    // 12 B
+    uint key_len;       // 0   the key following
     uint width;         // 4   1..=IMAGE_MAX_PX
     uint height;        // 8   1..=IMAGE_MAX_PX
-    uint offset;        // 12  where this piece lands in the width * height * 4 bytes
 }
-// then `key_len` bytes of key, then this piece of the RGBA8, row-major
+// then `key_len` bytes of key, then width * height * 4 bytes of RGBA8, row-major
 ```
 
-A writer cuts an image with `Image::chunks`; a reader puts it back together
-with `wire::ImageAssembly`, which takes pieces in order and starts over on a
-piece of another key or size, or one whose `offset` is not where the last
-ended. The bytes in hand grow as pieces arrive: a first piece claiming the cap
-costs what it carries. The key is the sidecar's own name for the picture,
+The key is the sidecar's own name for the picture,
 unique among the images it has sent (`caustics-wallpaper` mints
 `caustics-wallpaper:<pid>-<n>`); a `CANVAS_SHOW` names it again.
 
 Reader rules: `width` or `height` 0 or past `IMAGE_MAX_PX` → skip (body); an
-empty key or one past `MAX_NAME_LEN` → skip (body); an empty piece, or one
-reaching past `width * height * 4` → skip (body).
+empty key or one past `MAX_NAME_LEN` → skip (body); pixels other than
+`width * height * 4` bytes → skip (length).
 
 ### Canvas: `WIRE_CANVAS`
 
