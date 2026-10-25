@@ -434,7 +434,9 @@ gssh 30 'systemctl --user stop caustics-bar 2>/dev/null
     rm -f ~/.local/bin/caustics-bar ~/.local/bin/caustics-sysmon ~/.local/bin/caustics-tray \
         ~/.local/bin/caustics-power ~/.local/bin/caustics-audio ~/.local/bin/caustics-network \
         ~/.local/bin/caustics-bluetooth ~/.local/bin/caustics-notify ~/.local/bin/caustics-apps \
-        ~/.local/bin/caustics-glyphs \
+        ~/.local/bin/caustics-glyphs ~/.local/bin/caustics-reload \
+        ~/.local/bin/caustics-canvas ~/.local/bin/caustics-wallpaper ~/.local/bin/caustics-canvasctl \
+        ~/.local/bin/caustics-polkit ~/.local/bin/caustics-lock \
         ~/.local/bin/rows_demo'
 
 gscp "$BINARY" tester@127.0.0.1:.local/bin/caustics-bar && pass "binary" || fail "binary"
@@ -458,6 +460,13 @@ gscp "$GLYPHS_SIDECAR" tester@127.0.0.1:.local/bin/caustics-glyphs && pass "glyp
     fail "glyphs sidecar"
 gscp "$RELOAD_SIDECAR" tester@127.0.0.1:.local/bin/caustics-reload && pass "reload sidecar" ||
     fail "reload sidecar"
+# The rest of the set: the canvas, its sidecar and client, and its two sinks.
+# The bar starts none of them, but a set is all sixteen, and the install step
+# (25d) installs it whole from here.
+for name in caustics-canvas caustics-wallpaper caustics-canvasctl caustics-polkit caustics-lock; do
+    gscp "$REPO/target/debug/$name" "tester@127.0.0.1:.local/bin/$name" && pass "$name" ||
+        fail "$name"
+done
 # Not beside the bar: it is a fixture, not a sidecar.
 gscp "$FAKE_UPOWER_BIN" tester@127.0.0.1:caustics-bar/caustics-fake-upower && pass "fake UPower" ||
     fail "fake UPower"
