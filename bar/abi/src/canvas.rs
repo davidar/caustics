@@ -13,12 +13,13 @@
 //!
 //! Four buffers, by name (docs/abi.md, *The canvas's buffer*):
 //!
-//! - **`params`**, one [`CanvasParams`] per output: its size, its scale, the
-//!   frame stamp and the time, written before every frame drawn on it;
+//! - **`params`**, one [`CanvasParams`] per surface (an output's background,
+//!   and its overlay while a dim is up): its size, its scale, the frame stamp,
+//!   the time and which surface it is, written before every frame drawn on it;
 //! - **`facts`**, one [`CanvasFacts`]: what the host was told and where it put
 //!   the pictures, written whole when a `Canvas` frame lands;
 //! - **`state`**, one [`CanvasState`]: the one buffer read back, a witness
-//!   ring and `wants_redraw`;
+//!   ring, `wants_redraw` and whether the dim has reached its depth;
 //! - **`private`**, the caustic's own, at the stride Slang's reflection
 //!   reports, which the host allocates and never reads or writes.
 
@@ -43,9 +44,20 @@ abi_consts! {
     pub const SLOT_B: u32 = 1;
 }
 
+abi_consts! {
+    CANVAS_TARGETS = "`CanvasParams::target`: which of an output's surfaces a frame is drawn on \
+                      (docs/abi.md, *The canvas's buffer*)";
+
+    /// The background layer: the picture and its cross-fade, opaque.
+    pub const TARGET_BACKGROUND: u32 = 0;
+    /// The overlay layer, up only while a dim is: the dim colour at the dim's
+    /// alpha, premultiplied, over everything else on the output.
+    pub const TARGET_OVERLAY: u32 = 1;
+}
+
 abi_struct! {
-    /// One output's frame facts (uniform `params`), written by the host before
-    /// every frame it draws on that output. 32 B.
+    /// One surface's frame facts (uniform `params`), written by the host before
+    /// every frame it draws on that surface. 32 B.
     { #[repr(C, align(16))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] }
     pub struct CanvasParams {
         /// The output's buffer, px: its logical size times its scale.
@@ -62,7 +74,8 @@ abi_struct! {
         pub now_lo: u32,
         /// The high word.
         pub now_hi: u32,
-        pub _pad0: u32,
+        /// `TARGET_*`: which surface of the output this frame is drawn on.
+        pub target: u32,
         pub _pad1: u32,
     }
 }
@@ -92,12 +105,15 @@ abi_struct! {
 }
 
 abi_struct! {
-    /// The one buffer the host reads back (storage `state`), one frame late:
-    /// the caustic's witness ring and the word that says it wants another
-    /// frame. 1552 B.
+    /// The one buffer the host reads back (storage `state`), after every
+    /// frame: the caustic's witness ring, the word that says the surface just
+    /// drawn wants another frame, and the two that say the dim is at its
+    /// depth. 1568 B.
     { #[repr(C, align(16))] #[derive(Clone, Copy, Debug, PartialEq)] }
     pub struct CanvasState {
-        /// Non-zero while a fade or a dim is in progress: the next frame
+        /// Non-zero when the surface this frame was drawn on (its
+        /// `params.target`) has more to show: a fade in progress on the
+        /// background, a dim on its way on the overlay. The next frame
         /// callback is a frame.
         pub wants_redraw: u32,
         /// The frame the witness ring belongs to (rule 1).
@@ -105,6 +121,14 @@ abi_struct! {
         pub witness_count: u32,
         /// Records dropped because the ring was full.
         pub witness_lost: u32,
+        /// Non-zero when `facts.dim` is a `CANVAS_DIM` whose alpha has reached
+        /// its depth: the host's word for writing `CANVAS_EVENT_DIMMED`.
+        pub dim_reached: u32,
+        /// The `id` of the dim `dim_reached` is about, as `facts.dim` carries
+        /// it.
+        pub dim_id: u32,
+        pub _pad0: u32,
+        pub _pad1: u32,
         pub witnesses: [Note; MAX_CANVAS_WITNESSES],
     }
 }
@@ -115,6 +139,10 @@ impl CanvasState {
         witness_frame: 0,
         witness_count: 0,
         witness_lost: 0,
+        dim_reached: 0,
+        dim_id: 0,
+        _pad0: 0,
+        _pad1: 0,
         witnesses: [Note::ZERO; MAX_CANVAS_WITNESSES],
     };
 
@@ -139,6 +167,7 @@ pub(crate) const CONST_GROUPS: &[ConstGroup] = &[
     crate::buffer::WITNESS_GROUP,
     crate::wire::CANVAS_GROUP,
     CANVAS_CAPACITIES,
+    CANVAS_TARGETS,
 ];
 
 /// Every struct `canvas_abi.slang` renders, all of them bound.

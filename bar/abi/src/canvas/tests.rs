@@ -14,6 +14,7 @@ fn canvas_params_layout() {
     assert_eq!(offset_of!(CanvasParams, frame), 12);
     assert_eq!(offset_of!(CanvasParams, now_lo), 16);
     assert_eq!(offset_of!(CanvasParams, now_hi), 20);
+    assert_eq!(offset_of!(CanvasParams, target), 24);
 }
 
 #[test]
@@ -29,13 +30,15 @@ fn canvas_facts_layout() {
 #[test]
 fn canvas_state_layout() {
     assert_eq!(size_of::<Note>(), 48);
-    assert_eq!(size_of::<CanvasState>(), 16 + 48 * MAX_CANVAS_WITNESSES);
-    assert_eq!(size_of::<CanvasState>(), 1552);
+    assert_eq!(size_of::<CanvasState>(), 32 + 48 * MAX_CANVAS_WITNESSES);
+    assert_eq!(size_of::<CanvasState>(), 1568);
     assert_eq!(offset_of!(CanvasState, wants_redraw), 0);
     assert_eq!(offset_of!(CanvasState, witness_frame), 4);
     assert_eq!(offset_of!(CanvasState, witness_count), 8);
     assert_eq!(offset_of!(CanvasState, witness_lost), 12);
-    assert_eq!(offset_of!(CanvasState, witnesses), 16);
+    assert_eq!(offset_of!(CanvasState, dim_reached), 16);
+    assert_eq!(offset_of!(CanvasState, dim_id), 20);
+    assert_eq!(offset_of!(CanvasState, witnesses), 32);
 }
 
 /// The ring is read against the frame it was stamped with, and never past
