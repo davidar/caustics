@@ -22,6 +22,11 @@ punchcutter-slang = { workspace = true, default-features = false }
 # The ABI as a crate (docs/abi.md, *Writing a sidecar*), so a sidecar can import the
 # declarations without any of the above.
 caustics-bar-abi = { path = "abi" }
+# The mechanism this process is a client of: the device, the caustic's
+# pipelines and their reload, the sidecar supervisor, and the CPU-side tables
+# beside them (docs/architecture.md, *The bar process*). Everything that names
+# one of the bar's buffers, entry points or sidecars stays here.
+caustics-host = { path = "../host" }
 # `ShapeParams` and `MAX_RUN_GLYPHS`: the layout of the buffer `caustics-glyphs`
 # sends as `BUF_SHAPE_FONT`, and the cap on a run's glyph slots. The *tables*
 # are `caustics-glyphs`'s and reach this process as bytes.

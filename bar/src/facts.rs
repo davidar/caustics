@@ -47,9 +47,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use crate::abi::wire::{self, Rows};
 use crate::abi::{self, AppFact, Cover, ImageFact, SlotFact, WantIcon, WindowFact};
 use crate::feeders::pipe::{APPS_SIDECAR, GLYPHS_SIDECAR};
-use crate::images::Images;
 use crate::model::Model;
 use crate::strings::Strings;
+use caustics_host::images::Images;
 
 /// The dock's default pinned app ids, in the order they appear, compiled in
 /// because the bar has no configuration file (docs/architecture.md, *Configuration is

@@ -50,9 +50,9 @@ use anyhow::{Context, Result};
 use crate::abi::{self, State};
 use crate::facts::Facts;
 use crate::gpu::Gpu;
-use crate::images::Images;
 use crate::model::Model;
 use crate::strings::Strings;
+use caustics_host::images::Images;
 
 /// One scenario as the corpus takes it: a model, the facts the CPU would
 /// upload for it, and the menu the caustic would be holding.

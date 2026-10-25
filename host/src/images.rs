@@ -50,7 +50,7 @@
 
 use std::collections::HashMap;
 
-use crate::abi;
+use caustics_bar_abi as abi;
 
 /// One slot: what is in it, and when it was last drawn.
 #[derive(Clone, Debug, Default)]

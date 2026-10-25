@@ -1,0 +1,15 @@
+[package]
+name = "caustics-host"
+version = "0.1.0"
+edition.workspace = true
+description = "The mechanism a program needs to host a caustic: a Vulkan device, a Slang program loaded as SPIR-V with reflection-driven bind groups, the hot-reload swap, and a supervisor for sidecar processes"
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# The contracts: the wire a sidecar writes and the buffer constants a host
+# sizes its CPU-side tables by. Nothing here declares a layout of its own.
+caustics-bar-abi = { path = "../bar/abi" }
+# `sysconf` for the `/proc` reader's tick and page sizes.
+libc = "0.2.189"
+tracing = "0.1.44"

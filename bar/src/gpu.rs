@@ -1110,7 +1110,7 @@ impl Gpu {
     ///
     /// There is no
     /// dirty rectangle and no `bytes_per_row` arithmetic because a slot is a
-    /// whole image of a known size: `crate::images::Images` hands over the slots
+    /// whole image of a known size: `caustics_host::images::Images` hands over the slots
     /// whose pixels changed and this writes each one.
     pub fn upload_image_slot(&mut self, slot: u32, rgba_premul: &[u8]) {
         let px = abi::IMAGE_SLOT_PX;

@@ -234,6 +234,7 @@ dependencies = [
  "anyhow",
  "caustics-bar-abi",
  "caustics-glyphs",
+ "caustics-host",
  "libc",
  "pollster",
  "punchcutter-core",
@@ -279,6 +280,15 @@ dependencies = [
  "punchcutter-text",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "caustics-host"
+version = "0.1.0"
+dependencies = [
+ "caustics-bar-abi",
+ "libc",
+ "tracing",
 ]
 
 [[package]]

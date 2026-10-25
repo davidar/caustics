@@ -82,10 +82,10 @@ use crate::facts::{Facts, Wanted};
 use crate::feeders::{Feeders, pipe};
 use crate::gpu::Gpu;
 use crate::health::{self, Health};
-use crate::images::Images;
 use crate::model::{Action, Model, Update, Updates};
 use crate::modules::{Collected, Modules};
 use crate::witness::Printer;
+use caustics_host::images::Images;
 
 /// Which screen edge the bar takes. `FrameInputs::edge` carries it to the
 /// caustic (which flips the popup gravity and the focus underline), and the
