@@ -189,6 +189,33 @@ PY
 
 # Mean RGB of a screenshot rectangle, as "R G B". `shot` writes 8-bit RGB PNGs
 # with filter 0 on every row, so zlib and arithmetic are the whole decoder.
+# True when every pixel of the PNG is the same colour: a parked output or a
+# lock screen, never a desktop with a bar on it.
+png_is_uniform() { # png_is_uniform <file>
+    python3 - "$1" <<'PY'
+import struct, sys, zlib
+data = open(sys.argv[1], "rb").read()
+pos, width, height, raw = 8, 0, 0, b""
+while pos + 8 <= len(data):
+    length, tag = struct.unpack(">I4s", data[pos:pos + 8])
+    body = data[pos + 8:pos + 8 + length]
+    if tag == b"IHDR":
+        width, height = struct.unpack(">II", body[:8])
+    elif tag == b"IDAT":
+        raw += body
+    pos += 12 + length
+img = zlib.decompress(raw)
+stride = width * 3 + 1
+first = img[1:stride]
+if first != first[:3] * width:
+    sys.exit(1)
+for row in range(1, height):
+    if img[row * stride] != 0 or img[row * stride + 1:(row + 1) * stride] != first:
+        sys.exit(1)
+sys.exit(0)
+PY
+}
+
 png_mean() { # png_mean <file> <x> <y> <w> <h>
     python3 - "$@" <<'PY'
 import struct, sys, zlib
@@ -3758,6 +3785,7 @@ if wait_for_journal "wayland protocol error" 60; then
     pass "the protocol error is in the journal verbatim"
 else
     fail "no 'wayland protocol error' in the journal within 60 s"
+    note "the journal's own account: $(journal | grep -F 'dispatch failed' | tail -1 | cut -c1-200)"
 fi
 # The compositor's message can be empty: `wl_surface` code 0 is invalid_scale.
 if wait_for_journal "object_interface=wl_surface code=0" 20; then
@@ -4211,7 +4239,7 @@ within() { # within <got> <want> <tolerance>
 say "27. the canvas comes up on the output and paints its dim colour"
 CANVAS_RUN=0
 if [[ "$T_NAME" == vm ]]; then
-    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas is not in the guest's set yet"
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas fixture runs on the nested target only"
     SKIPS=$((SKIPS + 1))
 else
     CANVAS_RUN=1
@@ -4686,7 +4714,7 @@ say "35b. the polkit sink asks through the wire, and the answer reaches its help
 # step plays polkitd with `busctl`. The secret is this run's own, and no log
 # may hold it.
 if [[ "$T_NAME" == vm ]]; then
-    printf '  SKIP  %s  %s\n' "$(stamp)" "the polkit sink and its fake host are not in the guest's set yet"
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the polkit dry run and its fake host run on the nested target only"
     SKIPS=$((SKIPS + 1))
 else
     polkit_secret="gate-$RANDOM$RANDOM-$RANDOM"
@@ -4784,7 +4812,7 @@ say "35c. a polkit prompt rises on the canvas, over the darkened wallpaper, and 
 # log may hold either.
 PROMPT_RUN=0
 if [[ "$CANVAS_RUN" -ne 1 ]]; then
-    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas is not in the guest's set yet"
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas fixture runs on the nested target only"
     SKIPS=$((SKIPS + 1))
 else
     PROMPT_RUN=1
@@ -5001,7 +5029,7 @@ say "35h. the lock sidecar locks on its socket, and only the right answer unlock
 # wrong secret and the second with the right one. Both secrets are this run's own,
 # and no log may hold either.
 if [[ "$T_NAME" == vm ]]; then
-    printf '  SKIP  %s  %s\n' "$(stamp)" "the lock sidecar and its fake host are not in the guest's set yet"
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the lock dry run and its fake host run on the nested target only"
     SKIPS=$((SKIPS + 1))
 else
     lock_right="gate-right-$RANDOM$RANDOM-$RANDOM"
@@ -5119,7 +5147,7 @@ say "35i. the canvas locks the session on its lock surfaces, and only the right 
 # Both secrets are this run's own, and no log may hold either.
 LOCK_RUN=0
 if [[ "$CANVAS_RUN" -ne 1 ]]; then
-    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas is not in the guest's set yet"
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas fixture runs on the nested target only"
     SKIPS=$((SKIPS + 1))
 else
     LOCK_RUN=1

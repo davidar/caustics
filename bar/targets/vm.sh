@@ -25,7 +25,7 @@
 #   bar_stop, bar_active, bar_restarts, bar_pid
 #   fixture_start <name> <cmd>, fixture_stop <name>, fixture_log <name>
 #   client_spawn <cmd>           a client of the compositor under test
-#   wake_output                  the output awake and unlocked for the run
+#   wake_output                  the output awake, unlocked and not idling for the run
 #   target_cleanup               the target as the run found it
 #
 # and the values `OUTPUT SCREEN_W SCREEN_H SHOTS T_NAME T_ADAPTER U_HOME
@@ -120,6 +120,9 @@ shot() {
     # side; a harness that runs one guest has only the one socket under `$ART`.
     if python3 "$TOPAZ_TESTS/screendump.py" "${VNC_SOCK:-$ART/vnc.sock}" "$out" >/dev/null 2>&1; then
         note "screenshot $out"
+        if png_is_uniform "$out"; then
+            note "that screenshot is one colour throughout: a parked output or a locked session, not a desktop"
+        fi
     else
         fail "screendump for $1"
     fi
@@ -367,11 +370,16 @@ client_spawn() { # client_spawn <command>
         (setsid $1 >/dev/null 2>&1 </dev/null &) ; true" >/dev/null
 }
 
-# The guest parks its monitor and locks after ~30 minutes idle, and a
-# screendump of a parked monitor is a black rectangle with "Display output is
-# not active" on it. Unlock, power the output back on, and hold an inhibitor
-# for the length of the run.
+# The guest's session locks itself after five minutes without input and
+# parks its monitor after ten (its idle unit, swayidle under the hood), and a
+# run has longer stretches than that driven by the journal alone; the
+# inhibitor below does not reach swayidle, which counts the compositor's own
+# idle time. A locked guest takes every pointer event the harness sends and
+# every screendump is one dark colour. So: stop the session's idle unit for
+# the run (the guest is the harness's alone), unlock, power the output back
+# on, and hold the inhibitor too for logind's sake.
 wake_output() {
+    gssh 30 'systemctl --user stop topaz-idle.service 2>/dev/null; true' >/dev/null
     gssh 40 'sudo -n loginctl unlock-sessions 2>/dev/null; true' >/dev/null
     niri_msg action power-on-monitors >/dev/null 2>&1
     niri_msg output "$OUTPUT" on >/dev/null 2>&1
