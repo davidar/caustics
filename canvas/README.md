@@ -51,14 +51,19 @@ draw over each other.
 ```sh
 caustics-canvasctl show ~/Pictures/sea.jpg              # a cut
 caustics-canvasctl show ~/Pictures/dusk.png fade 4      # a four-second dissolve
-caustics-canvasctl show ~/Pictures/night.png fade 7200  # a two-hour fade
+caustics-canvasctl show ~/Pictures/night.jxl fade 7200  # a two-hour fade
 caustics-canvasctl status   # fade=fading progress=0.37 duration=4.000 image=…
 caustics-canvasctl dim 0.6 over 10
 caustics-canvasctl undim
 ```
 
-It exits 0 when the canvas answered `ok` and 1 otherwise (2 is kept for a
-dim that input cancels, which the overlay will report). Before any picture
+A picture is a PNG, a JPEG or a JPEG XL, the formats a distribution ships
+its wallpapers in; the sidecar knows each by its first bytes, whatever the
+file is called; one it cannot decode is an `error` reply with the decoder's
+reason.
+
+`caustics-canvasctl` exits 0 when the canvas answered `ok` and 1 otherwise
+(2 is kept for a dim that input cancels, which the overlay will report). Before any picture
 the canvas is the dim colour; the path last shown is kept in
 `$XDG_RUNTIME_DIR/caustics-canvas.last`, so a restarted canvas shows it
 again. The look (the dim colour, the fade's curve, cover or contain) is

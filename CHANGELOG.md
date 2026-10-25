@@ -57,10 +57,10 @@ output, on the background layer with fractional scale and a viewport,
 cross-faded between two source pictures at an alpha the caustic computes
 from `CLOCK_BOOTTIME`, so a fade lands where the clock says across a
 suspend; hot-reloaded from `caustics/canvas*.slang` like the bar. Its
-sidecar `caustics-wallpaper` owns a control socket, decodes PNG and JPEG and
-fits them to the largest output; `caustics-canvasctl` is the client for
-scripts. Dim and undim cross the wire and darken the wallpaper; the overlay
-that will carry them over windows is not built yet.
+sidecar `caustics-wallpaper` owns a control socket, decodes PNG, JPEG and
+JPEG XL and fits them to the largest output; `caustics-canvasctl` is the
+client for scripts. Dim and undim cross the wire and darken the wallpaper;
+the overlay that will carry them over windows is not built yet.
 
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout

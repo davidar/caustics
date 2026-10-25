@@ -2,11 +2,12 @@
 //! *One host, sink sidecars*).
 //!
 //! It owns the control socket, `$XDG_RUNTIME_DIR/caustics-canvas.sock`, whose
-//! language is [`command`]'s; it decodes and fits the pictures ([`picture`]);
-//! and it writes them to the canvas host as `Image` frames, each followed by
-//! the `Canvas` frame that shows it (docs/abi.md, *Image*, *Canvas*). The host
-//! copies the bytes and the caustic fades; how far a fade is, this process
-//! knows from its own clock, which is the clock it stamped the fade with.
+//! language is [`command`]'s; it decodes and fits the pictures, PNG, JPEG or
+//! JPEG XL ([`picture`]); and it writes them to the canvas host as `Image`
+//! frames, each followed by the `Canvas` frame that shows it (docs/abi.md,
+//! *Image*, *Canvas*). The host copies the bytes and the caustic fades; how
+//! far a fade is, this process knows from its own clock, which is the clock
+//! it stamped the fade with.
 //!
 //! The patterns are every sidecar's (docs/abi.md, *Writing a sidecar*): no
 //! arguments, settings from its own environment, one witness a line on
