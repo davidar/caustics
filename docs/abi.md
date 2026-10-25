@@ -718,8 +718,10 @@ a named buffer untouched. `Pixmap` (*Pixmap*) is pixels for a texture, `Font`
 (*Module*) is SPIR-V for the device, and `Action`/`Request` (*Action*, *Request*) are
 what the process writes. The canvas host reads two kinds the bar never sees:
 `Image` (*Image*), pixels for one of its two textures, and `Canvas`
-(*Canvas*), whose head it copies into its caustic's `facts`; and it writes
-one, `CanvasEvent` (*Canvas event*), to the sidecar whose dim it is.
+(*Canvas*), whose head it copies into its caustic's `facts`. It writes one
+kind, `CanvasEvent` (*Canvas event*), to the sidecar whose dim it is; and it
+has one pair for the prompt, `Prompt` (*Prompt*) from a sink sidecar and
+`Answer` (*Answer*) back to it.
 
 ### Framing
 
@@ -739,7 +741,8 @@ struct WireHeader {     // 12 B
 `WIRE_REQUEST` 7 (*Request*, the bar → a sidecar), `WIRE_APP` 8 (*App*),
 `WIRE_PIXMAP` 9 (*Pixmap*), `WIRE_MODULE` 10 (*Module*), `WIRE_HELLO` 11 (*Hello*),
 `WIRE_IMAGE` 12 (*Image*), `WIRE_CANVAS` 13 (*Canvas*), `WIRE_CANVAS_EVENT`
-14 (*Canvas event*, the canvas host → a sidecar).
+14 (*Canvas event*, the canvas host → a sidecar), `WIRE_PROMPT` 15
+(*Prompt*), `WIRE_ANSWER` 16 (*Answer*, the canvas host → a sink sidecar).
 
 **Every payload is one frame.** A whole compiled entry point is one `Module`,
 a whole picture one `Image`, a whole run of a GPU buffer one `Bytes`, and
@@ -1055,7 +1058,8 @@ nowhere else to land. `Skipped { kind, why }` carries `why` as an enum
 "one witness per kind per child" on it and count skips.
 
 The crate depends on `punchcutter-core` for the plain byte views and the
-declare-once macros, and on nothing else. `SAMPLES_SIZE` (8336) is the `Samples` body's size, the constant a
+declare-once macros, and on `zeroize` for the `Secret` an `Answer` carries
+(*Answer*), and on nothing else. `SAMPLES_SIZE` (8336) is the `Samples` body's size, the constant a
 reader checks a frame's `len` against. The crate has its own tests for the
 wire (round trips, every reader rule above with a crafted stream, the
 builder); the buffer's layout and compile tests stay in `bar/src/abi/tests.rs`
@@ -1523,6 +1527,80 @@ Written under `Action`'s rules: one non-blocking write of 28 bytes, under
 Reader rules: a body other than 16 bytes → skip (length); `event` 0 or past
 `CANVAS_EVENT_LAST` → skip (body). The writer refuses what the reader would
 skip.
+
+### Prompt: `WIRE_PROMPT`
+
+**A sink sidecar → the canvas host**: ask for a typed answer, show a line,
+withdraw a conversation, or end one (docs/canvas.md, *The prompt core*). A
+**conversation** is one request for authentication (one polkit
+`BeginAuthentication`, one PAM transaction), and its `id` is the sidecar's
+own, unique while it runs. Several frames go under one id, in order: a
+title, as many asks and lines as PAM's conversation has (it may ask twice),
+and exactly one cancel or done to end it.
+
+```
+struct PromptBody {     // 16 B
+    uint id;            // 0   the conversation, the sidecar's number
+    uint kind;          // 4   PROMPT_*
+    uint message_len;   // 8   UTF-8 following, ≤ MAX_NAME_LEN; 0 on a cancel or a done
+    uint arg;           // 12  a done's 1 (success) or 0 (failure); an info's PROMPT_INFO_TITLE (1) or 0; else 0
+}
+// then message_len bytes of UTF-8
+```
+
+| `PROMPT_*` | | means |
+|---|---|---|
+| 1 | `PROMPT_SECRET` | ask with the echo off (`PAM_PROMPT_ECHO_OFF`): a password. The host shapes none of what is typed; the caustic sees a count |
+| 2 | `PROMPT_ECHO` | ask with the echo on (`PAM_PROMPT_ECHO_ON`): a user name, a code PAM chose to show |
+| 3 | `PROMPT_INFO` | show a line, ask nothing: a `PAM_TEXT_INFO`, or with `arg` `PROMPT_INFO_TITLE` the conversation's title (polkit's message for the action), sent before the first ask |
+| 4 | `PROMPT_ERROR` | show an error line, ask nothing (`PAM_ERROR_MSG`) |
+| 5 | `PROMPT_CANCEL` | withdraw the conversation: the requester cancelled it. The host closes the panel and writes no answer |
+| 6 | `PROMPT_DONE` | the conversation ended, `arg` 1 success or 0 failure; the host closes the panel |
+
+`PROMPT_LAST` is 6. The message bound is `MAX_NAME_LEN` (1024), twice
+`PAM_MAX_MSG_SIZE`, so a PAM message always fits; a sidecar cuts a longer
+title of its own at a character boundary. An answer is owed only to the
+**last ask** under an id; a line that asks nothing is shown and owed
+nothing.
+
+Reader rules: `kind` 0 or past `PROMPT_LAST`, or an `arg` the kind does not
+carry → skip (body); a message past `MAX_NAME_LEN`, or one on a cancel or a
+done → skip (body); message bytes the head does not count → skip (length).
+
+### Answer: `WIRE_ANSWER`
+
+**The canvas host → a sink sidecar**, on its stdin, as `Request` is: what
+was typed for the last ask under `id`, or that the user dismissed the
+prompt.
+
+```
+struct AnswerBody {     // 16 B
+    uint id;            // 0   the Prompt.id this answers
+    uint status;        // 4   ANSWER_*
+    uint len;           // 8   bytes following, ≤ MAX_ANSWER_LEN; 0 on a cancel
+    uint _rsvd0;        // 12
+}
+// then len bytes: what was typed, as typed (not necessarily UTF-8)
+```
+
+`ANSWER_TEXT` 1 carries the typed bytes; `ANSWER_CANCELLED` 2 carries none,
+and ends the conversation as a failure on the sidecar's side (it answers
+with its `PROMPT_DONE`). `ANSWER_LAST` is 2. `MAX_ANSWER_LEN` is 512,
+`PAM_MAX_RESP_SIZE`: the most Linux-PAM's own conversation reads.
+
+**An `ANSWER_TEXT` is never logged, never witnessed, and never kept past
+the write to whatever asked for it.** The wire's own copies are zeroed:
+`wire::read` hands the bytes up in a `Secret`, which zeroes them when it
+drops, and zeroes the body it read them from; `wire::write` zeroes the
+frame it built once it is written. A `Secret`'s `Debug` prints neither the
+bytes nor their length. Neither end may put a buffered stream between
+itself and the pipe (`std::io::Stdin` is one), or the buffer keeps a copy
+no one zeroes. `bar/abi/tests/zeroing.rs` checks all three copies with an
+allocator that looks into every block it frees.
+
+Reader rules: `status` 0 or past `ANSWER_LAST`, `len` past
+`MAX_ANSWER_LEN`, or bytes on a cancel → skip (body); bytes the head does
+not count → skip (length). A skipped answer's body is zeroed too.
 
 ### The ABI hash
 

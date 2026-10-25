@@ -810,10 +810,10 @@ fn pump(
                     };
                 }
             }
-            Frame::Action(_) | Frame::Request(_) | Frame::CanvasEvent(_) => {
-                // A host writes actions, requests and canvas events; a
-                // sidecar writing one back is a confused sidecar, and the frame is dropped like
-                // any other kind it has no use for.
+            Frame::Action(_) | Frame::Request(_) | Frame::CanvasEvent(_) | Frame::Answer(_) => {
+                // A host writes actions, requests, canvas events and answers;
+                // a sidecar writing one back is a confused sidecar, and the
+                // frame is dropped like any other kind it has no use for.
                 if witnessed.insert((frame.kind(), 1)) {
                     tracing::warn!("sidecar {name}: a bar-to-sidecar frame on stdout; ignoring");
                 }
@@ -826,11 +826,12 @@ fn pump(
             | Frame::Pixmap(_)
             | Frame::Module(_)
             | Frame::Image(_)
-            | Frame::Canvas(_) => {
+            | Frame::Canvas(_)
+            | Frame::Prompt(_) => {
                 // The answer kinds (docs/abi.md, *Bytes*–*Module*): a sidecar
                 // that turns a name into something drawable, or a `.slang`
-                // file into a module; and the canvas's two (*Image*,
-                // *Canvas*). This feeder does not look inside: the event
+                // file into a module; and the canvas's three (*Image*,
+                // *Canvas*, *Prompt*). This feeder does not look inside: the event
                 // carries the frame whole, and the host copies its bytes
                 // where they go, which for SPIR-V is the device.
                 any = true;

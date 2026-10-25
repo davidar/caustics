@@ -1384,3 +1384,176 @@ fn a_malformed_canvas_command_is_skipped_rule_by_rule() {
         .is_err()
     );
 }
+
+// -- Prompt and Answer (docs/abi.md, *Prompt*, *Answer*) ----------------------
+
+fn prompt(id: u32, kind: u32, arg: u32, message: &str) -> Frame {
+    Frame::Prompt(Prompt {
+        id,
+        kind,
+        arg,
+        message: message.into(),
+    })
+}
+
+fn text(id: u32, bytes: &[u8]) -> Frame {
+    Frame::Answer(Answer::Text {
+        id,
+        bytes: Secret::new(bytes.to_vec()),
+    })
+}
+
+#[test]
+fn the_prompt_and_answer_heads_are_sixteen_bytes() {
+    assert_eq!(size_of::<PromptBody>(), 16);
+    assert_eq!(size_of::<AnswerBody>(), 16);
+    assert_eq!((WIRE_PROMPT, WIRE_ANSWER), (15, 16));
+}
+
+/// Every kind a sink writes, and both answers, read back as written.
+#[test]
+fn the_prompt_kinds_and_the_answers_round_trip() {
+    for frame in [
+        prompt(
+            1,
+            PROMPT_INFO,
+            PROMPT_INFO_TITLE,
+            "Authentication is required",
+        ),
+        prompt(1, PROMPT_SECRET, 0, "Password: "),
+        prompt(1, PROMPT_ECHO, 0, "Login: "),
+        prompt(1, PROMPT_INFO, 0, "ok"),
+        prompt(1, PROMPT_ERROR, 0, "wrong"),
+        prompt(1, PROMPT_SECRET, 0, ""),
+        prompt(2, PROMPT_CANCEL, 0, ""),
+        prompt(3, PROMPT_DONE, 1, ""),
+        prompt(3, PROMPT_DONE, 0, ""),
+        text(7, b"hunter2"),
+        text(7, b""),
+        text(7, &[0xff; MAX_ANSWER_LEN]),
+        Frame::Answer(Answer::Cancelled { id: 9 }),
+    ] {
+        assert_eq!(round_trip(frame.clone()), frame);
+    }
+    // The answer's bytes are the head's `len` exactly, after 16 B of head.
+    let raw = bytes(&text(7, b"abc"));
+    assert_eq!(raw.len(), WireHeader::SIZE + 16 + 3);
+    assert_eq!(&raw[WireHeader::SIZE + 16..], b"abc");
+}
+
+#[test]
+fn a_malformed_prompt_is_skipped_rule_by_rule() {
+    let ask = prompt(1, PROMPT_SECRET, 0, "Password: ");
+    let done = prompt(1, PROMPT_DONE, 1, "");
+    // PromptBody: id 0, kind 4, message_len 8, arg 12.
+    let cases: [(&str, Vec<u8>); 7] = [
+        ("kind 0", with_words(&ask, &[(4, 0)], &[])),
+        (
+            "a kind past the last",
+            with_words(&ask, &[(4, PROMPT_LAST + 1)], &[]),
+        ),
+        ("an arg on an ask", with_words(&ask, &[(12, 1)], &[])),
+        ("a done that is neither", with_words(&done, &[(12, 2)], &[])),
+        ("a message on a done", with_words(&done, &[(8, 1)], b"x")),
+        (
+            "an info with an arg it does not have",
+            with_words(&prompt(1, PROMPT_INFO, 0, "i"), &[(12, 7)], &[]),
+        ),
+        (
+            "a message past MAX_NAME_LEN",
+            with_words(
+                &prompt(1, PROMPT_INFO, 0, ""),
+                &[(8, MAX_NAME_LEN as u32 + 1)],
+                &vec![b'a'; MAX_NAME_LEN + 1],
+            ),
+        ),
+    ];
+    for (what, raw) in cases {
+        let read = read_one(raw);
+        assert!(
+            matches!(
+                read,
+                Frame::Skipped(Skipped {
+                    kind: WIRE_PROMPT,
+                    why: Skip::Body
+                })
+            ),
+            "{what} was not skipped as a body: {read:?}"
+        );
+    }
+    // A message the head does not count is a wrong length.
+    assert!(matches!(
+        read_one(with_words(&ask, &[], b"x")),
+        Frame::Skipped(Skipped {
+            kind: WIRE_PROMPT,
+            why: Skip::Length
+        })
+    ));
+    // And the writer refuses what the reader would skip.
+    for bad in [
+        prompt(1, 0, 0, ""),
+        prompt(1, PROMPT_LAST + 1, 0, ""),
+        prompt(1, PROMPT_DONE, 2, ""),
+        prompt(1, PROMPT_CANCEL, 0, "x"),
+        prompt(1, PROMPT_SECRET, 1, "Password: "),
+        prompt(1, PROMPT_INFO, 0, &"a".repeat(MAX_NAME_LEN + 1)),
+    ] {
+        assert!(write(&mut Vec::new(), &bad).is_err(), "{bad:?} was written");
+    }
+}
+
+#[test]
+fn a_malformed_answer_is_skipped_rule_by_rule() {
+    let typed = text(1, b"pw");
+    let cancelled = Frame::Answer(Answer::Cancelled { id: 1 });
+    // AnswerBody: id 0, status 4, len 8.
+    let cases: [(&str, Vec<u8>); 4] = [
+        ("status 0", with_words(&typed, &[(4, 0)], &[])),
+        (
+            "a status past the last",
+            with_words(&typed, &[(4, ANSWER_LAST + 1)], &[]),
+        ),
+        ("bytes on a cancel", with_words(&cancelled, &[(8, 1)], b"x")),
+        (
+            "bytes past MAX_ANSWER_LEN",
+            with_words(
+                &text(1, b""),
+                &[(8, MAX_ANSWER_LEN as u32 + 1)],
+                &vec![b'a'; MAX_ANSWER_LEN + 1],
+            ),
+        ),
+    ];
+    for (what, raw) in cases {
+        let read = read_one(raw);
+        assert!(
+            matches!(
+                read,
+                Frame::Skipped(Skipped {
+                    kind: WIRE_ANSWER,
+                    why: Skip::Body
+                })
+            ),
+            "{what} was not skipped as a body: {read:?}"
+        );
+    }
+    assert!(matches!(
+        read_one(with_words(&typed, &[], b"x")),
+        Frame::Skipped(Skipped {
+            kind: WIRE_ANSWER,
+            why: Skip::Length
+        })
+    ));
+    assert!(write(&mut Vec::new(), &text(1, &[0; MAX_ANSWER_LEN + 1])).is_err());
+}
+
+/// The typed bytes are never printed: a `Debug` of the frame, which is what
+/// a careless witness would write, says nothing of them, not even their
+/// length.
+#[test]
+fn an_answer_s_debug_shows_none_of_its_bytes() {
+    let frame = text(4, b"correct horse");
+    let shown = format!("{frame:?} {:?}", read_one(bytes(&frame)));
+    assert!(!shown.contains("correct"), "{shown}");
+    assert!(!shown.contains("13"), "{shown}");
+    assert!(shown.contains("Secret(..)"), "{shown}");
+}

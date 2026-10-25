@@ -11,6 +11,10 @@ rust-version.workspace = true
 # featureless `punchcutter-core` is std-only, which is what lets a sidecar with
 # no GPU, no Wayland and no tokio depend on this crate.
 punchcutter-core.workspace = true
+# `Secret`: the bytes of an `Answer` frame, zeroed when they drop, and the
+# reader's and the writer's own copies zeroed after use (docs/abi.md,
+# *Answer*). No dependencies of its own.
+zeroize = "1.9.1"
 
 [build-dependencies]
 # `modules::SHAPE_ABI`: the engine's `shape_abi.slang` as compiled into the

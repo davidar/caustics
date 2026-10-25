@@ -1256,6 +1256,203 @@ pub struct CanvasEventBody {
 }
 unsafe impl Plain for CanvasEventBody {}
 
+// ---------------------------------------------------------------------------
+// *Prompt* and *Answer*: a sink sidecar asking the canvas host for a typed
+// answer, and the host's answer (docs/abi.md, *Prompt*, *Answer*;
+// docs/canvas.md, *The prompt core*)
+// ---------------------------------------------------------------------------
+
+/// A sink sidecar → the canvas host: ask, show, withdraw or end one
+/// conversation (docs/abi.md, *Prompt*).
+pub const WIRE_PROMPT: u32 = 15;
+/// **The canvas host → a sink sidecar**, on its stdin: what was typed for the
+/// open ask, or that the user dismissed the prompt (docs/abi.md, *Answer*).
+pub const WIRE_ANSWER: u32 = 16;
+
+/// `PromptBody::kind`: ask with the echo off. A password; the host shapes
+/// none of the typed text and the caustic sees a count.
+pub const PROMPT_SECRET: u32 = 1;
+/// Ask with the echo on: a user name, a code PAM chose to show.
+pub const PROMPT_ECHO: u32 = 2;
+/// Show a line, ask nothing: a `PAM_TEXT_INFO`, or with `arg`
+/// [`PROMPT_INFO_TITLE`] the conversation's title.
+pub const PROMPT_INFO: u32 = 3;
+/// Show an error line, ask nothing: a `PAM_ERROR_MSG`.
+pub const PROMPT_ERROR: u32 = 4;
+/// Withdraw this conversation: the requester cancelled it. No message.
+pub const PROMPT_CANCEL: u32 = 5;
+/// This conversation ended; `arg` is 1 for success, 0 for failure. The host
+/// closes the panel. No message.
+pub const PROMPT_DONE: u32 = 6;
+/// The highest `PROMPT_*`; a `Prompt` naming more is skipped.
+pub const PROMPT_LAST: u32 = 6;
+/// `PromptBody::arg` of a [`PROMPT_INFO`]: the line is what the conversation
+/// is for (polkit's message for the action), shown as the panel's title,
+/// rather than a line from PAM.
+pub const PROMPT_INFO_TITLE: u32 = 1;
+
+/// `AnswerBody::status`: the typed bytes for the last ask under `id`.
+pub const ANSWER_TEXT: u32 = 1;
+/// The user dismissed the prompt. No bytes.
+pub const ANSWER_CANCELLED: u32 = 2;
+/// The highest `ANSWER_*`; an `Answer` naming more is skipped.
+pub const ANSWER_LAST: u32 = 2;
+
+/// The most an `ANSWER_TEXT` may carry: `PAM_MAX_RESP_SIZE`, the largest
+/// response Linux-PAM's own conversation helpers read. A prompt's message is
+/// bounded by [`MAX_NAME_LEN`], twice `PAM_MAX_MSG_SIZE`.
+pub const MAX_ANSWER_LEN: usize = 512;
+
+/// *Prompt* — the fixed head of a `WIRE_PROMPT` body; `message_len` bytes of
+/// UTF-8 follow. 16 B.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PromptBody {
+    /// The conversation, chosen by the sidecar and unique while it runs.
+    pub id: u32,
+    /// `PROMPT_*`.
+    pub kind: u32,
+    /// UTF-8 following, at most [`MAX_NAME_LEN`]; 0 for a cancel or a done.
+    pub message_len: u32,
+    /// The kind's one word: a done's success (1) or failure (0), an info's
+    /// [`PROMPT_INFO_TITLE`] or 0; 0 for the others.
+    pub arg: u32,
+}
+unsafe impl Plain for PromptBody {}
+
+/// A `WIRE_PROMPT` frame, decoded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prompt {
+    pub id: u32,
+    /// `PROMPT_*`.
+    pub kind: u32,
+    /// [`PromptBody::arg`].
+    pub arg: u32,
+    pub message: String,
+}
+
+/// *Answer* — the fixed head of a `WIRE_ANSWER` body; `len` bytes follow. 16 B.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AnswerBody {
+    /// The `Prompt::id` this answers.
+    pub id: u32,
+    /// `ANSWER_*`.
+    pub status: u32,
+    /// Bytes following, at most [`MAX_ANSWER_LEN`]; 0 for a cancel.
+    pub len: u32,
+    pub _rsvd0: u32,
+}
+unsafe impl Plain for AnswerBody {}
+
+/// Bytes that are zeroed when they are dropped: what an `ANSWER_TEXT`
+/// carries. Its `Debug` says nothing about them, not even how many there are.
+///
+/// The reader builds one from the body it read, and zeroes that body; the
+/// writer zeroes the frame it built once it is written. Neither end makes a
+/// copy that outlives the frame, and so long as the stream under them is
+/// unbuffered (a pipe's file descriptor, not a `BufReader` or `Stdin`) there
+/// is none in between: what is left is the kernel's pipe buffer.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct Secret(zeroize::Zeroizing<Vec<u8>>);
+
+impl Secret {
+    /// Take `bytes` over; they are zeroed when the secret drops.
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Secret(zeroize::Zeroizing::new(bytes))
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl std::fmt::Debug for Secret {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Secret(..)")
+    }
+}
+
+/// A `WIRE_ANSWER` frame, decoded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Answer {
+    /// What was typed for the last ask under `id`. **Never logged, never
+    /// witnessed, never kept past the write to whatever asked for it.**
+    Text { id: u32, bytes: Secret },
+    /// The user dismissed the prompt under `id`.
+    Cancelled { id: u32 },
+}
+
+impl Answer {
+    /// The conversation this answers.
+    pub fn id(&self) -> u32 {
+        match self {
+            Answer::Text { id, .. } | Answer::Cancelled { id } => *id,
+        }
+    }
+}
+
+/// Whether `arg` is a word `kind` may carry: a done's 0 or 1, an info's 0 or
+/// [`PROMPT_INFO_TITLE`], and 0 for the rest.
+fn prompt_arg_fits(kind: u32, arg: u32) -> bool {
+    match kind {
+        PROMPT_DONE => arg <= 1,
+        PROMPT_INFO => arg == 0 || arg == PROMPT_INFO_TITLE,
+        _ => arg == 0,
+    }
+}
+
+/// *Prompt*'s rules: a known kind, an `arg` that kind may carry, a message
+/// within [`MAX_NAME_LEN`] and none on a cancel or a done.
+fn decode_prompt(body: &[u8]) -> Result<Prompt, Skip> {
+    let (head, mut tail): (PromptBody, _) = split_head(body)?;
+    if head.kind == 0 || head.kind > PROMPT_LAST || !prompt_arg_fits(head.kind, head.arg) {
+        return Err(Skip::Body);
+    }
+    let message = take_name(&mut tail, head.message_len)?;
+    if !tail.is_empty() {
+        return Err(Skip::Length);
+    }
+    if matches!(head.kind, PROMPT_CANCEL | PROMPT_DONE) && !message.is_empty() {
+        return Err(Skip::Body);
+    }
+    Ok(Prompt {
+        id: head.id,
+        kind: head.kind,
+        arg: head.arg,
+        message,
+    })
+}
+
+/// *Answer*'s rules: a known status, at most [`MAX_ANSWER_LEN`] bytes, and
+/// none on a cancel. The bytes are copied once, into the [`Secret`]; the
+/// caller zeroes the body they came from.
+fn decode_answer(body: &[u8]) -> Result<Answer, Skip> {
+    let (head, tail): (AnswerBody, _) = split_head(body)?;
+    if head.status == 0 || head.status > ANSWER_LAST || head.len as usize > MAX_ANSWER_LEN {
+        return Err(Skip::Body);
+    }
+    if tail.len() != head.len as usize {
+        return Err(Skip::Length);
+    }
+    match head.status {
+        ANSWER_TEXT => Ok(Answer::Text {
+            id: head.id,
+            bytes: Secret::new(tail.to_vec()),
+        }),
+        _ if tail.is_empty() => Ok(Answer::Cancelled { id: head.id }),
+        _ => Err(Skip::Body),
+    }
+}
+
 /// *Module* — the fixed head of a `WIRE_MODULE` body, and behind it the whole
 /// of one entry point: `name_len` bytes of name, then `spirv_len` bytes of
 /// SPIR-V, then `reflection_len` bytes of the program's reflection as JSON
@@ -1423,6 +1620,11 @@ pub enum Frame {
     /// *Canvas event*: the canvas host telling a sidecar what became of its
     /// dim.
     CanvasEvent(CanvasEventBody),
+
+    /// *Prompt*: a sink sidecar asking the canvas host.
+    Prompt(Prompt),
+    /// *Answer*: the canvas host's answer to a sink sidecar.
+    Answer(Answer),
     /// Read whole, understood not at all — and that is fine (docs/abi.md, *Framing*, rules 5–7).
     Skipped(Skipped),
 }
@@ -1445,6 +1647,8 @@ impl Frame {
             Frame::Image(_) => WIRE_IMAGE,
             Frame::Canvas(_) => WIRE_CANVAS,
             Frame::CanvasEvent(_) => WIRE_CANVAS_EVENT,
+            Frame::Prompt(_) => WIRE_PROMPT,
+            Frame::Answer(_) => WIRE_ANSWER,
             Frame::Skipped(skipped) => skipped.kind,
         }
     }
@@ -1496,7 +1700,7 @@ pub fn read<R: Read>(input: &mut R) -> io::Result<Option<Frame>> {
     }
 
     // 4. The body, always consumed whole, whatever happens to it below.
-    let body = read_body(input, len)?;
+    let mut body = read_body(input, len)?;
 
     let skip = |why: Skip| {
         Ok(Some(Frame::Skipped(Skipped {
@@ -1578,6 +1782,22 @@ pub fn read<R: Read>(input: &mut R) -> io::Result<Option<Frame>> {
             Ok(event) => Ok(Some(Frame::CanvasEvent(event))),
             Err(why) => skip(why),
         },
+
+        WIRE_PROMPT => match decode_prompt(&body) {
+            Ok(prompt) => Ok(Some(Frame::Prompt(prompt))),
+            Err(why) => skip(why),
+        },
+        WIRE_ANSWER => {
+            // The typed bytes are in `body` until here, decoded or not; a
+            // body that fits in one step is one allocation, so this is the
+            // only copy the reader made.
+            let answer = decode_answer(&body);
+            zeroize::Zeroize::zeroize(&mut body);
+            match answer {
+                Ok(answer) => Ok(Some(Frame::Answer(answer))),
+                Err(why) => skip(why),
+            }
+        }
         _ => skip(Skip::Kind),
     }
 }
@@ -2235,6 +2455,53 @@ pub fn write<W: Write>(out: &mut W, frame: &Frame) -> io::Result<()> {
             buf.reserve(WireHeader::SIZE + len);
             buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_CANVAS_EVENT, len as u32)));
             buf.extend_from_slice(as_bytes(event));
+        }
+        Frame::Prompt(prompt) => {
+            if prompt.kind == 0 || prompt.kind > PROMPT_LAST {
+                return Err(invalid("a Prompt frame names no kind"));
+            }
+            if !prompt_arg_fits(prompt.kind, prompt.arg) {
+                return Err(invalid("a Prompt frame's arg is not one its kind carries"));
+            }
+            let message = name_bytes(&prompt.message)?;
+            if matches!(prompt.kind, PROMPT_CANCEL | PROMPT_DONE) && !message.is_empty() {
+                return Err(invalid("a cancel or a done carries no message"));
+            }
+            let len = size_of::<PromptBody>() + message.len();
+            let head = PromptBody {
+                id: prompt.id,
+                kind: prompt.kind,
+                message_len: message.len() as u32,
+                arg: prompt.arg,
+            };
+            buf.reserve(WireHeader::SIZE + len);
+            buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_PROMPT, len as u32)));
+            buf.extend_from_slice(as_bytes(&head));
+            buf.extend_from_slice(message);
+        }
+        Frame::Answer(answer) => {
+            let (id, status, bytes): (u32, u32, &[u8]) = match answer {
+                Answer::Text { id, bytes } => (*id, ANSWER_TEXT, bytes.as_bytes()),
+                Answer::Cancelled { id } => (*id, ANSWER_CANCELLED, &[]),
+            };
+            if bytes.len() > MAX_ANSWER_LEN {
+                return Err(invalid("an Answer longer than MAX_ANSWER_LEN"));
+            }
+            let len = size_of::<AnswerBody>() + bytes.len();
+            let head = AnswerBody {
+                id,
+                status,
+                len: bytes.len() as u32,
+                _rsvd0: 0,
+            };
+            // Reserved whole first, so the bytes are copied once and never
+            // moved by a growing buffer; the copy is zeroed below.
+            let mut buf = zeroize::Zeroizing::new(Vec::with_capacity(WireHeader::SIZE + len));
+            buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_ANSWER, len as u32)));
+            buf.extend_from_slice(as_bytes(&head));
+            buf.extend_from_slice(bytes);
+            out.write_all(&buf)?;
+            return out.flush();
         }
         Frame::Skipped(skipped) => {
             return Err(invalid(&format!(
