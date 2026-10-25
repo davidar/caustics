@@ -33,22 +33,32 @@ fn the_set_comes_from_the_environment_or_the_compiled_in_list() {
 /// The bar's half of the pipe: an absence, a gone sidecar and the three
 /// shapes of frame become the updates the model already knew before the
 /// supervisor was a crate.
+/// A frame's update, which every frame kind has.
+fn mapped(event: Event) -> Update {
+    update_of(event).expect("a frame is always an update")
+}
+
 #[test]
 fn a_pipes_events_become_the_models_updates() {
     let name = "caustics-sysmon".to_owned();
     assert_eq!(
         update_of(Event::Absent(name.clone())),
-        Update::Absent(name.clone())
+        Some(Update::Absent(name.clone()))
     );
     assert_eq!(
         update_of(Event::Gone(name.clone())),
-        Update::SidecarGone(name.clone())
+        Some(Update::SidecarGone(name.clone()))
+    );
+    assert_eq!(
+        update_of(Event::Exited(name.clone())),
+        None,
+        "an exit before a restart is nothing to the model"
     );
 
     let mut body = Box::new(Samples::ZERO);
     body.chart_count = 2;
     assert_eq!(
-        update_of(Event::Frame {
+        mapped(Event::Frame {
             sidecar: name.clone(),
             frame: Frame::Samples(body.clone()),
         }),
@@ -63,7 +73,7 @@ fn a_pipes_events_become_the_models_updates() {
         panic!("a rows builder builds a rows frame");
     };
     assert_eq!(
-        update_of(Event::Frame {
+        mapped(Event::Frame {
             sidecar: name.clone(),
             frame: Frame::Rows(rows.clone()),
         }),
@@ -79,7 +89,7 @@ fn a_pipes_events_become_the_models_updates() {
         flags: 0,
     });
     assert_eq!(
-        update_of(Event::Frame {
+        mapped(Event::Frame {
             sidecar: name.clone(),
             frame: hello.clone(),
         }),

@@ -4548,7 +4548,7 @@ print(' '.join(str(round(b[i] + (d[i] - b[i]) * k)) for i in range(3)))" 2>/dev/
     # before (the shots are a quarter or more of the dim apart, and a solid
     # picture's mean has no noise). DIM_DARKEN 0 is
     # the windows simply going: then nothing here moves at all.
-    step=$(python3 -c "print(max(0, round(0.12 * float('${darken:-0}') * (${before[2]:-0} - ${want[2]:-0}))))")
+    step=$(python3 -c "print(max(0, round(0.12 * (${before[2]:-0} - ${want[2]:-0}))))")
     if [[ "$step" -gt 0 ]] && ((early[2] > middle[2] + step && middle[2] > late[2] + step)); then
         pass "the output darkens across the dim: blue ${before[2]}, then ${early[2]}, ${middle[2]}, ${late[2]} (steps over $step)"
     elif [[ "$step" -eq 0 ]] && within "${early[2]}" "${before[2]}" 6 && within "${late[2]}" "${before[2]}" 6; then

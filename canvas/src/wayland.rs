@@ -724,6 +724,15 @@ impl Canvas {
 
     // -- the sidecars ------------------------------------------------------
 
+    /// A dim without its owner is undone: a sidecar that exits mid-dim, by a
+    /// crash or a kill, never leaves a dark screen.
+    fn dim_owner_gone(&mut self, name: &str) {
+        if let Some(dim) = self.dims.gone(name) {
+            tracing::info!("sidecar {name}: gone mid-dim; dim {} goes with it", dim.id);
+            self.end_dim();
+        }
+    }
+
     /// One event from a sidecar's pipe.
     pub fn apply_event(&mut self, event: Event) {
         match event {
@@ -736,13 +745,12 @@ impl Canvas {
                 {
                     tracing::info!("sidecar {name}: gone; {:?} was never shown", image.key);
                 }
-                // A dim without its owner is undone: a crashed sidecar never
-                // leaves a dark screen.
-                if let Some(dim) = self.dims.gone(&name) {
-                    tracing::info!("sidecar {name}: gone mid-dim; dim {} goes with it", dim.id);
-                    self.end_dim();
-                }
+                self.dim_owner_gone(&name);
             }
+            // An ordinary exit, before the restart: the picture stays (it is
+            // the host's), a waiting image stays for the show that may still
+            // come, and the dim goes.
+            Event::Exited(name) => self.dim_owner_gone(&name),
             Event::Frame { sidecar, frame } => self.apply_frame(&sidecar, frame),
         }
     }

@@ -80,17 +80,23 @@ pub fn commands() -> Vec<String> {
 /// this build's contract.
 pub fn start(command: &str, updates: Updates) -> Pipe {
     Pipe::start(command, abi::ABI_HASH, move |event| {
-        updates.send(update_of(event)).is_ok()
+        match update_of(event) {
+            Some(update) => updates.send(update).is_ok(),
+            None => true,
+        }
     })
 }
 
 /// What a pipe's event is to the model: an absence is a witness, a gone
 /// sidecar takes its state with it, and a frame is a samples body, a rows
-/// body, or an answer the embassy copies where it goes (`wayland.rs`).
-pub fn update_of(event: Event) -> Update {
-    match event {
+/// body, or an answer the embassy copies where it goes (`wayland.rs`). An
+/// exit before a restart is nothing to the bar: the pipe has said so in the
+/// journal, and the rows and samples stay until the successor replaces them.
+pub fn update_of(event: Event) -> Option<Update> {
+    Some(match event {
         Event::Absent(name) => Update::Absent(name),
         Event::Gone(name) => Update::SidecarGone(name),
+        Event::Exited(_) => return None,
         Event::Frame {
             sidecar,
             frame: Frame::Samples(body),
@@ -100,7 +106,7 @@ pub fn update_of(event: Event) -> Update {
             frame: Frame::Rows(rows),
         } => Update::Rows { sidecar, rows },
         Event::Frame { sidecar, frame } => Update::Frame { sidecar, frame },
-    }
+    })
 }
 
 #[cfg(test)]

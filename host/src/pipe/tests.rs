@@ -61,13 +61,28 @@ fn player(name: &str, script: &str) -> String {
     path.to_string_lossy().into_owned()
 }
 
-/// Collect events until `want` of them arrive or the deadline passes.
+/// Collect events until `want` of them arrive or the deadline passes. The
+/// exits a restarting child makes are left out: every test below is about
+/// frames and absences, and `an_exit_is_said_before_each_restart` is the one
+/// about exits.
 fn collect(rx: &Receiver<Event>, want: usize, secs: u64) -> Vec<Event> {
+    collect_where(rx, want, secs, |event| !matches!(event, Event::Exited(_)))
+}
+
+/// `collect`, keeping only the events `keep` says.
+fn collect_where(
+    rx: &Receiver<Event>,
+    want: usize,
+    secs: u64,
+    keep: impl Fn(&Event) -> bool,
+) -> Vec<Event> {
     let deadline = std::time::Instant::now() + Duration::from_secs(secs);
     let mut seen = Vec::new();
     while seen.len() < want && std::time::Instant::now() < deadline {
         while let Ok(update) = rx.try_recv() {
-            seen.push(update);
+            if keep(&update) {
+                seen.push(update);
+            }
         }
         if seen.len() < want {
             thread::sleep(Duration::from_millis(10));
@@ -416,6 +431,26 @@ fn the_stats_follow_the_child() {
     );
     assert!(!pipe.stats().absent());
     drop(pipe);
+}
+
+/// Every exit of a child is one [`Event::Exited`], before its restart: a
+/// child that delivers one frame and leaves, twice over, is two exits named
+/// for the sidecar (docs/canvas.md, *Failure model*: what only that child
+/// could finish is over, what it published stays).
+#[test]
+fn an_exit_is_said_before_each_restart() {
+    let bytes = samples(1, 1.0);
+    let path = stream("exits.bin", &bytes);
+    let (pipe, rx) = start(&player("exits.sh", &format!("cat {}", path.display())));
+    let exits = collect_where(&rx, 2, 6, |event| matches!(event, Event::Exited(_)));
+    drop(pipe);
+    assert!(exits.len() >= 2, "two children, two exits: {exits:?}");
+    assert!(
+        exits
+            .iter()
+            .all(|event| matches!(event, Event::Exited(name) if name == "exits")),
+        "{exits:?}"
+    );
 }
 
 /// An absent sidecar says so through the stats too, which is what the

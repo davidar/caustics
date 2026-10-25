@@ -146,6 +146,13 @@ pub enum Event {
     /// Whatever this sidecar had put on the host is not true any more: the
     /// one absence with state behind it.
     Gone(String),
+    /// The child exited, or was killed, and the supervisor will start it
+    /// again with backoff: sent on **every** exit, a refusal's included (where
+    /// [`Event::Gone`] follows). What the sidecar *published* stays, as a
+    /// restart's predecessor's rows do; what it was *in the middle of asking
+    /// for* and only it could finish is over, which is how the canvas undoes
+    /// a dim whose owner died (docs/canvas.md, *Failure model*).
+    Exited(String),
     /// One frame from a greeted child, whole and unread: everything but a
     /// `Hello`, an `Action`, a `Request` and a skipped kind.
     Frame { sidecar: String, frame: Frame },
@@ -598,6 +605,7 @@ fn supervise(
         if let Ok(mut guard) = stdin_slot.lock() {
             guard.take();
         }
+        sink(Event::Exited(name.clone()));
 
         // A sidecar from another tree (docs/abi.md, *Hello*). **Killed, not asked**: it has
         // already written a frame this bar will not read, and whether it
