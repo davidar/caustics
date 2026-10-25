@@ -158,9 +158,9 @@ pub const JXL_DECODER_BYTES: usize = 512 << 20;
 
 /// How many rows of a lossy (VarDCT) JPEG XL are rendered at a time. The
 /// decoder renders a region of interest from the groups under it, so a band
-/// costs its own rows in floats rather than the whole picture's: a 6300×2700
-/// lossy picture rendered whole peaks near 480 MB, in bands of 512 rows near
-/// 280 MB, for a quarter more time. A multiple of the format's 256-pixel
+/// costs its own rows in floats rather than the whole picture's: decoding a
+/// 6300×2700 lossy picture rendered whole, this process peaked near 480 MB,
+/// in bands of 512 rows near 280 MB, for a quarter more time. A multiple of the format's 256-pixel
 /// group, so that few groups are decoded twice. A Modular (lossless)
 /// picture is rendered whole: its transforms span the frame, so every band
 /// would decode it again, and its buffers are already the picture's size in
@@ -171,8 +171,8 @@ pub const JXL_BAND_ROWS: u32 = 512;
 /// straight RGBA8 in sRGB.
 ///
 /// The header is read first, from the leading bytes alone, so that the size
-/// is checked before any pixel is decoded; the decoder's own allocations are
-/// bounded by [`JXL_DECODER_BYTES`] besides. The pixels are then rendered,
+/// is checked before the decoder is given the rest of the file; the
+/// decoder's own allocations are bounded by [`JXL_DECODER_BYTES`] besides. The pixels are then rendered,
 /// in bands of [`JXL_BAND_ROWS`] when the frame is lossy, and written
 /// straight into the RGBA.
 ///
