@@ -34,8 +34,8 @@ public static const uint FIT_CONTAIN = 1u;
 // ---------------------------------------------------------------------------
 
 /// What the canvas is before any picture has arrived, what a first picture
-/// fades in from, what a transparent picture is laid over, and the colour of
-/// the dim the overlay lays over every window (at the dim's alpha).
+/// fades in from, what a transparent picture is laid over, and what the
+/// dim's wallpaper is darkened towards (`DIM_DARKEN`).
 public static const float3 DIM_COLOUR = float3(0.07, 0.08, 0.10);
 
 /// The shape of a cross-fade between two pictures.
@@ -43,3 +43,11 @@ public static const uint FADE_CURVE = FADE_SMOOTH;
 
 /// How a picture whose shape is not the output's is laid on it.
 public static const uint FIT = FIT_COVER;
+
+/// How far the dim's wallpaper is darkened towards `DIM_COLOUR` when the dim
+/// is all the way in, 0..1. A dim dissolves the windows into the wallpaper;
+/// this is how much darker that wallpaper is than the background's. 0 is the
+/// windows simply going away, the desktop's picture left as it is; more
+/// reads as a screen gone to sleep, and gives a prompt drawn over the dim a
+/// quieter backdrop to be legible on.
+public static const float DIM_DARKEN = 0.3;

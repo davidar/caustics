@@ -65,8 +65,13 @@ its wallpapers in; the sidecar knows each by its first bytes, whatever the
 file is called; one it cannot decode is an `error` reply with the decoder's
 reason.
 
-A dim is drawn on an overlay over every window, the bar included, and any
-input ends it: the pointer moving, a button, a scroll, a touch, a key. It
+A dim is drawn on an overlay over every window, the bar included: the
+wallpaper itself, at the dim's alpha, so the windows dissolve and the
+desktop's picture is what remains. `DIM_DARKEN` in the tunables is how much
+darker than the background that picture is at full dim (0.3 shipped);
+**0 is the windows-dissolve look**, the wallpaper exactly as it is. The
+`dim` alpha is how far the windows have gone, not the darkening. Any
+input ends a dim: the pointer moving, a button, a scroll, a touch, a key. It
 goes on an `undim` too, and with the sidecar if that dies. A dim that has
 reached its depth stays there until one of those. `status` begins with
 `dim=none`, `dim=dimming progress=0.42` or `dim=dimmed`.

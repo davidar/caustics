@@ -163,9 +163,9 @@ is up. It is three files, all named `canvas*`, and imports nothing above:
 
 | file | what it is |
 |---|---|
-| `canvas.slang` | the two entry points (`canvas_apply`, once per frame: the fade's alpha and the dim's from the last show, the last dim and the time, the witnesses, `wants_redraw` for the surface drawn and whether the dim is at its depth; `canvas_draw`, over one surface by `params.target`: on the background the two source pictures at that alpha, opaque; on the overlay the dim colour at the dim's alpha, premultiplied) |
+| `canvas.slang` | the two entry points (`canvas_apply`, once per frame: the fade's alpha and the dim's from the last show, the last dim and the time, the witnesses, `wants_redraw` for the surface drawn and whether the dim is at its depth; `canvas_draw`, over one surface by `params.target`: on the background the two source pictures at that alpha, opaque; on the overlay the same wallpaper, darkened towards the dim colour by `DIM_DARKEN`, at the dim's alpha, premultiplied) |
 | `canvas_state.slang` | the canvas's bindings (`state`, `params`, `facts`, `dst`, `image_a`, `image_b`, `tex_sampler`, `private`), `CanvasPrivate`, the witness ring, the two-word time arithmetic |
-| `canvas_tunables.slang` | **the canvas's configuration**: the dim colour, the fade's curve, how a picture is fitted to an output |
+| `canvas_tunables.slang` | **the canvas's configuration**: the dim colour, how far a dim darkens the wallpaper, the fade's curve, how a picture is fitted to an output |
 
 Its contract is `canvas_abi`, rendered from `bar/abi/src/canvas.rs` as the
 bar's two are rendered (docs/abi.md, *The canvas's buffer*). `caustics-reload`

@@ -59,10 +59,11 @@ from `CLOCK_BOOTTIME`, so a fade lands where the clock says across a
 suspend; hot-reloaded from `caustics/canvas*.slang` like the bar. Its
 sidecar `caustics-wallpaper` owns a control socket, decodes PNG, JPEG and
 JPEG XL and fits them to the largest output; `caustics-canvasctl` is the
-client for scripts. The idle fade replaces chayang: a dim is drawn on an
-overlay per output, over every window and the bar, which takes the pointer
-and the keyboard and is cancelled by any input; the wallpaper underneath
-never darkens. `caustics-canvasctl dim 1 over 10 --wait` exits 0 when the
+client for scripts. The idle fade replaces chayang: a dim is an overlay per
+output, over every window and the bar, that takes the pointer and the
+keyboard and is cancelled by any input. It draws the wallpaper itself at the
+dim's alpha, so the windows dissolve into the desktop's picture, darkened a
+little (`DIM_DARKEN`, 0 for none); the background never darkens. `caustics-canvasctl dim 1 over 10 --wait` exits 0 when the
 dim reached its depth, 2 when input cancelled it and 1 when it could not
 run, so an idle daemon's warning stage can tell the user coming back from a
 fade that ran out. A crashed wallpaper sidecar takes its dim with it. The

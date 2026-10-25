@@ -226,8 +226,9 @@ the background layer. They check its first frame against the tunables' dim
 colour, a shown picture, the midpoint of a four-second fade, a hot reload
 of `canvas_tunables.slang` that the bar does not follow, and a killed
 wallpaper sidecar coming back with the picture unchanged. Then the fade:
-a waited three-second dim whose screenshots darken across its time and
-whose client exits 0 at its depth; a pointer motion and then a key about a
+a waited three-second dim whose screenshots darken across its time (by
+`DIM_DARKEN`, from a shot of the bare wallpaper) and end at the wallpaper
+darkened, and whose client exits 0 at its depth; a pointer motion and then a key about a
 second into a six-second dim, each answered with exit 2 within half a
 second; and the wallpaper sidecar killed mid-dim, after which its waiting
 client exits 1, the overlay is gone and the sidecar restarts. Each of

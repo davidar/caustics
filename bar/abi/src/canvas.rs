@@ -50,8 +50,9 @@ abi_consts! {
 
     /// The background layer: the picture and its cross-fade, opaque.
     pub const TARGET_BACKGROUND: u32 = 0;
-    /// The overlay layer, up only while a dim is: the dim colour at the dim's
-    /// alpha, premultiplied, over everything else on the output.
+    /// The overlay layer, up only while a dim is: the background's own
+    /// wallpaper, darkened by `DIM_DARKEN`, at the dim's alpha,
+    /// premultiplied, over everything else on the output.
     pub const TARGET_OVERLAY: u32 = 1;
 }
 

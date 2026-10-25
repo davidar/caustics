@@ -11,11 +11,16 @@
 //   canvas_draw   8x8    — onto one surface's swapchain image, by
 //                          `params.target`: on the background, the two source
 //                          pictures at that alpha, opaque; on the overlay,
-//                          the dim colour at the dim's alpha, premultiplied.
+//                          the same wallpaper, darkened by `DIM_DARKEN`, at
+//                          the dim's alpha, premultiplied.
 //
 // **One dim, one owner.** The dim is drawn only on the overlay, the layer
 // above every window that the host puts up while a dim is and takes down on
-// an undim or on input; the background never darkens.
+// an undim or on input; the background never darkens. The overlay is the
+// wallpaper again, from the same slots with the same fit and the same
+// cross-fade, so as its alpha rises the windows dissolve and the desktop's
+// picture is what remains; at `DIM_DARKEN` 0 an overlay at full alpha is
+// pixel for pixel the background with no windows.
 //
 // **A fade is between the sources, never a compound of the last frame**
 // (docs/canvas.md, *Time*): alpha is a function of the time alone, so a
@@ -174,23 +179,11 @@ float3 picture(uint slot, float2 p)
     return lerp(DIM_COLOUR, texel.rgb, texel.a);
 }
 
-[shader("compute")]
-[numthreads(8, 8, 1)]
-void canvas_draw(uint3 gid: SV_DispatchThreadID)
+/// The wallpaper at an output pixel: the two source pictures at the fade's
+/// alpha, or the dim colour before any. What the background is, and what the
+/// overlay dims to.
+float3 wallpaper(float2 p)
 {
-    if (gid.x >= params.width || gid.y >= params.height)
-    {
-        return;
-    }
-    if (params.target == TARGET_OVERLAY)
-    {
-        // The dim colour at the dim's alpha, premultiplied: transparent where
-        // the alpha is 0, so a dim on its way in shows what is under it.
-        float d = saturate(private[0].dim);
-        dst.Store(gid.xy, float4(DIM_COLOUR * d, d));
-        return;
-    }
-    float2 p = float2(gid.xy) + 0.5;
     CanvasFacts f = facts[0];
     float3 colour = DIM_COLOUR;
     if (f.to_slot != NO_INDEX)
@@ -205,6 +198,28 @@ void canvas_draw(uint3 gid: SV_DispatchThreadID)
         {
             colour = lerp(DIM_COLOUR, to, a);
         }
+    }
+    return colour;
+}
+
+[shader("compute")]
+[numthreads(8, 8, 1)]
+void canvas_draw(uint3 gid: SV_DispatchThreadID)
+{
+    if (gid.x >= params.width || gid.y >= params.height)
+    {
+        return;
+    }
+    float3 colour = wallpaper(float2(gid.xy) + 0.5);
+    if (params.target == TARGET_OVERLAY)
+    {
+        // The wallpaper, darkened, at the dim's alpha, premultiplied:
+        // transparent where the alpha is 0, so a dim on its way in shows
+        // the windows under it.
+        float d = saturate(private[0].dim);
+        float3 dimmed = lerp(colour, DIM_COLOUR, saturate(DIM_DARKEN));
+        dst.Store(gid.xy, float4(dimmed * d, d));
+        return;
     }
     // Opaque: the background layer is the bottom of the output.
     dst.Store(gid.xy, float4(colour, 1.0));

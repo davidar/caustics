@@ -123,7 +123,12 @@ neither can be added later.
   takes the pointer and the keyboard, as chayang's does, so that any input
   cancels the fade: the pointer moving (arriving under a pointer at rest is
   not moving, and the cursor is hidden there), a button, a scroll, a touch,
-  any key. Only the fact of a key is read; there is no keymap.
+  any key. Only the fact of a key is read; there is no keymap. What it
+  draws is the wallpaper again, the background's own picture at the same
+  fit and cross-fade, at the dim's alpha: the windows dissolve and the
+  desktop's picture is what remains, darkened towards the dim colour by
+  `DIM_DARKEN` in `canvas_tunables.slang` (0 leaves it as it is). The
+  dim's alpha is how far the windows have gone, not the darkening.
 - **Top**, with exclusive keyboard interactivity: the polkit prompt's
   panel, over the dimmed wallpaper the host already holds.
 - **`ext-session-lock-v1`**: `lock`, then one lock surface per output, each

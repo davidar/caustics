@@ -385,9 +385,32 @@ fn dimming(start: u64, duration: u32, alpha_milli: u32, id: u32) -> Gpu {
     gpu
 }
 
+/// A tunable's value as `canvas_tunables.slang` spells it: the floats inside
+/// a `float3(…)`, or the one float.
+fn tunable(name: &str) -> Vec<f32> {
+    let text = std::fs::read_to_string(caustics_dir().join("canvas_tunables.slang"))
+        .expect("the tunables are readable");
+    let line = text
+        .lines()
+        .find(|line| line.contains(&format!(" {name} = ")))
+        .unwrap_or_else(|| panic!("no tunable {name}"));
+    let value = line
+        .split_once(" = ")
+        .expect("an assignment")
+        .1
+        .trim_end_matches(';')
+        .trim_start_matches("float3(")
+        .trim_end_matches(')');
+    value
+        .split(',')
+        .map(|word| word.trim().parse().expect("a float"))
+        .collect()
+}
+
 /// `dim_now` on the overlay: nothing at the start, half the depth at the
 /// midpoint of the time, the depth after it, and premultiplied, so its
-/// colour is never more than its alpha. The overlay asks for frames while
+/// colour is never more than its alpha. At its depth the overlay is the
+/// background's own picture, darkened towards `DIM_COLOUR` by `DIM_DARKEN`. The overlay asks for frames while
 /// its alpha moves and stops when it is there, and the state says when.
 #[test]
 fn the_overlay_dims_to_its_depth_over_its_time() {
@@ -414,7 +437,15 @@ fn the_overlay_dims_to_its_depth_over_its_time() {
     assert_eq!(gpu.mirror().dim_reached, 0);
 
     let (stamp, end) = frame_on(&mut gpu, 15_000, TARGET_OVERLAY);
-    assert_eq!(end[3], 255, "at its depth, all dim colour: {end:?}");
+    assert_eq!(end[3], 255, "at its depth, opaque: {end:?}");
+    let (dim, darken) = (tunable("DIM_COLOUR"), tunable("DIM_DARKEN")[0]);
+    for (channel, picture) in [1.0f32, 0.0, 0.0].into_iter().enumerate() {
+        let want = (picture + (dim[channel] - picture) * darken) * 255.0;
+        assert!(
+            (f32::from(end[channel]) - want).abs() <= 1.5,
+            "channel {channel}: {end:?}, want {want:.1} (the red picture, darkened by {darken})"
+        );
+    }
     assert!(close(private_f32(&gpu, "dim"), 1.0));
     assert_eq!(
         gpu.mirror().wants_redraw,

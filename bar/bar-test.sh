@@ -4492,12 +4492,24 @@ canvas_undimmed() { # canvas_undimmed <shot name> <what>
     fi
 }
 
-say "32. a waited dim darkens the output over its time, and its client exits 0"
+say "32. a waited dim dissolves into the wallpaper over its time, and its client exits 0"
 if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    # The overlay draws the background's own picture, darkened towards
+    # DIM_COLOUR by DIM_DARKEN, at the dim's alpha (docs/canvas.md, *Surfaces*):
+    # at its depth the rectangle is the bare wallpaper's, darkened, whatever
+    # was over it. The bar is outside CANVAS_RECT, and covered too.
     dim=$(sed -n 's/^public static const float3 DIM_COLOUR = float3(\(.*\));.*/\1/p' \
         "$REPO/caustics/canvas_tunables.slang" | tr -d ' ')
-    want=($(python3 -c "print(' '.join(str(round(float(v) * 255)) for v in '$dim'.split(',')))"))
+    darken=$(sed -n 's/^public static const float DIM_DARKEN = \([0-9.]*\);.*/\1/p' \
+        "$REPO/caustics/canvas_tunables.slang")
     park_pointer
+    shot dim-before.png
+    before=($(canvas_mean dim-before.png))
+    want=($(python3 -c "
+d = [float(v) * 255 for v in '$dim'.split(',')]
+b = [float(v) for v in '${before[*]}'.split()]
+k = float('${darken:-nan}')
+print(' '.join(str(round(b[i] + (d[i] - b[i]) * k)) for i in range(3)))" 2>/dev/null))
     overlays_before=$(canvas_count "overlay surface configured")
     reached_before=$(canvas_count "reached 1000/1000")
     dim_t0=$(now_us)
@@ -4508,8 +4520,8 @@ if [[ "$CANVAS_RUN" -eq 1 ]]; then
         fail "no overlay surface within 10 s of a dim"
     fi
     shot_capture dim-early.png
-    canvas_wait_dim 0.45 10 && shot_capture dim-middle.png
-    canvas_wait_dim 0.8 10 && shot_capture dim-late.png
+    canvas_wait_dim 0.55 10 && shot_capture dim-middle.png
+    canvas_wait_dim 0.9 10 && shot_capture dim-late.png
     canvas_exit_within .dim-done 8000
     code=$CANVAS_EXIT_CODE
     took=$((($(now_us) - dim_t0) / 1000))
@@ -4530,17 +4542,25 @@ if [[ "$CANVAS_RUN" -eq 1 ]]; then
     early=($(canvas_mean dim-early.png))
     middle=($(canvas_mean dim-middle.png))
     late=($(canvas_mean dim-late.png))
-    if ((early[2] > middle[2] + 20 && middle[2] > late[2] + 20)); then
-        pass "the output darkens across the dim: blue ${early[2]}, then ${middle[2]}, then ${late[2]}"
+    # With nothing over the wallpaper here, what moves is the darkening: each
+    # shot is at least an eighth of the whole darkening's blue below the one
+    # before (the shots are a quarter or more of the dim apart, and a solid
+    # picture's mean has no noise). DIM_DARKEN 0 is
+    # the windows simply going: then nothing here moves at all.
+    step=$(python3 -c "print(max(0, round(0.12 * float('${darken:-0}') * (${before[2]:-0} - ${want[2]:-0}))))")
+    if [[ "$step" -gt 0 ]] && ((early[2] > middle[2] + step && middle[2] > late[2] + step)); then
+        pass "the output darkens across the dim: blue ${before[2]}, then ${early[2]}, ${middle[2]}, ${late[2]} (steps over $step)"
+    elif [[ "$step" -eq 0 ]] && within "${early[2]}" "${before[2]}" 6 && within "${late[2]}" "${before[2]}" 6; then
+        pass "DIM_DARKEN is 0: the bare wallpaper stays as it is across the dim (blue ${early[2]}, ${late[2]})"
     else
-        fail "the output does not darken across the dim: ${early[*]} | ${middle[*]} | ${late[*]}"
+        fail "the output does not darken across the dim as DIM_DARKEN $darken says: ${early[*]} | ${middle[*]} | ${late[*]}"
     fi
     deep=($(canvas_mean dim-deep.png))
     if [[ ${#want[@]} -eq 3 ]] && within "${deep[0]}" "${want[0]}" 6 &&
         within "${deep[1]}" "${want[1]}" 6 && within "${deep[2]}" "${want[2]}" 6; then
-        pass "at its depth the output is the dim colour: mean ${deep[*]}, DIM_COLOUR ${want[*]}"
+        pass "at its depth the output is the wallpaper darkened by $darken: mean ${deep[*]}, from ${before[*]}, want ${want[*]}"
     else
-        fail "at its depth the output is ${deep[*]}, not the dim colour ${want[*]:-?}"
+        fail "at its depth the output is ${deep[*]}, not the wallpaper ${before[*]} darkened by ${darken:-?} (${want[*]:-?})"
     fi
     status=$(canvasctl status 2>&1)
     assert_contains "a completed dim stays at its depth" "$status" "dim=dimmed"

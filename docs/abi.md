@@ -698,8 +698,10 @@ event*). `wants_redraw` is the host's only reason to draw a frame that no
 event asked for, and it is the drawn surface's own: the background's while
 its fade runs, the overlay's while its alpha moves. `canvas_draw` reads
 `params.target`: on the background, the pictures, opaque, and no dim; on
-the overlay, `DIM_COLOUR` at the dim's alpha, premultiplied, transparent
-where the alpha is 0. `CANVAS_ENTRIES` (`bar/abi/src/entries.rs`) are
+the overlay, the same wallpaper from the same slots, fit and cross-fade,
+darkened towards `DIM_COLOUR` by the tunable `DIM_DARKEN`, at the dim's
+alpha, premultiplied: transparent where the alpha is 0, and at alpha 1 with
+`DIM_DARKEN` 0 pixel for pixel the background. `CANVAS_ENTRIES` (`bar/abi/src/entries.rs`) are
 `canvas_apply`, once per frame, and `canvas_draw` over the surface drawn.
 
 ## The wire
