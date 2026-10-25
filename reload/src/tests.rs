@@ -637,3 +637,43 @@ fn each_caustic_watches_its_own_modules_and_no_other() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+/// The shipped tree has both caustics in it, and the canvas's entry file is
+/// one of its own modules' list like the bar's is of its.
+#[test]
+fn the_shipped_tree_has_both_caustics() {
+    let dir = caustics_dir();
+    let canvas = watched(&dir, &CANVAS);
+    assert_eq!(canvas.first().map(String::as_str), Some("canvas.slang"));
+    assert!(canvas.iter().any(|name| name == CANVAS.tunables));
+    assert!(dir.join(CANVAS.entry).is_file());
+    assert!(
+        !watched(&dir, &BAR)
+            .iter()
+            .any(|name| name.starts_with("canvas"))
+    );
+}
+
+/// The canvas's caustic compiles where it stands, both entry points at once,
+/// for both formats, and its literals ride the reflection as the bar's do.
+#[test]
+fn the_shipped_canvas_compiles_for_both_formats() {
+    let dir = caustics_dir();
+    let scratch = temp_dir("canvas");
+    for format in DstFormat::ALL {
+        let tools = Toolchain::with(recording, Some(scratch.join("cache")));
+        let program = compile(&tools, &dir, &CANVAS, format.define(), 1)
+            .expect("the shipped canvas compiles");
+        let names: Vec<&str> = program.modules.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, CANVAS_ENTRIES);
+        let reflection = punchcutter_slang::Reflection::from_json(&program.modules[0].reflection)
+            .expect("the reflection reads");
+        assert!(
+            reflection
+                .strings
+                .values()
+                .any(|text| text.contains("midpoint")),
+            "the fade's witnesses are in the reflection's literals"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&scratch);
+}

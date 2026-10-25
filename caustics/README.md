@@ -1,6 +1,6 @@
 # caustics
 
-The bar's GPU programs, in [Slang](https://shader-slang.org/). A **caustic**
+The bar's GPU programs, and the canvas's, in [Slang](https://shader-slang.org/). A **caustic**
 is a compute program that holds policy: here, everything the bar draws and
 every decision about what it draws (docs/architecture.md, *The caustic*). The
 programs are compiled to SPIR-V by Slang, in process through the text
@@ -154,10 +154,43 @@ the shipped default, or `EDGE_BOTTOM`) and `BAR_HEIGHT`. Everything else
 (colours, sizes, the wings' contents and order, the dock menu's rows, the
 clock's words, the springs, the shape watchdog) is read by the caustic alone.
 
+## The canvas
+
+The directory holds a second caustic: the canvas's (docs/canvas.md), which
+draws the wallpaper on every output and cross-fades between two pictures. It
+is three files, all named `canvas*`, and imports nothing above:
+
+| file | what it is |
+|---|---|
+| `canvas.slang` | the two entry points (`canvas_apply`, once per frame: the fade's alpha and the dim from the last show, the last dim and the time, and the witnesses; `canvas_draw`, over one output: the two source pictures at that alpha, the dim over them) |
+| `canvas_state.slang` | the canvas's bindings (`state`, `params`, `facts`, `dst`, `image_a`, `image_b`, `tex_sampler`, `private`), `CanvasPrivate`, the witness ring, the two-word time arithmetic |
+| `canvas_tunables.slang` | **the canvas's configuration**: the dim colour, the fade's curve, how a picture is fitted to an output |
+
+Its contract is `canvas_abi`, rendered from `bar/abi/src/canvas.rs` as the
+bar's two are rendered (docs/abi.md, *The canvas's buffer*). `caustics-reload`
+compiles it when the canvas host asks for its program, and watches only the
+`canvas*` files for it; the bar's caustic is every other file, so a save of one
+never recompiles the other.
+
+**Why it shares no module with the bar.** Every `bar_*` module, the paint
+rules in `bar_paint` included, imports `bar_state`, which declares the bar's
+bindings; a module that imports it binds the bar's whole descriptor set. So
+the canvas carries its own small paint (one sample and one blend a pixel,
+in `canvas.slang`). A paint module both could share would have to be
+**binding-free**: functions of their arguments alone (colours, coverage, a
+rounded rect's distance, the premultiplied rules), with every buffer and
+texture passed in as a parameter, the way the text engine's `shape` takes its
+tables as handles, and with its constants either passed in or read from a
+tunables module both import. The bar's `bar_paint` is not that today: its
+functions read `params`, `private` and `images` as globals. Splitting it is a
+refactor of the bar, and is worth doing when the canvas first draws something
+the bar already draws (a panel, text, an icon), which the prompt will.
+
 ## Hot reload
 
-`caustics-reload` watches this directory: every `*.slang` in it, the
-tunables among them, listed when the sidecar starts (a module added later is
+`caustics-reload` watches this directory: every `*.slang` file of the caustic
+its host asked for (the bar's, or the canvas's `canvas*` files), the tunables
+among them, listed when the host's program arrives (a module added later is
 compiled, because the module that imports it changed, but is not watched
 until the sidecar restarts). `bar/build.rs` and the harness's copy into a
 guest take the same list. The text engine's modules are not watched: an engine change is a dependency bump and a
