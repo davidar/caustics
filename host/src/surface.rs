@@ -173,8 +173,13 @@ pub struct Surface {
     /// because the passes bind its `params` and its `ids` like any other.
     pub surface: Option<wgpu::Surface<'static>>,
     pub config: wgpu::SurfaceConfiguration,
-    /// The target's visibility buffer ([`create_id_texture`]).
-    pub ids: wgpu::TextureView,
+    /// The target's visibility buffer ([`create_id_texture`]), or `None` for
+    /// a host whose caustic binds none (the canvas): an output-sized
+    /// `R32Uint` is 4 MB at 1080p and 33 MB at 4K, per target.
+    pub ids: Option<wgpu::TextureView>,
+    /// The ids texture's debug label, kept for the resize that remakes it;
+    /// `None` when there is none.
+    ids_label: Option<String>,
     /// The target's own uniform, of the size the host asked for.
     pub params: wgpu::Buffer,
     /// Has a suboptimal acquire already been answered with a reconfigure
@@ -184,8 +189,8 @@ pub struct Surface {
 
 impl Surface {
     /// Configure `surface` (when there is one) at `width` × `height` for
-    /// storage writes, and make the target's ids texture and its `params`
-    /// uniform of `params_size` bytes.
+    /// storage writes, and make the target's `params` uniform of
+    /// `params_size` bytes and, when `ids_label` names one, its ids texture.
     #[allow(clippy::too_many_arguments)]
     pub fn configure(
         device: &wgpu::Device,
@@ -193,7 +198,7 @@ impl Surface {
         presentation: &Presentation,
         width: u32,
         height: u32,
-        ids_label: &str,
+        ids_label: Option<&str>,
         params_label: &str,
         params_size: u64,
     ) -> Surface {
@@ -214,7 +219,9 @@ impl Surface {
         Surface {
             surface,
             refit: false,
-            ids: create_id_texture(device, ids_label, config.width, config.height),
+            ids: ids_label
+                .map(|label| create_id_texture(device, label, config.width, config.height)),
+            ids_label: ids_label.map(str::to_owned),
             params: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(params_label),
                 size: params_size,
@@ -230,15 +237,10 @@ impl Surface {
         (self.config.width, self.config.height)
     }
 
-    /// Resize the swapchain (and its ids texture) after a configure. Returns
-    /// whether anything changed: the same size is no reconfigure.
-    pub fn resize(
-        &mut self,
-        device: &wgpu::Device,
-        width: u32,
-        height: u32,
-        ids_label: &str,
-    ) -> bool {
+    /// Resize the swapchain (and its ids texture, if it has one) after a
+    /// configure. Returns whether anything changed: the same size is no
+    /// reconfigure.
+    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) -> bool {
         if (self.config.width, self.config.height) == (width.max(1), height.max(1)) {
             return false;
         }
@@ -249,7 +251,14 @@ impl Surface {
         }
         // A new configuration; the next suboptimal acquire deserves an answer.
         self.refit = false;
-        self.ids = create_id_texture(device, ids_label, self.config.width, self.config.height);
+        if let Some(label) = &self.ids_label {
+            self.ids = Some(create_id_texture(
+                device,
+                label,
+                self.config.width,
+                self.config.height,
+            ));
+        }
         true
     }
 

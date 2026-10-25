@@ -758,7 +758,7 @@ impl Gpu {
 
     /// Resize the bar's swapchain (and its ids texture) after a configure.
     pub fn resize_bar(&mut self, width: u32, height: u32) {
-        self.bar.resize(&self.device, width, height, IDS_LABEL);
+        self.bar.resize(&self.device, width, height);
     }
 
     /// Attach the popup's `wl_surface` as the second target.
@@ -803,7 +803,7 @@ impl Gpu {
         let Some(popup) = self.popup.as_mut() else {
             return false;
         };
-        popup.resize(&self.device, width, height, IDS_LABEL)
+        popup.resize(&self.device, width, height)
     }
 
     /// Drop the popup's swapchain. Must happen before the `xdg_popup` and its
@@ -1644,7 +1644,12 @@ impl Gpu {
                 "commands" => self.commands.as_entire_binding(),
                 "inputs" => self.inputs.as_entire_binding(),
                 "params" => target.params.as_entire_binding(),
-                "ids" => wgpu::BindingResource::TextureView(&target.ids),
+                "ids" => wgpu::BindingResource::TextureView(
+                    target
+                        .ids
+                        .as_ref()
+                        .expect("every bar target allocates its ids texture"),
+                ),
                 "dst" => wgpu::BindingResource::TextureView(dst),
                 "images" => wgpu::BindingResource::TextureView(&self.images_view),
                 "tex_sampler" => wgpu::BindingResource::Sampler(&self.tex_sampler),
@@ -2016,7 +2021,7 @@ fn configure_surface(
         presentation,
         width,
         height,
-        IDS_LABEL,
+        Some(IDS_LABEL),
         target.label(),
         size_of::<Params>() as u64,
     )

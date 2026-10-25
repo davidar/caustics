@@ -72,9 +72,8 @@ const SPV_BGRA8UNORM: BakedSpv = [
 /// The image slots' texel format: straight RGBA8, as the wire carries it.
 const IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
-/// The debug labels of each output's ids texture (the host's surface makes
-/// one; the canvas binds none) and its uniform.
-const IDS_LABEL: &str = "caustics-canvas-ids";
+/// The debug label of each surface's uniform. The canvas binds no ids
+/// texture, so its surfaces make none.
 const PARAMS_LABEL: &str = "caustics-canvas-params";
 
 /// One image slot: the texture view the caustic samples. Its size is the
@@ -304,7 +303,7 @@ impl Gpu {
             &self.presentation,
             width,
             height,
-            IDS_LABEL,
+            None,
             PARAMS_LABEL,
             size_of::<CanvasParams>() as u64,
         )
@@ -312,7 +311,7 @@ impl Gpu {
 
     /// Resize an output's swapchain after a configure or a scale change.
     pub fn resize(&self, target: &mut Surface, width: u32, height: u32) -> bool {
-        target.resize(&self.device, width, height, IDS_LABEL)
+        target.resize(&self.device, width, height)
     }
 
     /// What the host knows about the picture, written whole.
