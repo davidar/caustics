@@ -4415,6 +4415,228 @@ if [[ "$CANVAS_RUN" -eq 1 ]]; then
     else
         fail "no wallpaper pid that is the canvas's child (pid ${wall_pid:-?}, parent ${parent:-?}, canvas ${canvas_pid:-?})"
     fi
+fi
+
+# --- the fade -----------------------------------------------------------------
+#
+# The dim (docs/canvas.md, *How each job is wired*): an overlay per output over
+# every window and the bar, which any input cancels, and a client that waits
+# on it with chayang's exit codes. Each step dims only inside itself and ends
+# undimmed, with the picture blue as step 31 left it.
+
+# The sidecar's `status` says the dim is at least <fraction> of its way: how a
+# step spaces its screenshots across a dim without sleeping a guess.
+canvas_dim_past() { # canvas_dim_past <fraction>
+    local p
+    p=$(on_target 5 '"$T_BIN/caustics-canvasctl" status' 2>/dev/null |
+        sed -n 's/.*dim=dimming progress=\([0-9.]*\).*/\1/p')
+    [[ -n "$p" ]] && python3 -c "import sys; sys.exit(0 if $p >= $1 else 1)"
+}
+canvas_wait_dim() { # canvas_wait_dim <fraction> <seconds>
+    local deadline=$((SECONDS + $2)) t0
+    t0=$(now_us)
+    until canvas_dim_past "$1"; do
+        ((SECONDS < deadline)) || { wait_charge "$t0" 1 "dim progress $1" "$2"; return 1; }
+        sleep 0.05
+    done
+    wait_charge "$t0" 0
+}
+# A waited dim in the background: its exit status lands in `$SHOTS/<name>`
+# when the client returns.
+canvas_dim_wait() { # canvas_dim_wait <name> <alpha> <seconds>
+    rm -f "${SHOTS:?}/${1:?}"
+    (
+        on_target 60 "\"\$T_BIN/caustics-canvasctl\" dim $2 over $3 --wait" >/dev/null 2>&1
+        echo $? >"$SHOTS/$1.tmp" && mv -f "$SHOTS/$1.tmp" "$SHOTS/$1"
+    ) &
+}
+# Wait at most <ms> milliseconds, polled every 20 ms, for the client to
+# return: its exit status in CANVAS_EXIT_CODE and the milliseconds the wait
+# took in CANVAS_EXIT_MS; 1, and an empty code, when it has not.
+CANVAS_EXIT_CODE=""
+CANVAS_EXIT_MS=0
+canvas_exit_within() { # canvas_exit_within <name> <ms>
+    local t0 deadline
+    t0=$(now_us)
+    deadline=$((t0 + $2 * 1000))
+    CANVAS_EXIT_CODE=""
+    until [[ -s "$SHOTS/$1" ]]; do
+        (($(now_us) < deadline)) || { wait_charge "$t0" 1 "$1 exits" "$(($2 / 1000))"; return 1; }
+        sleep 0.02
+    done
+    wait_charge "$t0" 0
+    CANVAS_EXIT_MS=$((($(now_us) - t0) / 1000))
+    CANVAS_EXIT_CODE=$(<"$SHOTS/$1")
+}
+# The overlay is up on the one output: its surface configured, after <before>
+# lines of it.
+canvas_overlay_up() { # canvas_overlay_up <before>
+    wait_until "the overlay" 10 "canvas_more 'overlay surface configured' $1"
+}
+# As many overlays gone as made.
+canvas_no_overlay() {
+    [[ "$(canvas_count "an overlay surface")" -eq "$(canvas_count "its overlay surface is gone")" ]]
+}
+# No overlay remains, and the picture is blue again.
+canvas_undimmed() { # canvas_undimmed <shot name> <what>
+    local made gone got
+    wait_until "the overlay gone" 10 canvas_no_overlay
+    made=$(canvas_count "an overlay surface")
+    gone=$(canvas_count "its overlay surface is gone")
+    shot "$1"
+    got=($(canvas_mean "$1"))
+    if [[ "$made" -eq "$gone" ]] && ((got[2] >= 240 && got[0] <= 15 && got[1] <= 15)); then
+        pass "$2: no overlay remains ($made made, $gone gone) and the picture is blue again: mean ${got[*]}"
+    else
+        fail "$2: $made overlays made, $gone gone, and the output is ${got[*]}"
+    fi
+}
+
+say "32. a waited dim darkens the output over its time, and its client exits 0"
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    dim=$(sed -n 's/^public static const float3 DIM_COLOUR = float3(\(.*\));.*/\1/p' \
+        "$REPO/caustics/canvas_tunables.slang" | tr -d ' ')
+    want=($(python3 -c "print(' '.join(str(round(float(v) * 255)) for v in '$dim'.split(',')))"))
+    park_pointer
+    overlays_before=$(canvas_count "overlay surface configured")
+    reached_before=$(canvas_count "reached 1000/1000")
+    dim_t0=$(now_us)
+    canvas_dim_wait .dim-done 1 3
+    if canvas_overlay_up "$overlays_before"; then
+        pass "$(canvas_last 'overlay surface configured' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "no overlay surface within 10 s of a dim"
+    fi
+    shot_capture dim-early.png
+    canvas_wait_dim 0.45 10 && shot_capture dim-middle.png
+    canvas_wait_dim 0.8 10 && shot_capture dim-late.png
+    canvas_exit_within .dim-done 8000
+    code=$CANVAS_EXIT_CODE
+    took=$((($(now_us) - dim_t0) / 1000))
+    if [[ "$code" == 0 ]] && ((took <= 3000 + 3000)); then
+        pass "caustics-canvasctl dim 1 over 3 --wait exited 0, $took ms after it was run"
+    else
+        fail "caustics-canvasctl dim 1 over 3 --wait: exit '${code:-none}' after $took ms"
+    fi
+    if canvas_wait_more "reached 1000/1000" 5 "$reached_before"; then
+        pass "$(canvas_last 'reached 1000/1000' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the caustic never said the dim reached its depth"
+    fi
+    shot dim-deep.png
+    for name in dim-early.png dim-middle.png dim-late.png; do
+        [[ -e "$RUN/.shot-raw-$name" ]] && shot_develop "$name"
+    done
+    early=($(canvas_mean dim-early.png))
+    middle=($(canvas_mean dim-middle.png))
+    late=($(canvas_mean dim-late.png))
+    if ((early[2] > middle[2] + 20 && middle[2] > late[2] + 20)); then
+        pass "the output darkens across the dim: blue ${early[2]}, then ${middle[2]}, then ${late[2]}"
+    else
+        fail "the output does not darken across the dim: ${early[*]} | ${middle[*]} | ${late[*]}"
+    fi
+    deep=($(canvas_mean dim-deep.png))
+    if [[ ${#want[@]} -eq 3 ]] && within "${deep[0]}" "${want[0]}" 6 &&
+        within "${deep[1]}" "${want[1]}" 6 && within "${deep[2]}" "${want[2]}" 6; then
+        pass "at its depth the output is the dim colour: mean ${deep[*]}, DIM_COLOUR ${want[*]}"
+    else
+        fail "at its depth the output is ${deep[*]}, not the dim colour ${want[*]:-?}"
+    fi
+    status=$(canvasctl status 2>&1)
+    assert_contains "a completed dim stays at its depth" "$status" "dim=dimmed"
+    canvasctl undim >/dev/null 2>&1 || fail "caustics-canvasctl undim failed"
+    canvas_undimmed dim-undone.png "after the undim"
+fi
+
+say "33. the pointer moving over a dim cancels it, and its client exits 2"
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    pointer_to 640 500
+    overlays_before=$(canvas_count "overlay surface configured")
+    canvas_dim_wait .dim-pointer 1 6
+    canvas_overlay_up "$overlays_before" || fail "no overlay surface within 10 s of a dim"
+    if canvas_wait_dim 0.15 10; then
+        pointer_to 700 540
+        canvas_exit_within .dim-pointer 500
+        code=$CANVAS_EXIT_CODE
+        if [[ "$code" == 2 ]]; then
+            pass "a pointer motion about a second in: the client exited 2, $CANVAS_EXIT_MS ms later"
+        else
+            fail "a pointer motion over the dim: exit '${code:-none}' within 500 ms"
+        fi
+    else
+        fail "the dim never reached 0.15 of its way"
+    fi
+    canvas_exit_within .dim-pointer 8000
+    if canvas_log | jgrep -F "cancelled by the pointer moving"; then
+        pass "$(canvas_last 'cancelled by the pointer moving' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the host never said the pointer cancelled the dim"
+    fi
+    canvas_undimmed dim-pointer-after.png "after the pointer"
+fi
+
+say "34. a key pressed during a dim cancels it, and its client exits 2"
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    overlays_before=$(canvas_count "overlay surface configured")
+    canvas_dim_wait .dim-key 1 6
+    canvas_overlay_up "$overlays_before" || fail "no overlay surface within 10 s of a dim"
+    if canvas_wait_dim 0.15 10; then
+        keys "x"
+        canvas_exit_within .dim-key 500
+        code=$CANVAS_EXIT_CODE
+        if [[ "$code" == 2 ]]; then
+            pass "one key about a second in: the client exited 2, $CANVAS_EXIT_MS ms later"
+        else
+            fail "a key during the dim: exit '${code:-none}' within 500 ms"
+        fi
+    else
+        fail "the dim never reached 0.15 of its way"
+    fi
+    canvas_exit_within .dim-key 8000
+    if canvas_log | jgrep -F "cancelled by a key"; then
+        pass "$(canvas_last 'cancelled by a key' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the host never said a key cancelled the dim"
+    fi
+    canvas_undimmed dim-key-after.png "after the key"
+fi
+
+say "35. a wallpaper sidecar killed mid-dim takes its dim with it, and restarts"
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    canvas_pid=$(canvas_last "set: " | sed -n 's/.*, pid \([0-9]*\)$/\1/p')
+    wall_pid=$(canvas_last "sidecar caustics-wallpaper: started pid=" | grep -oE '[0-9]+$')
+    parent=$(on_target 10 "awk '{print \$4}' /proc/${wall_pid:-0}/stat 2>/dev/null")
+    overlays_before=$(canvas_count "overlay surface configured")
+    canvas_dim_wait .dim-killed 1 6
+    canvas_overlay_up "$overlays_before" || fail "no overlay surface within 10 s of a dim"
+    if [[ -n "$wall_pid" && -n "$canvas_pid" && "$parent" == "$canvas_pid" ]] && canvas_wait_dim 0.3 10; then
+        starts_before=$(canvas_count "sidecar caustics-wallpaper: started pid=")
+        on_target 10 "kill $wall_pid" >/dev/null
+        canvas_exit_within .dim-killed 5000
+        code=$CANVAS_EXIT_CODE
+        if [[ "$code" == 1 ]]; then
+            pass "the waiting client got the socket's end and exited 1, $CANVAS_EXIT_MS ms after the kill"
+        else
+            fail "the waiting client of a killed sidecar: exit '${code:-none}'"
+        fi
+        if wait_until "the dim gone with its sidecar" 10 "canvas_more 'gone mid-dim' 0"; then
+            pass "$(canvas_last 'gone mid-dim' | sed -n 's/.*INFO [a-z_:]*: //p')"
+        else
+            fail "the host never said the dim went with its sidecar"
+        fi
+        canvas_undimmed dim-killed-after.png "after the sidecar died"
+        if wait_until "wallpaper restart" 30 "canvas_more 'sidecar caustics-wallpaper: started pid=' $starts_before"; then
+            pass "$(canvas_last 'sidecar caustics-wallpaper: started pid=' | sed -n 's/.*INFO [a-z_:]*: //p')"
+        else
+            fail "the canvas did not restart caustics-wallpaper within 30 s"
+        fi
+        reply=$(on_target 20 'for i in $(seq 40); do "$T_BIN/caustics-canvasctl" status && break; sleep 0.25; done' 2>&1)
+        assert_contains "the restarted sidecar has no dim" "$reply" "dim=none"
+    else
+        fail "no wallpaper pid that is the canvas's child, or the dim never got under way (pid ${wall_pid:-?}, parent ${parent:-?}, canvas ${canvas_pid:-?})"
+        canvasctl undim >/dev/null 2>&1
+    fi
+    canvas_exit_within .dim-killed 8000
     # Torn down: the host, and with it its sidecars and the socket.
     fixture_stop canvas
     if wait_until "the canvas gone" 20 "! on_target 5 '[ -S \"\$XDG_RUNTIME_DIR/caustics-canvas.sock\" ] || kill -0 ${canvas_pid:-0} 2>/dev/null'"; then
@@ -4425,7 +4647,7 @@ if [[ "$CANVAS_RUN" -eq 1 ]]; then
     niri_msg action focus-workspace-up >/dev/null 2>&1
 fi
 
-say "32. verdict"
+say "36. verdict"
 journal > "$SHOTS/journal-full.txt"
 note "full journal: $SHOTS/journal-full.txt"
 ls -1 "$SHOTS"/*.png 2>/dev/null | while read -r png; do note "$png"; done

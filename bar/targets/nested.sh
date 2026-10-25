@@ -181,17 +181,29 @@ niri_msg() {
 # screendump has none either), turned into what the pixel helpers read: 8-bit
 # RGB, filter 0 on every row, one IDAT.
 shot() {
-    local out="$SHOTS/$1" raw="$RUN/.shot-raw.png" i
+    shot_capture "$1" && shot_develop "$1"
+}
+
+# The two halves of `shot`, for a step that needs several screenshots close
+# together (a three-second dim): niri's capture is quick, the conversion
+# below is seconds of Python, so the captures are taken first and developed
+# after. Nested only; the canvas's steps, the one user, skip on the VM.
+shot_capture() { # shot_capture <name>: niri's own PNG, not yet readable by the helpers
+    local raw="$RUN/.shot-raw-$1" i
     rm -f "$raw"
     if ! niri_msg action screenshot-screen --show-pointer false --path "$raw" >/dev/null 2>&1; then
         fail "screenshot-screen for $1"
-        return
+        return 1
     fi
     # The PNG is written off niri's loop; wait for it to exist and stop growing.
     for i in $(seq 50); do
         [[ -s "$raw" ]] && sleep 0.05 && break
         sleep 0.05
     done
+}
+
+shot_develop() { # shot_develop <name>: the capture as `$SHOTS/<name>`, 8-bit RGB
+    local out="$SHOTS/$1" raw="$RUN/.shot-raw-$1"
     if python3 - "$raw" "$out" <<'PY'
 import struct, sys, zlib
 src, dst = sys.argv[1], sys.argv[2]
@@ -241,6 +253,7 @@ png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 
 open(dst, "wb").write(png)
 PY
     then
+        rm -f "$raw"
         note "screenshot $out"
     else
         fail "screenshot for $1 could not be read"

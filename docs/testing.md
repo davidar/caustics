@@ -210,7 +210,7 @@ nothing in the steps knows which target it is on:
 |---|---|
 | `on_target <deadline> <cmd>` | runs a shell command with the run's environment (and refuses the commands listed above) |
 | `to_target`, `target_kill <pid>` | `cp`; `kill`, but only a pid the run started or one in the bar's process group |
-| `niri_msg …`, `shot <name>` | the nested niri's IPC; `niri msg action screenshot-screen` into the run directory, re-encoded to the 8-bit RGB PNG the pixel helpers read |
+| `niri_msg …`, `shot <name>` | the nested niri's IPC; `niri msg action screenshot-screen` into the run directory, re-encoded to the 8-bit RGB PNG the pixel helpers read. Its two halves, `shot_capture` and `shot_develop`, let a step take several screenshots a fraction of a second apart and re-encode them after (the re-encoding is seconds of Python) |
 | `pointer_to <x> <y>`, `button <down>` | `caustics-pointer` (a small client of `zwlr_virtual_pointer_manager_v1`, in `harness/pointer/`; not a sidecar and never installed) |
 | `keys <text>`, `key <[mod+…]keysym> [press\|release\|tap]` | `caustics-keyboard` (its sibling in `harness/keyboard/`, a client of `zwp_virtual_keyboard_manager_v1`): `keys` types a string into whatever niri has given keyboard focus, a newline as Return; `key` is one named key or chord (`Return`, `Escape`, `ctrl+u`) |
 | `journal`, `mark_journal`, `wait_for_journal*` | the bar's log from the cursor on; `bar_restart` moves a cursor to the new instance's first line, so the old bar's last lines are never read as the new one's |
@@ -219,14 +219,21 @@ nothing in the steps knows which target it is on:
 | `fixture_start/stop`, `client_spawn` | `setsid`, tracked by pid |
 | `T_HOME T_CONFIG T_STATE T_CACHE T_BIN T_CAUSTICS …` | the run's scratch tree, `target/debug`, the copy of `caustics/` |
 
-**The canvas's steps** (27 to 31) run last: the canvas host as a fixture
+**The canvas's steps** (27 to 35) run last: the canvas host as a fixture
 with `CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload"`, its log in
 `$T_HOME/canvas.log`, on an empty workspace so a screenshot below the bar is
 the background layer. They check its first frame against the tunables' dim
 colour, a shown picture, the midpoint of a four-second fade, a hot reload
 of `canvas_tunables.slang` that the bar does not follow, and a killed
-wallpaper sidecar coming back with the picture unchanged, then stop it. The
-canvas's own alpha(t) is tested on a device beside the bar's oracle:
+wallpaper sidecar coming back with the picture unchanged. Then the fade:
+a waited three-second dim whose screenshots darken across its time and
+whose client exits 0 at its depth; a pointer motion and then a key about a
+second into a six-second dim, each answered with exit 2 within half a
+second; and the wallpaper sidecar killed mid-dim, after which its waiting
+client exits 1, the overlay is gone and the sidecar restarts. Each of
+those ends with no overlay left and the picture as it was; the last stops
+the canvas. The canvas's own alpha(t) and its dim's are tested on a device
+beside the bar's oracle:
 `CAUSTICS_CANVAS_ORACLE=1 cargo test -p caustics-canvas -- --test-threads=1`.
 
 ### Adding a step
