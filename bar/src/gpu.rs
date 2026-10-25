@@ -2538,7 +2538,8 @@ fn create_preview(device: &wgpu::Device) -> (wgpu::Texture, wgpu::TextureView) {
 /// `[[vk::binding(n, g)]]` literals in the caustics are the source of truth;
 /// they are read here rather than transcribed into hand-written layout
 /// entries that tests would have to keep in agreement.
-const BAKED_REFLECTION: &str = include_str!(concat!(env!("OUT_DIR"), "/bar.reflection.json"));
+pub(crate) const BAKED_REFLECTION: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/bar.reflection.json"));
 
 /// [`BAKED_REFLECTION`], read once.
 ///

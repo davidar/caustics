@@ -288,6 +288,7 @@ version = "0.1.0"
 dependencies = [
  "caustics-bar-abi",
  "libc",
+ "punchcutter-slang",
  "tracing",
 ]
 

@@ -10,6 +10,11 @@ rust-version.workspace = true
 # The contracts: the wire a sidecar writes and the buffer constants a host
 # sizes its CPU-side tables by. Nothing here declares a layout of its own.
 caustics-bar-abi = { path = "../bar/abi" }
+# The reflection's types and their JSON form, and nothing else: a host reads
+# the reflection baked beside its SPIR-V and the one each reload carries, and
+# never compiles. Without the default `compiler` feature nothing here links
+# Slang.
+punchcutter-slang = { workspace = true, default-features = false }
 # `sysconf` for the `/proc` reader's tick and page sizes.
 libc = "0.2.189"
 tracing = "0.1.44"

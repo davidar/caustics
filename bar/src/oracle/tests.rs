@@ -3,7 +3,7 @@ use super::*;
 use crate::abi::wire::{self, Row, Rows, RowsBuilder, Samples};
 use crate::abi::{Command, FrameInputs};
 use crate::model::{Caffeine, Update, Window};
-use crate::witness;
+use caustics_host::witness;
 
 /// The sidecar the row fixtures come from, and the slot it takes.
 const DEMO: &str = "rows_demo";
@@ -504,7 +504,7 @@ fn the_caustic_builds_a_table_that_holds_together() {
     let sizes = sizes();
     // The literal table the *running* caustic names — this compile's, which is
     // the baked modules plus `bar_check`'s own formats.
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let scenarios = corpus();
     let mut complaints: Vec<String> = Vec::new();
     let started = std::time::Instant::now();
@@ -700,7 +700,7 @@ fn every_glyph_of_an_ascii_bar_comes_out_of_the_font() {
         capped: false,
     };
 
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(Vec::new());
     let mut images = Images::new();
     let (state, bytes) = oracle
@@ -804,7 +804,7 @@ fn a_menu_rows_flag_is_asked_about_from_its_slot() {
     model.apply(window(1, "kitty", "one", true, 1));
     let model = with_rows(model, rows.clone());
 
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let slot = facts.slot_of(DEMO).expect("the demo has a slot");
     let scenario = Scenario {
@@ -946,7 +946,7 @@ fn a_second_flag_draws_after_the_first_opened_its_face() {
     model.apply(window(1, "kitty", "one", true, 1));
     let model = with_rows(model, rows);
 
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let slot = facts.slot_of(DEMO).expect("the demo has a slot");
     let scenario = Scenario {
@@ -1111,7 +1111,7 @@ fn open_menu(oracle: &mut Oracle, base: &FrameInputs, rows: u32) -> (FrameInputs
         level: applet_level(0, 1),
         capped: false,
     };
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let mut images = Images::new();
     oracle
@@ -1401,7 +1401,7 @@ fn a_tray_chip_whose_icon_nothing_answers_wears_its_titles_letter() {
     builder.item(4, Some("42%"), Some(CURVES), -1.0, 0);
     let model = with_rows(fixture(), builder.build());
 
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let slot = facts.slot_of(DEMO).expect("the demo has a slot");
     // What the two sidecars would have said: no curves for the one, a glyph
@@ -1623,7 +1623,7 @@ fn a_chip_that_asks_is_shown_as_a_toast() {
         ..FrameInputs::default()
     };
 
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let slot = facts.slot_of(DEMO).expect("the demo has a slot");
     let mut images = Images::new();
@@ -2008,7 +2008,7 @@ fn a_toast_is_the_rows_it_opened_with() {
         output_size: [1920, 1000],
         ..FrameInputs::default()
     };
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let slot = facts.slot_of(DEMO).expect("the demo has a slot");
     let mut images = Images::new();
@@ -2550,7 +2550,7 @@ fn a_notifications_body_wraps_under_its_summary() {
         output_size: [1920, 1000],
         ..FrameInputs::default()
     };
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let slot = facts.slot_of(DEMO).expect("the demo has a slot");
     let mut images = Images::new();
@@ -3119,7 +3119,7 @@ fn the_clocks_click_opens_this_months_calendar() {
         output_size: [1920, 1000],
         ..FrameInputs::default()
     };
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let mut images = Images::new();
     let scenario = Scenario {
@@ -3286,7 +3286,7 @@ fn the_chart_numbers_compose_every_kind() {
             return;
         }
     };
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
 
     let mut compose = |body: Box<Samples>, level: (u32, u32)| -> Vec<(u32, String, String)> {
         let mut model = fixture();
@@ -3394,7 +3394,7 @@ fn the_chart_numbers_draw_from_the_font() {
         eprintln!("skipping the oracle: no font to shape with ({err:#})");
         return;
     }
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let mut images = Images::new();
     let mut model = fixture();
@@ -3477,7 +3477,7 @@ fn the_strips_hover_and_click_open_the_numbers() {
             false
         }
     };
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let mut images = Images::new();
     let mut model = fixture();
@@ -3844,7 +3844,7 @@ fn the_shape_watchdog_does_not_judge_a_cold_pass() {
         eprintln!("skipping the watchdog case: this adapter has no timestamp queries");
         return;
     }
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let mut images = Images::new();
     let scenario = Scenario {
@@ -3906,7 +3906,7 @@ fn the_wake_is_motion_and_settles() {
             return;
         }
     };
-    let strings = Strings::baked();
+    let strings = crate::strings::baked();
     let mut facts = Facts::new(slots());
     let mut images = Images::new();
     let scenario = Scenario {

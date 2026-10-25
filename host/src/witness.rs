@@ -30,7 +30,9 @@
 //! `tracing`'s `target:` must be a literal at the macro's call site, so the
 //! "word before the first colon" rule (docs/abi.md, *The witness ring*) is three arms rather than an
 //! open-ended lookup: `layout:` → `caustics_bar::layout`, `shape:` →
-//! `caustics_bar::shape`, everything else → `caustics_bar`. That is exactly what `RUST_LOG=info,caustics_bar::layout=debug,caustics_bar::shape=debug` turns on (the test harness sets it; bar/systemd/README.md shows how to set it on the unit), and a fourth target is a line here as well as a line in Slang.
+//! `caustics_bar::shape`, everything else → `caustics_bar`. The names are the
+//! bar's, kept when this file moved into the host crate so that the journal
+//! filters and the test harness that select them keep working. That is exactly what `RUST_LOG=info,caustics_bar::layout=debug,caustics_bar::shape=debug` turns on (the test harness sets it; bar/systemd/README.md shows how to set it on the unit), and a fourth target is a line here as well as a line in Slang.
 //!
 //! # Once per change is the caustic's duty
 //!
@@ -41,8 +43,8 @@
 
 use std::collections::HashSet;
 
-use crate::abi::{self, Note};
 use crate::strings::Strings;
+use caustics_bar_abi::{self as abi, Note};
 
 /// What a `tracing` event needs that a format literal cannot carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::abi::Note;
+use caustics_bar_abi::Note;
 
 /// A record with `words` in its operand slots.
 fn note(words: &[u32]) -> Note {

@@ -35,7 +35,6 @@ mod modules;
 mod oracle;
 mod strings;
 mod wayland;
-mod witness;
 
 use std::fs::File;
 use std::os::fd::AsRawFd;

@@ -84,8 +84,8 @@ use crate::gpu::Gpu;
 use crate::health::{self, Health};
 use crate::model::{Action, Model, Update, Updates};
 use crate::modules::{Collected, Modules};
-use crate::witness::Printer;
 use caustics_host::images::Images;
+use caustics_host::witness::Printer;
 
 /// Which screen edge the bar takes. `FrameInputs::edge` carries it to the
 /// caustic (which flips the popup gravity and the focus underline), and the
@@ -528,7 +528,7 @@ impl Bar {
             pointer_target: abi::NO_INDEX,
             edge: BAR_EDGE,
             height,
-            strings: crate::strings::Strings::baked(),
+            strings: crate::strings::baked(),
             tunables_seen: false,
             edge_lock,
             model: Model {

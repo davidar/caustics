@@ -119,7 +119,7 @@ impl Oracle {
             },
         )
         .with_context(|| format!("bar_check does not compile from {}", source.display()))?;
-        let mut strings = Strings::baked();
+        let mut strings = crate::strings::baked();
         strings.replace(program.reflection.strings);
         gpu.set_check(&program.entries[0].spirv)?;
         Ok(Oracle { gpu, strings })

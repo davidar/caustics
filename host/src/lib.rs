@@ -30,3 +30,5 @@
 
 pub mod images;
 pub mod proc;
+pub mod strings;
+pub mod witness;
