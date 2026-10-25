@@ -21,6 +21,14 @@
 //! While a prompt is up it has a **top** pane too: made for every output at a
 //! conversation's first ask (`prompt.rs`) and for an output that appears
 //! mid-prompt, and destroyed when the conversation ends or is dismissed.
+//! While the session is locked it has a **lock** pane instead of any top
+//! pane: an `ext_session_lock_v1` lock surface, made for every output as the
+//! lock is asked for and for an output that appears while locked, and
+//! destroyed with the unlock (`lock.rs`). The prompt is drawn on the lock
+//! panes then, and a conversation's raise and lower only redraw them: a top
+//! layer surface is hidden under a lock anyway. A pane's surface is a
+//! [`Shell`], a layer surface or a lock surface; everything else about a pane
+//! is the same for both.
 //! Each pane has its own swapchain, frame pacing, `wp_fractional_scale_v1`
 //! and `wp_viewport` from its first commit: the buffer is the logical size
 //! times the scale the compositor prefers, and the viewport's destination is
@@ -88,7 +96,7 @@ use smithay_client_toolkit::reexports::protocols::wp::viewporter::client::{
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState},
     delegate_compositor, delegate_layer, delegate_output, delegate_pointer, delegate_registry,
-    delegate_seat,
+    delegate_seat, delegate_session_lock,
     output::{OutputHandler, OutputState},
     reexports::calloop::{
         LoopHandle, RegistrationToken,
@@ -100,6 +108,10 @@ use smithay_client_toolkit::{
         Capability, SeatHandler, SeatState,
         pointer::{PointerEvent, PointerEventKind, PointerHandler},
     },
+    session_lock::{
+        SessionLock, SessionLockHandler, SessionLockState, SessionLockSurface,
+        SessionLockSurfaceConfigure,
+    },
     shell::{
         WaylandSurface,
         wlr_layer::{LayerShell, LayerShellHandler, LayerSurface, LayerSurfaceConfigure},
@@ -108,12 +120,13 @@ use smithay_client_toolkit::{
 use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, WEnum,
     globals::GlobalList,
-    protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch},
+    protocol::{wl_callback, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch},
 };
 
 use crate::dim::Dims;
 use crate::gpu::{self, Gpu};
 use crate::keys::{self, xkb::Xkb};
+use crate::lock::{self, Locks};
 use crate::prompt::{Effect, Prompts};
 use crate::role::Role;
 use crate::sidecars::{self, GLYPHS, RELOAD, WALLPAPER};
@@ -149,6 +162,31 @@ pub fn moved(from: Option<(f64, f64)>, to: (f64, f64)) -> bool {
     }
 }
 
+/// A pane's surface: a layer surface for the background, the overlay and the
+/// prompt, a lock surface for the lock. Either is a `wl_surface` with a role,
+/// and dropping it destroys the role object and then the surface.
+enum Shell {
+    Layer(LayerSurface),
+    Lock(SessionLockSurface),
+}
+
+impl Shell {
+    fn wl_surface(&self) -> &wl_surface::WlSurface {
+        match self {
+            Shell::Layer(layer) => layer.wl_surface(),
+            Shell::Lock(lock) => lock.wl_surface(),
+        }
+    }
+
+    /// A commit of the surface's pending state.
+    fn commit(&self) {
+        match self {
+            Shell::Layer(layer) => layer.commit(),
+            Shell::Lock(lock) => lock.wl_surface().commit(),
+        }
+    }
+}
+
 /// One output's surface in one role.
 struct Pane {
     /// Dropped first, before the surface its raw pointers name.
@@ -157,7 +195,7 @@ struct Pane {
     output: wl_output::WlOutput,
     /// The output's name, for the journal.
     name: String,
-    layer: LayerSurface,
+    shell: Shell,
     fractional: Option<WpFractionalScaleV1>,
     viewport: Option<WpViewport>,
     /// The size the compositor configured, logical px.
@@ -188,6 +226,13 @@ pub struct Canvas {
     seat_state: SeatState,
     compositor: CompositorState,
     layer_shell: LayerShell,
+    /// `ext_session_lock_manager_v1`, when the compositor has it (a
+    /// `lock` on a state without it is an error, said once per request).
+    session_lock: SessionLockState,
+    /// The lock object, from the request until the unlock.
+    lock: Option<SessionLock>,
+    /// The lock's state and owner (`lock.rs`).
+    locks: Locks,
     fractional: Option<WpFractionalScaleManagerV1>,
     viewporter: Option<WpViewporter>,
     conn: Connection,
@@ -254,6 +299,18 @@ impl Canvas {
             CompositorState::bind(globals, &qh).context("wl_compositor is not available")?;
         let layer_shell =
             LayerShell::bind(globals, &qh).context("zwlr_layer_shell_v1 is not available")?;
+        let session_lock = SessionLockState::new(globals, &qh);
+        let lockable = globals.contents().with_list(|list| {
+            list.iter()
+                .any(|global| global.interface == "ext_session_lock_manager_v1")
+        });
+        if lockable {
+            tracing::info!("lock: ext_session_lock_manager_v1 is bound");
+        } else {
+            tracing::warn!(
+                "lock: the compositor has no ext_session_lock_manager_v1; a lock will be refused"
+            );
+        }
         let fractional = globals
             .bind::<WpFractionalScaleManagerV1, _, _>(&qh, 1..=1, ())
             .ok();
@@ -279,6 +336,9 @@ impl Canvas {
             seat_state: SeatState::new(globals, &qh),
             compositor,
             layer_shell,
+            session_lock,
+            lock: None,
+            locks: Locks::new(),
             fractional,
             viewporter,
             conn,
@@ -380,8 +440,9 @@ impl Canvas {
 
     // -- the surfaces ----------------------------------------------------
 
-    /// A pane for an output, in a role, committed with nothing attached so
-    /// the compositor configures it.
+    /// A pane for an output, in a role: a layer surface committed with
+    /// nothing attached so the compositor configures it, or a lock surface,
+    /// which the compositor configures as it is made.
     fn add_pane(&mut self, output: &wl_output::WlOutput, role: Role) {
         if self
             .panes
@@ -397,19 +458,35 @@ impl Canvas {
             .unwrap_or_else(|| format!("output {}", output.id().protocol_id()));
         let integer = info.as_ref().map_or(1, |info| info.scale_factor.max(1)) as u32;
         let surface = self.compositor.create_surface(&self.qh);
-        let layer = self.layer_shell.create_layer_surface(
-            &self.qh,
-            surface,
-            role.layer(),
-            Some(role.namespace()),
-            Some(output),
-        );
-        layer.set_anchor(role.anchor());
-        layer.set_exclusive_zone(role.exclusive_zone());
-        layer.set_keyboard_interactivity(role.keyboard());
-        layer.set_size(0, 0);
+        let shell = match role.layer() {
+            Some(spec) => {
+                let layer = self.layer_shell.create_layer_surface(
+                    &self.qh,
+                    surface,
+                    spec.layer,
+                    Some(spec.namespace),
+                    Some(output),
+                );
+                layer.set_anchor(spec.anchor);
+                layer.set_exclusive_zone(spec.exclusive_zone);
+                layer.set_keyboard_interactivity(spec.keyboard);
+                layer.set_size(0, 0);
+                Shell::Layer(layer)
+            }
+            None => {
+                let Some(lock) = self.lock.as_ref() else {
+                    tracing::warn!("output {name}: a lock surface with no lock; not made");
+                    surface.destroy();
+                    return;
+                };
+                Shell::Lock(lock.create_lock_surface(surface, output, &self.qh))
+            }
+        };
+        // The scale objects before the first commit, as the protocols want:
+        // `wp_fractional_scale_v1` applies to any `wl_surface`, a lock
+        // surface's included.
         let (fractional, viewport) = if self.uses_fractional() {
-            let wl_surface = layer.wl_surface();
+            let wl_surface = shell.wl_surface();
             (
                 self.fractional.as_ref().map(|manager| {
                     manager.get_fractional_scale(wl_surface, &self.qh, wl_surface.clone())
@@ -419,10 +496,15 @@ impl Canvas {
                     .map(|viewporter| viewporter.get_viewport(wl_surface, &self.qh, ())),
             )
         } else {
-            layer.wl_surface().set_buffer_scale(integer as i32);
+            shell.wl_surface().set_buffer_scale(integer as i32);
             (None, None)
         };
-        layer.commit();
+        // A layer surface is committed with nothing attached, which asks for
+        // its configure; a lock surface is configured as it is made, and its
+        // first commit is its first frame (`Role::commits_before_configure`).
+        if role.commits_before_configure() {
+            shell.commit();
+        }
         tracing::info!(
             "output {name}: a{} {} surface (integer scale {integer} until the compositor \
              says otherwise)",
@@ -434,7 +516,7 @@ impl Canvas {
             role,
             output: output.clone(),
             name,
-            layer,
+            shell,
             fractional,
             viewport,
             logical: (0, 0),
@@ -446,9 +528,9 @@ impl Canvas {
         });
     }
 
-    /// The output went, or the compositor closed the surface, or the dim is
-    /// over: the swapchain first, then the objects it points at, then the
-    /// layer surface (destroyed as it drops).
+    /// The output went, or the compositor closed the surface, or the dim, the
+    /// prompt or the lock is over: the swapchain first, then the objects it
+    /// points at, then the layer or lock surface (destroyed as it drops).
     fn remove_pane(&mut self, index: usize) {
         let mut pane = self.panes.remove(index);
         pane.target = None;
@@ -473,7 +555,7 @@ impl Canvas {
     fn pane_of_surface(&self, surface: &wl_surface::WlSurface) -> Option<usize> {
         self.panes
             .iter()
-            .position(|pane| pane.layer.wl_surface() == surface)
+            .position(|pane| pane.shell.wl_surface() == surface)
     }
 
     fn role_of_surface(&self, surface: &wl_surface::WlSurface) -> Option<Role> {
@@ -511,6 +593,32 @@ impl Canvas {
     fn drop_prompts(&mut self) {
         while let Some(index) = self.panes.iter().position(|pane| pane.role == Role::Top) {
             self.remove_pane(index);
+        }
+    }
+
+    /// A lock pane on every output there is: the protocol wants one on each,
+    /// configured and committed, before it says `locked`.
+    fn raise_locks(&mut self) {
+        for output in self.output_state.outputs().collect::<Vec<_>>() {
+            self.add_pane(&output, Role::Lock);
+        }
+    }
+
+    /// Every lock pane down, after the unlock.
+    fn drop_locks(&mut self) {
+        while let Some(index) = self.panes.iter().position(|pane| pane.role == Role::Lock) {
+            self.remove_pane(index);
+        }
+    }
+
+    /// The panes the prompt is drawn on now have something new to draw.
+    fn mark_prompt_dirty(&mut self) {
+        for pane in self
+            .panes
+            .iter_mut()
+            .filter(|pane| pane.role.carries_prompt())
+        {
+            pane.dirty = true;
         }
     }
 
@@ -561,8 +669,8 @@ impl Canvas {
                     }
                 }
                 None => {
-                    let (display, surface) = handles(&self.conn, &pane.layer)?;
-                    // SAFETY: the connection and the layer surface outlive
+                    let (display, surface) = handles(&self.conn, pane.shell.wl_surface())?;
+                    // SAFETY: the connection and the pane's surface outlive
                     // the target, which `remove_pane` drops first.
                     match unsafe { gpu.attach(display, surface, width, height) } {
                         Ok(target) => {
@@ -594,8 +702,8 @@ impl Canvas {
     fn bring_up(&mut self, index: usize) -> Result<()> {
         let pane = &self.panes[index];
         let (width, height) = pane.buffer();
-        let (display, surface) = handles(&self.conn, &pane.layer)?;
-        // SAFETY: as in `service`: the connection and the layer surface
+        let (display, surface) = handles(&self.conn, pane.shell.wl_surface())?;
+        // SAFETY: as in `service`: the connection and the pane's surface
         // outlive the target, and the device is dropped after every target.
         let (mut gpu, target) = unsafe { Gpu::new(display, surface, width, height) }?;
         tracing::info!(
@@ -713,7 +821,7 @@ impl Canvas {
             return Ok(());
         };
         // The frame request rides the commit the present makes.
-        let wl_surface = pane.layer.wl_surface();
+        let wl_surface = pane.shell.wl_surface();
         wl_surface.frame(&self.qh, wl_surface.clone());
         pane.pacing.requested(Instant::now());
         let stamp = gpu.draw(target, frame, pane.scale, pane.role.target())?;
@@ -734,7 +842,7 @@ impl Canvas {
             .filter_map(|cover| gpu.cover_bytes(cover.source, cover.off, cover.len))
             .collect();
         if let Some((sidecar, id)) = self.dims.reached(reached, id) {
-            self.tell(&sidecar, CANVAS_EVENT_DIMMED, id);
+            self.tell(&sidecar, CANVAS_EVENT_DIMMED, id, &format!("dim {id}"));
             tracing::info!("dim {id}: at its depth, told to {sidecar}");
         }
         for text in covers {
@@ -801,10 +909,11 @@ impl Canvas {
 
     // -- the dim -----------------------------------------------------------
 
-    /// One `CanvasEvent` down the stdin of the sidecar whose dim it is about.
-    fn tell(&self, sidecar: &str, event: u32, id: u32) {
+    /// One `CanvasEvent` down the stdin of the sidecar whose dim or lock it
+    /// is about; `what` names it for a witness.
+    fn tell(&self, sidecar: &str, event: u32, id: u32, what: &str) {
         let Some(pipe) = self.pipe(sidecar) else {
-            tracing::warn!("dim {id}: no pipe to {sidecar} for its event");
+            tracing::warn!("{what}: no pipe to {sidecar} for its event");
             return;
         };
         pipe.send_frame(
@@ -813,7 +922,7 @@ impl Canvas {
                 id,
                 ..CanvasEventBody::default()
             }),
-            &format!("dim {id}'s event"),
+            &format!("{what}'s event"),
         );
     }
 
@@ -831,7 +940,12 @@ impl Canvas {
         let Some(dim) = self.dims.cancel() else {
             return;
         };
-        self.tell(&dim.sidecar, CANVAS_EVENT_INPUT, dim.id);
+        self.tell(
+            &dim.sidecar,
+            CANVAS_EVENT_INPUT,
+            dim.id,
+            &format!("dim {}", dim.id),
+        );
         tracing::info!(
             "dim {}: cancelled by {what}; told to {}, the overlays go",
             dim.id,
@@ -908,6 +1022,12 @@ impl Canvas {
                         ),
                     }
                 }
+                // While the lock holds, the prompt is the lock panes': they
+                // are redrawn, and no top pane is made or destroyed (one
+                // would be hidden under the lock anyway).
+                Effect::Raise | Effect::Lower if self.locks.held() => {
+                    self.mark_dirty(Role::Lock);
+                }
                 Effect::Raise => {
                     self.raise_prompts();
                     // An overlay stands aside while a prompt is up.
@@ -923,7 +1043,77 @@ impl Canvas {
         }
         if changed {
             self.push_facts();
-            self.mark_dirty(Role::Top);
+            self.mark_prompt_dirty();
+        }
+    }
+
+    // -- the lock ------------------------------------------------------------
+
+    /// What the lock's state said to do (`lock::Effect`).
+    fn apply_lock(&mut self, effects: Vec<lock::Effect>) {
+        for effect in effects {
+            match effect {
+                lock::Effect::Lock => match self.session_lock.lock(&self.qh) {
+                    Ok(session_lock) => {
+                        self.lock = Some(session_lock);
+                        // The prompt moves to the lock panes: a top pane up
+                        // now (another sink's, dismissed by the reservation
+                        // just before) would be hidden under the lock, and
+                        // would outlive it.
+                        self.drop_prompts();
+                        self.raise_locks();
+                        tracing::info!(
+                            "lock: ext_session_lock_v1 asked for, with {} lock surfaces",
+                            self.panes
+                                .iter()
+                                .filter(|pane| pane.role == Role::Lock)
+                                .count()
+                        );
+                    }
+                    Err(_) => {
+                        let more = self.locks.refused();
+                        self.apply_lock(more);
+                    }
+                },
+                lock::Effect::Unlock => {
+                    if let Some(session_lock) = self.lock.take() {
+                        // `unlock_and_destroy`; the drop's `destroy` after it
+                        // is no request at all.
+                        session_lock.unlock();
+                    }
+                    self.drop_locks();
+                    // The unlock is told when the compositor has read it.
+                    self.conn.display().sync(&self.qh, UnlockSync);
+                    // A conversation still up goes back to the top layer.
+                    if self.prompts.raised() {
+                        self.raise_prompts();
+                    }
+                }
+                lock::Effect::Tell { sidecar, event } => {
+                    self.tell(&sidecar, event, 0, "the lock");
+                }
+                lock::Effect::EndDim => {
+                    if let Some(dim) = self.dims.end() {
+                        tracing::info!(
+                            "dim {}: ended by the lock; {} is told nothing, the overlays go",
+                            dim.id,
+                            dim.sidecar
+                        );
+                        self.end_dim();
+                    }
+                }
+                lock::Effect::Reserve(sidecar) => {
+                    let effects = self.prompts.reserve(sidecar.as_deref());
+                    self.apply_prompt(effects);
+                }
+                lock::Effect::Note(line) => tracing::info!("{line}"),
+                lock::Effect::Refused(line) => tracing::warn!("{line}"),
+                lock::Effect::Fatal(line) => {
+                    if self.exit.is_none() {
+                        self.exit = Some(Exit::Fault(line));
+                    }
+                }
+            }
         }
     }
 
@@ -953,6 +1143,8 @@ impl Canvas {
                 self.dim_owner_gone(&name);
                 let effects = self.prompts.gone(&name);
                 self.apply_prompt(effects);
+                let effects = self.locks.gone(&name);
+                self.apply_lock(effects);
             }
             // An ordinary exit, before the restart: the picture stays (it is
             // the host's), a waiting image stays for the show that may still
@@ -961,6 +1153,8 @@ impl Canvas {
                 self.dim_owner_gone(&name);
                 let effects = self.prompts.gone(&name);
                 self.apply_prompt(effects);
+                let effects = self.locks.gone(&name);
+                self.apply_lock(effects);
             }
             Event::Frame { sidecar, frame } => self.apply_frame(&sidecar, frame),
         }
@@ -990,12 +1184,20 @@ impl Canvas {
                 let effects = self.prompts.frame(sidecar, &prompt);
                 self.apply_prompt(effects);
             }
+            // The lock sidecar asking to lock or to unlock (docs/abi.md,
+            // *Lock*). The lock goes out whether or not the device is up:
+            // the compositor holds the session locked and blank until the
+            // lock panes have frames.
+            Frame::Lock(body) => {
+                let effects = self.locks.request(sidecar, body.command);
+                self.apply_lock(effects);
+            }
             // A run of the text engine's buffers: copied, never read
             // (docs/abi.md, *Bytes*).
             Frame::Bytes(bytes) => match self.gpu.as_mut() {
                 Some(gpu) => {
                     gpu.write_bytes(bytes.buffer, bytes.offset, bytes.total, &bytes.bytes);
-                    self.mark_dirty(Role::Top);
+                    self.mark_prompt_dirty();
                 }
                 None => self.pending_bytes.push(bytes),
             },
@@ -1117,12 +1319,12 @@ impl Canvas {
 /// The raw `wl_display` and `wl_surface` a wgpu surface is made from.
 fn handles(
     conn: &Connection,
-    layer: &LayerSurface,
+    surface: &wl_surface::WlSurface,
 ) -> Result<(NonNull<std::ffi::c_void>, NonNull<std::ffi::c_void>)> {
     let display = NonNull::new(conn.backend().display_ptr().cast())
         .context("the wl_display has no pointer")?;
-    let surface = NonNull::new(layer.wl_surface().id().as_ptr().cast())
-        .context("the layer's wl_surface has no pointer")?;
+    let surface = NonNull::new(surface.id().as_ptr().cast())
+        .context("the pane's wl_surface has no pointer")?;
     Ok((display, surface))
 }
 
@@ -1148,11 +1350,20 @@ impl LayerShellHandler for Canvas {
         configure: LayerSurfaceConfigure,
         _serial: u32,
     ) {
-        let Some(index) = self.pane_of_surface(layer.wl_surface()) else {
+        self.configured(layer.wl_surface(), configure.new_size);
+    }
+}
+
+impl Canvas {
+    /// A pane's configure, a layer surface's or a lock surface's (sctk has
+    /// acknowledged it): the size, logical px, which the next frame's
+    /// viewport and buffer follow.
+    fn configured(&mut self, surface: &wl_surface::WlSurface, size: (u32, u32)) {
+        let Some(index) = self.pane_of_surface(surface) else {
             return;
         };
         let pane = &mut self.panes[index];
-        let (width, height) = (configure.new_size.0.max(1), configure.new_size.1.max(1));
+        let (width, height) = (size.0.max(1), size.1.max(1));
         let first = !pane.configured;
         pane.configured = true;
         if pane.logical != (width, height) || first {
@@ -1171,6 +1382,64 @@ impl LayerShellHandler for Canvas {
             pane.name,
             pane.role.name()
         );
+    }
+}
+
+impl SessionLockHandler for Canvas {
+    fn locked(&mut self, _: &Connection, _: &QueueHandle<Self>, _: SessionLock) {
+        let effects = self.locks.locked();
+        self.apply_lock(effects);
+    }
+
+    fn finished(&mut self, _: &Connection, _: &QueueHandle<Self>, _: SessionLock) {
+        let effects = self.locks.finished();
+        self.apply_lock(effects);
+    }
+
+    fn configure(
+        &mut self,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+        surface: SessionLockSurface,
+        configure: SessionLockSurfaceConfigure,
+        _serial: u32,
+    ) {
+        self.configured(surface.wl_surface(), configure.new_size);
+    }
+}
+
+/// The `wl_display.sync` after an `unlock_and_destroy`: its answer is the
+/// compositor having read the unlock, which is when `unlocked` is told.
+pub struct UnlockSync;
+
+impl Dispatch<wl_callback::WlCallback, UnlockSync> for Canvas {
+    fn event(
+        canvas: &mut Canvas,
+        _: &wl_callback::WlCallback,
+        event: wl_callback::Event,
+        _: &UnlockSync,
+        _: &Connection,
+        _: &QueueHandle<Canvas>,
+    ) {
+        if let wl_callback::Event::Done { .. } = event {
+            let effects = canvas.locks.synced();
+            canvas.apply_lock(effects);
+        }
+    }
+}
+
+/// A host that leaves while the session is locked leaves it locked: the
+/// lock object is forgotten rather than dropped, since its drop's `destroy`
+/// after `locked` is a protocol error, and a compositor keeps a session
+/// locked when its lock client goes (`ext_session_lock_v1`). Locking but not
+/// yet locked, the drop's `destroy` is the protocol's own way out.
+impl Drop for Canvas {
+    fn drop(&mut self) {
+        if let Some(session_lock) = self.lock.take()
+            && session_lock.is_locked()
+        {
+            std::mem::forget(session_lock);
+        }
     }
 }
 
@@ -1259,7 +1528,7 @@ impl CompositorHandler for Canvas {
         let scale = new_factor.max(1) as u32 * SCALE_ONE;
         let pane = &mut self.panes[index];
         if pane.scale != scale {
-            pane.layer.wl_surface().set_buffer_scale(new_factor.max(1));
+            pane.shell.wl_surface().set_buffer_scale(new_factor.max(1));
             pane.scale = scale;
             pane.pending = true;
             pane.dirty = true;
@@ -1319,12 +1588,16 @@ impl OutputHandler for Canvas {
 
     fn new_output(&mut self, _: &Connection, _: &QueueHandle<Self>, output: wl_output::WlOutput) {
         self.add_pane(&output, Role::Background);
-        // An output that appears mid-dim is dimmed too, and one that appears
-        // mid-prompt is given the prompt.
+        // An output that appears mid-dim is dimmed too, one that appears
+        // while locked is given a lock surface (the protocol asks one for
+        // every output), and one that appears mid-prompt is given the prompt
+        // unless the lock panes carry it.
         if self.dims.is_up() {
             self.add_pane(&output, Role::Overlay);
         }
-        if self.prompts.raised() {
+        if self.locks.held() {
+            self.add_pane(&output, Role::Lock);
+        } else if self.prompts.raised() {
             self.add_pane(&output, Role::Top);
         }
     }
@@ -1428,11 +1701,11 @@ impl PointerHandler for Canvas {
         let prompting = self.prompts.raised();
         for event in events {
             let role = self.role_of_surface(&event.surface);
-            if prompting
-                && role == Some(Role::Top)
+            if (role == Some(Role::Lock) || prompting && role == Some(Role::Top))
                 && let PointerEventKind::Enter { serial } = event.kind
             {
-                // No cursor over the prompt either: it takes no clicks.
+                // No cursor over the prompt or the lock either: neither
+                // takes clicks.
                 pointer.set_cursor(serial, None, 0, 0);
             }
             let on_overlay = !prompting && role.is_some_and(Role::input_cancels);
@@ -1499,14 +1772,15 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for Canvas {
                 state: WEnum::Value(wl_keyboard::KeyState::Pressed),
                 ..
             } => canvas.key_pressed(key),
-            // The keyboard arriving on a prompt's pane is when typing can
-            // begin: said, once each time.
+            // The keyboard arriving on a prompt's pane, or a lock pane, is
+            // when typing can begin: said, once each time.
             wl_keyboard::Event::Enter { surface, .. } => {
                 if let Some(index) = canvas.pane_of_surface(&surface)
-                    && canvas.panes[index].role == Role::Top
+                    && canvas.panes[index].role.carries_prompt()
                 {
                     tracing::info!(
-                        "seat: the keyboard is on the prompt (output {})",
+                        "seat: the keyboard is on the {} (output {})",
+                        canvas.panes[index].role.name(),
                         canvas.panes[index].name
                     );
                 }
@@ -1552,6 +1826,7 @@ delegate_layer!(Canvas);
 delegate_registry!(Canvas);
 delegate_seat!(Canvas);
 delegate_pointer!(Canvas);
+delegate_session_lock!(Canvas);
 
 #[cfg(test)]
 mod tests;

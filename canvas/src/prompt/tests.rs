@@ -287,3 +287,51 @@ fn no_debug_of_the_prompt_shows_what_was_typed() {
     let shown = format!("{echo:?}");
     assert!(!shown.contains("zyw"), "{shown}");
 }
+
+const LOCK: &str = "caustics-lock";
+
+/// The lock reserves the core: another sink's panel up at the lock is
+/// dismissed (cancelled to its sink, the panel lowered), and another sink's
+/// ask while locked is cancelled at once and shows nothing, even with no
+/// conversation up; the lock's own conversation is taken, and once the
+/// reservation ends any sink's is again.
+#[test]
+fn the_lock_reserves_the_prompt_for_its_own() {
+    let mut prompts = Prompts::new();
+    prompts.frame(POLKIT, &prompt(1, PROMPT_SECRET, 0, "Password: "));
+    assert!(prompts.raised());
+    prompts.key(typed("x"));
+    let effects = prompts.reserve(Some(LOCK));
+    assert!(effects.contains(&Effect::Lower), "{effects:?}");
+    assert_eq!(
+        effects
+            .iter()
+            .filter(|e| matches!(e, Effect::Answer { sidecar, answer: Answer::Cancelled { id: 1 } } if sidecar == POLKIT))
+            .count(),
+        1
+    );
+    assert!(!prompts.raised());
+    // polkit's end for the dismissed one, and a new ask of its own, while
+    // locked: ignored, and cancelled.
+    assert!(answers(&prompts.frame(POLKIT, &prompt(1, PROMPT_DONE, 0, ""))).is_empty());
+    let effects = prompts.frame(POLKIT, &prompt(2, PROMPT_SECRET, 0, "Password: "));
+    assert!(matches!(
+        answers(&effects).as_slice(),
+        [Answer::Cancelled { id: 2 }]
+    ));
+    assert!(!effects.contains(&Effect::Raise));
+    assert!(!prompts.raised());
+    // The lock's own replaces the dismissed one.
+    let effects = prompts.frame(LOCK, &prompt(1, PROMPT_INFO, PROMPT_INFO_TITLE, "user"));
+    assert!(answers(&effects).is_empty());
+    let effects = prompts.frame(LOCK, &prompt(1, PROMPT_SECRET, 0, "Password: "));
+    assert!(effects.contains(&Effect::Raise));
+    assert!(prompts.takes_keys());
+    // A reservation again for the same sidecar dismisses nothing of its own.
+    assert!(prompts.reserve(Some(LOCK)).is_empty());
+    assert!(prompts.raised());
+    prompts.frame(LOCK, &prompt(1, PROMPT_DONE, 1, ""));
+    prompts.reserve(None);
+    let effects = prompts.frame(POLKIT, &prompt(3, PROMPT_SECRET, 0, "Password: "));
+    assert!(effects.contains(&Effect::Raise), "{effects:?}");
+}

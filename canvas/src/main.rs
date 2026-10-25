@@ -4,7 +4,8 @@
 //! The bar process's shape, for a second caustic: a small process that owns
 //! the Wayland objects (one background layer surface per output, one overlay
 //! per output while a dim is up, one prompt pane per output while a prompt
-//! is), the seat's input, the device, its sidecars' pipes and the one buffer
+//! is, one lock surface per output while the session is locked), the seat's
+//! input, the device, its sidecars' pipes and the one buffer
 //! a typed answer passes through, and decides nothing. `caustics-wallpaper` sends the
 //! pictures and the commands, `caustics-reload` the caustic as it is saved,
 //! and the caustic says how far a fade or a dim is and whether it wants
@@ -20,6 +21,7 @@ mod clock;
 mod dim;
 mod gpu;
 mod keys;
+mod lock;
 mod prompt;
 mod role;
 mod sidecars;
@@ -49,6 +51,11 @@ const EXIT_DEVICE: i32 = caustics_host::device::EXIT_DEVICE;
 
 /// How long an output's surface may wait for its first configure.
 const FIRST_CONFIGURE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long one wait for the compositor may be before the device is up, so
+/// that a sidecar's frame (a lock, above all) is applied within it even when
+/// the compositor says nothing.
+const BEFORE_DEVICE_POLL_MS: i32 = 50;
 
 fn main() {
     tracing_subscriber::fmt()
@@ -121,9 +128,13 @@ fn run(max_runtime: Option<Duration>) -> Result<i32> {
     let (events, incoming) = channel::<Event>();
     let mut canvas = Canvas::new(conn.clone(), &globals, qh, &events)?;
 
-    // The first output's configure brings the device up, on a plain blocking
+    // The first output's configure brings the device up, on a plain
     // dispatch before calloop owns the queue, as the bar's does (bar/src/main.rs
-    // says why). With no output yet this waits for one.
+    // says why). With no output yet this waits for one. The sidecars' frames
+    // are applied meanwhile, between waits of at most
+    // `BEFORE_DEVICE_POLL_MS`: a restarted host whose session is locked is
+    // asked to lock before it has painted anything, and the lock goes out
+    // then, not when the device is up (docs/canvas.md, *Failure model*).
     let mut first_surface: Option<std::time::Instant> = None;
     while canvas.awaiting_device() {
         if canvas.has_screens() {
@@ -136,9 +147,11 @@ fn run(max_runtime: Option<Duration>) -> Result<i32> {
                 );
             }
         }
-        event_queue
-            .blocking_dispatch(&mut canvas)
+        dispatch_awhile(&mut event_queue, &mut canvas, BEFORE_DEVICE_POLL_MS)
             .context("the Wayland connection failed before the first configure")?;
+        while let Ok(event) = incoming.try_recv() {
+            canvas.apply_event(event);
+        }
         canvas.service()?;
     }
     if let Some(exit) = canvas.exit.clone() {
@@ -196,6 +209,38 @@ fn run(max_runtime: Option<Duration>) -> Result<i32> {
             return Ok(finish(&canvas, exit));
         }
     }
+}
+
+/// One dispatch that waits at most `timeout_ms` for the compositor:
+/// `blocking_dispatch` with a bound, so the caller can look at its other
+/// sources between waits.
+fn dispatch_awhile(
+    queue: &mut wayland_client::EventQueue<Canvas>,
+    canvas: &mut Canvas,
+    timeout_ms: i32,
+) -> Result<()> {
+    use std::os::fd::{AsFd as _, AsRawFd as _};
+    queue.dispatch_pending(canvas)?;
+    queue.flush()?;
+    if let Some(guard) = queue.prepare_read() {
+        let mut fd = libc::pollfd {
+            fd: guard.connection_fd().as_fd().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one pollfd, valid for the call.
+        let ready = unsafe { libc::poll(&mut fd, 1, timeout_ms) };
+        if ready > 0 {
+            match guard.read() {
+                Ok(_) => {}
+                Err(wayland_client::backend::WaylandError::Io(err))
+                    if err.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(err) => return Err(err.into()),
+            }
+        }
+    }
+    queue.dispatch_pending(canvas)?;
+    Ok(())
 }
 
 fn log_protocol_error(conn: &Connection) {

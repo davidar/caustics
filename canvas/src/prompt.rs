@@ -33,6 +33,17 @@
 //!   meanwhile is dismissed again, and a new conversation replaces it.
 //! - The sidecar's pipe closing ends its conversation and takes the panes
 //!   down (docs/canvas.md, *Failure model*).
+//! - **While the session is locked** the core is **reserved** for the lock's
+//!   sidecar ([`Prompts::reserve`], `lock.rs`): another sink's conversation
+//!   up at the lock is dismissed, and another sink's frames while locked are
+//!   answered `ANSWER_CANCELLED` (or ignored, for an end), so the lock
+//!   screen's prompt is only ever the lock's and a lock conversation is never
+//!   refused for another's.
+//!
+//! The panes are wherever the host draws the prompt: the top layer, or the
+//! lock surfaces while the session is locked. Which is `wayland.rs`'s
+//! business; here [`Effect::Raise`] and [`Effect::Lower`] mean "the panel is
+//! to be shown" and "no longer".
 //!
 //! **The secret never leaves the host except down the pipe.** For an
 //! echo-off ask the caustic is given a count of characters; the text written
@@ -73,9 +84,10 @@ pub enum Effect {
     /// Write this answer down `sidecar`'s stdin, once. Dropping it zeroes
     /// the bytes it carries.
     Answer { sidecar: String, answer: Answer },
-    /// Put the prompt's pane up on every output, and take the keyboard.
+    /// Show the panel on every output and take the keyboard: the top-layer
+    /// panes up, or the lock panes redrawn while locked.
     Raise,
-    /// Take them down.
+    /// No more panel: the top-layer panes down, or the lock panes redrawn.
     Lower,
     /// What the caustic is told changed: write it, and draw.
     Changed,
@@ -131,6 +143,9 @@ pub struct Prompts {
     up: Option<Conversation>,
     /// Bumped on every change to what the caustic is told.
     generation: u32,
+    /// The only sidecar whose conversations are taken, while the session is
+    /// locked.
+    reserved: Option<String>,
 }
 
 impl Prompts {
@@ -138,15 +153,51 @@ impl Prompts {
         Prompts::default()
     }
 
-    /// Whether the panes are up.
+    /// Whether a conversation's panel is shown: from its first ask until it
+    /// ends or is dismissed, on whichever panes carry it (the top layer's, or
+    /// the lock's while locked).
     pub fn raised(&self) -> bool {
         self.up.as_ref().is_some_and(|c| c.phase.raised())
     }
 
-    /// Whether keys go to the prompt rather than the dim: whenever the panes
-    /// are up, whatever the prompt then does with them.
+    /// Whether keys go to the prompt rather than the dim: whenever the panel
+    /// is shown, whatever the prompt then does with them. The compositor
+    /// gives the keyboard to the top-layer pane, or to a lock surface while
+    /// locked, and either way the key reaches the host.
     pub fn takes_keys(&self) -> bool {
         self.raised()
+    }
+
+    /// Reserve the core for `sidecar` (the session is locked for it), or end
+    /// the reservation (`None`, unlocked). A conversation of another sidecar
+    /// that is up when the reservation begins is dismissed as Escape would:
+    /// `ANSWER_CANCELLED` to its sink, and the panel goes.
+    pub fn reserve(&mut self, sidecar: Option<&str>) -> Vec<Effect> {
+        let mut effects = Vec::new();
+        self.reserved = sidecar.map(str::to_owned);
+        let Some(only) = sidecar else {
+            return effects;
+        };
+        let Some(c) = self
+            .up
+            .as_mut()
+            .filter(|c| c.sidecar != only && c.phase != Phase::Dismissed)
+        else {
+            return effects;
+        };
+        let raised = c.phase.raised();
+        c.entry.clear();
+        c.phase = Phase::Dismissed;
+        effects.push(Effect::Note(format!(
+            "prompt: conversation {} of {} dismissed for the lock; told to {}",
+            c.id, c.sidecar, c.sidecar
+        )));
+        effects.push(cancelled(&c.sidecar, c.id));
+        if raised {
+            effects.push(Effect::Lower);
+        }
+        self.changed(&mut effects);
+        effects
     }
 
     fn changed(&mut self, effects: &mut Vec<Effect>) {
@@ -160,6 +211,20 @@ impl Prompts {
         let ends = matches!(prompt.kind, PROMPT_CANCEL | PROMPT_DONE);
         let asks = matches!(prompt.kind, PROMPT_SECRET | PROMPT_ECHO);
         let id = prompt.id;
+
+        // While locked, only the lock's sidecar converses.
+        if let Some(only) = self.reserved.as_deref()
+            && only != sidecar
+        {
+            if !ends {
+                effects.push(Effect::Note(format!(
+                    "prompt: {sidecar} asked under conversation {id} while the session is \
+                     locked; answered cancelled"
+                )));
+                effects.push(cancelled(sidecar, id));
+            }
+            return effects;
+        }
 
         // A dismissed conversation waits only for its end; a new one
         // replaces it.

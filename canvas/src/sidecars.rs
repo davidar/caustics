@@ -24,8 +24,10 @@ pub const RELOAD: &str = "caustics-reload";
 pub const GLYPHS: &str = "caustics-glyphs";
 
 /// The set the canvas starts when `$CAUSTICS_SIDECARS` says nothing.
-/// `caustics-polkit` is not in it yet (canvas/README.md says why and how to
-/// add it).
+/// `caustics-polkit` and `caustics-lock` are not in it: each replaces
+/// something a session already has (its polkit agent, its locker), two of
+/// either on one session fight, and each is taken on by choice
+/// (canvas/README.md says why and how to add them).
 pub const SIDECARS: &[&str] = &[WALLPAPER, RELOAD, GLYPHS];
 
 /// Start every sidecar of the set, each sending its events to `events`.
