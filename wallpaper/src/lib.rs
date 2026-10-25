@@ -133,7 +133,7 @@ pub fn run() -> i32 {
         return 0;
     };
     let socket = dir.join(SOCKET);
-    let listener = match bind(&socket) {
+    let listener = match bind(&socket, TAKEOVER_WINDOW) {
         Ok(listener) => listener,
         Err(err) => {
             // Another canvas's wallpaper holds it, or the directory is not
@@ -172,19 +172,42 @@ fn idle(inbox: &Receiver<Input>) {
     }
 }
 
-/// The socket, bound: a stale one (nothing answers on it) is removed first;
-/// a live one is another process's, and this one does not take it.
-fn bind(path: &Path) -> io::Result<UnixListener> {
-    if path.exists() {
-        if UnixStream::connect(path).is_ok() {
-            return Err(io::Error::new(
-                io::ErrorKind::AddrInUse,
-                format!("{} is another wallpaper's", path.display()),
-            ));
+/// How long a socket that answers is given to stop answering before it is
+/// another process's. The previous sidecar of a restarted set is still being
+/// torn down when its successor starts, and its listener can answer a probe
+/// for some milliseconds after the unit has reported it gone; a probe read
+/// as "another wallpaper's" at that instant would leave the canvas with no
+/// socket and the dim colour until the next restart.
+pub const TAKEOVER_WINDOW: Duration = Duration::from_secs(2);
+
+/// The socket, bound: a stale one (nothing answers on it) is removed first.
+/// One that answers is probed again across `window`, and one still answering
+/// at its end is another process's, which this one does not take.
+fn bind(path: &Path, window: Duration) -> io::Result<UnixListener> {
+    let started = Instant::now();
+    loop {
+        if path.exists() {
+            if UnixStream::connect(path).is_ok() {
+                if started.elapsed() >= window {
+                    return Err(io::Error::new(
+                        io::ErrorKind::AddrInUse,
+                        format!(
+                            "{} is another wallpaper's (it answered for {} ms)",
+                            path.display(),
+                            window.as_millis()
+                        ),
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(50));
+                continue;
+            }
+            match std::fs::remove_file(path) {
+                Err(err) if err.kind() != io::ErrorKind::NotFound => return Err(err),
+                _ => {}
+            }
         }
-        std::fs::remove_file(path)?;
+        return UnixListener::bind(path);
     }
-    UnixListener::bind(path)
 }
 
 /// What the host writes: the output size, and the events of a dim.

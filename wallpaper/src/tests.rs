@@ -31,20 +31,46 @@ fn status_says_the_picture_and_how_far_its_fade_is() {
 }
 
 /// A socket nobody answers on is a stale one and is taken; one somebody
-/// answers on is another wallpaper's and is left alone.
+/// answers on for the whole window is another wallpaper's and is left alone.
 #[test]
 fn a_stale_socket_is_taken_and_a_live_one_is_not() {
     let dir = std::env::temp_dir().join(format!("caustics-wallpaper-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("writable");
     let path = dir.join(SOCKET);
-    let first = bind(&path).expect("binds");
-    let second = bind(&path);
+    let window = Duration::from_millis(200);
+    let first = bind(&path, window).expect("binds");
+    let second = bind(&path, window);
     assert!(second.is_err(), "a live socket was taken");
     drop(first);
     // The file is still there and nothing answers: stale.
     assert!(path.exists());
-    let third = bind(&path).expect("a stale socket is taken");
+    let third = bind(&path, window).expect("a stale socket is taken");
     drop(third);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A listener that stops answering inside the window is the previous
+/// sidecar on its way out, and its socket is taken once it has gone.
+#[test]
+fn a_listener_that_closes_during_the_window_is_taken() {
+    let dir =
+        std::env::temp_dir().join(format!("caustics-wallpaper-closing-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("writable");
+    let path = dir.join(SOCKET);
+    let first = bind(&path, Duration::from_millis(200)).expect("binds");
+    let closer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        drop(first);
+    });
+    let started = Instant::now();
+    let second = bind(&path, Duration::from_secs(5)).expect("taken once the first closed");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the window was waited out instead of the listener's closing"
+    );
+    closer.join().expect("the closer finished");
+    drop(second);
     let _ = std::fs::remove_dir_all(&dir);
 }

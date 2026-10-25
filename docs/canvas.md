@@ -359,7 +359,7 @@ process holding a secret is the canvas host, and the bar is not it.
 | the host | unlocked | the compositor's backdrop shows; the unit restarts it; it paints the dim colour until the wallpaper sidecar re-sends the picture |
 | the host | locked | the compositor stays locked (niri keeps the session locked with its lock client dead); the unit restarts the host; the lock sidecar reads `LockedHint` and re-locks before the first frame, and niri gives the new lock `locked` at once in place of the dead one (the nested gate drives the same restart through the socket) |
 | the host | told `finished` | one line and exit 1; the unit restarts it; the lock sidecar's pipe closes, so a waiting `lock --wait` fails, and the restarted sidecar locks again if logind's hint says so |
-| `caustics-wallpaper` | any time | the last picture stays; the host restarts it with backoff; the scheduler's next `show` lands |
+| `caustics-wallpaper` | any time | the last picture stays; the host restarts it with backoff; the restarted sidecar re-shows the path it kept, and takes the socket back once the old listener has gone (a listener still answering a probe is given a short window to die before it is read as another wallpaper's) |
 | `caustics-wallpaper` | mid-dim | the overlay goes with it (a dim without its owner is undone, so a crashed sidecar never leaves a dark screen); the picture stays; the host restarts it, and it comes back with no dim |
 | a fade | mid-fade | the waiting client gets EOF on the socket and exits 1; the idle stage locks anyway |
 | `caustics-lock` | locked | the host stays locked (it never unlocks on its own); the sidecar restarts, reads `LockedHint`, resumes the conversation |
