@@ -18,6 +18,7 @@
 mod clock;
 mod dim;
 mod gpu;
+mod keys;
 mod role;
 mod sidecars;
 mod slots;

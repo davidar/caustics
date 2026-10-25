@@ -36,8 +36,9 @@
 //! the outputs are the plain wallpaper again (docs/abi.md, *Canvas event*).
 //! The pointer *entering* an overlay is not input: the compositor sends an
 //! enter when the overlay maps under a pointer that has not moved, so the
-//! cursor is hidden there and only a motion to somewhere else cancels. No
-//! keymap is read: the fact of a key is all a cancel needs.
+//! cursor is hidden there and only a motion to somewhere else cancels. The
+//! keymap the seat sends is compiled by libxkbcommon (`keys`), for the
+//! prompt's sake; a cancel needs only the fact of a key.
 //!
 //! # The frames
 //!
@@ -105,6 +106,7 @@ use wayland_client::{
 
 use crate::dim::Dims;
 use crate::gpu::{self, Gpu};
+use crate::keys::{self, Key, xkb::Xkb};
 use crate::role::Role;
 use crate::sidecars::{self, GLYPHS, RELOAD, WALLPAPER};
 use crate::slots::{Applied, Slots};
@@ -197,6 +199,11 @@ pub struct Canvas {
     pointer: Option<wl_pointer::WlPointer>,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     touch: Option<wl_touch::WlTouch>,
+    /// The seat's keymap, compiled, with compose: `None` until the first
+    /// keymap arrives, and for good when libxkbcommon cannot be opened.
+    xkb: Option<Xkb>,
+    /// Whether a missing libxkbcommon has been said.
+    xkb_missing_said: bool,
     /// Where the pointer last was on an overlay, surface-local: what a
     /// motion is measured from.
     pointer_at: Option<(f64, f64)>,
@@ -274,6 +281,8 @@ impl Canvas {
             pointer: None,
             keyboard: None,
             touch: None,
+            xkb: None,
+            xkb_missing_said: false,
             pointer_at: None,
             unplaced: [None, None],
             pending_bytes: Vec::new(),
@@ -786,6 +795,41 @@ impl Canvas {
         self.end_dim();
     }
 
+    // -- the keyboard --------------------------------------------------------
+
+    /// The seat's keymap: compiled by libxkbcommon, opened the first time one
+    /// arrives. Without the library the canvas still reads the fact of a key,
+    /// and the named keys by their codes (`keys::key_of_code`).
+    fn keymap(&mut self, fd: std::os::fd::OwnedFd, size: u32) {
+        if self.xkb.is_none() {
+            self.xkb = Xkb::new();
+        }
+        let Some(xkb) = self.xkb.as_mut() else {
+            if !std::mem::replace(&mut self.xkb_missing_said, true) {
+                tracing::warn!(
+                    "seat: libxkbcommon could not be opened; keys are read by their codes, \
+                     and a prompt can be dismissed or submitted but typed into only with it"
+                );
+            }
+            return;
+        };
+        match xkb.set_keymap(fd, size) {
+            Ok(()) => tracing::info!("seat: the keymap is compiled ({size} bytes)"),
+            Err(why) => tracing::warn!("seat: the keymap was refused: {why}"),
+        }
+    }
+
+    /// One key pressed on one of the canvas's surfaces. What it means is the
+    /// keymap's; what is done with it is the dim's: any key is a user who is
+    /// back.
+    fn key_pressed(&mut self, code: u32) {
+        let _key: Option<Key> = match self.xkb.as_mut().filter(|xkb| xkb.ready()) {
+            Some(xkb) => xkb.press(code),
+            None => keys::key_of_code(code),
+        };
+        self.input("a key");
+    }
+
     // -- the sidecars ------------------------------------------------------
 
     /// A dim without its owner is undone: a sidecar that exits mid-dim, by a
@@ -1212,8 +1256,9 @@ impl SeatHandler for Canvas {
                     Err(err) => tracing::warn!("seat: could not get the pointer: {err}"),
                 }
             }
-            // Bound plainly: the fact of a key is all the canvas reads, so
-            // there is no keymap to compile and no xkbcommon.
+            // Bound plainly: the keymap the compositor sends with it is
+            // compiled by libxkbcommon when it arrives (`keymap`), with no
+            // repeat, since a held key is one key to a prompt.
             Capability::Keyboard if self.keyboard.is_none() => {
                 tracing::info!("seat: keyboard bound");
                 self.keyboard = Some(seat.get_keyboard(qh, ()));
@@ -1310,15 +1355,32 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for Canvas {
         _: &Connection,
         _: &QueueHandle<Canvas>,
     ) {
-        // The keymap's fd closes as the event drops; enter, leave, the
-        // modifiers and releases mean nothing here. Only the overlay takes
-        // the keyboard, so a key pressed is a key pressed on the dim.
-        if let wl_keyboard::Event::Key {
-            state: WEnum::Value(wl_keyboard::KeyState::Pressed),
-            ..
-        } = event
-        {
-            canvas.input("a key");
+        match event {
+            wl_keyboard::Event::Keymap {
+                format: WEnum::Value(wl_keyboard::KeymapFormat::XkbV1),
+                fd,
+                size,
+            } => canvas.keymap(fd, size),
+            wl_keyboard::Event::Modifiers {
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+                ..
+            } => {
+                if let Some(xkb) = canvas.xkb.as_mut() {
+                    xkb.modifiers(mods_depressed, mods_latched, mods_locked, group);
+                }
+            }
+            wl_keyboard::Event::Key {
+                key,
+                state: WEnum::Value(wl_keyboard::KeyState::Pressed),
+                ..
+            } => canvas.key_pressed(key),
+            // Enter, leave, releases and the repeat rate mean nothing here:
+            // the keyboard is only ever on the canvas's own surfaces, and a
+            // held key is one key.
+            _ => {}
         }
     }
 }

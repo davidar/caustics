@@ -31,6 +31,12 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # `system`: the raw `wl_display` and `wl_surface` pointers wgpu's surface takes.
 wayland-client = { version = "0.31.15", features = ["system"] }
 wgpu = "30.0.0"
+# The keymap the seat sends, and compose: libxkbcommon, opened at run time
+# rather than linked, so a build needs no development package and a host
+# without the library still cancels a dim with a key.
+xkbcommon-dl = "0.4.2"
+# The one buffer a typed secret passes through, zeroed as it goes.
+zeroize = "1.9.1"
 # No image decoder and no compiler: pictures arrive as `Image` frames from
 # `caustics-wallpaper`, and the caustic as `Module` frames from
 # `caustics-reload`. The host copies bytes.
