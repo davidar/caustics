@@ -13,7 +13,7 @@
 //! **The rule for what belongs here: mechanism, never policy.** Nothing in
 //! this crate names an entry point, a tunable, a sidecar binary or one of a
 //! host's own buffers. Each of those is a parameter, passed by the program
-//! that knows it: the entry list comes from the ABI crate's `ENTRIES`, a
+//! that knows it: the entry list comes from the ABI crate's `BAR_ENTRIES`, a
 //! binding's resource from a closure the host matches on the reflected name,
 //! the default sidecar set from the host's own constant. A function that would
 //! have to know which buffer is which stays in the host.

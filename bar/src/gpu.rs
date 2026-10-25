@@ -104,7 +104,7 @@ const CURVE_HEADROOM: f32 = 0.125;
 /// `text.slang`'s reflection.
 const GLYPH_RECORD: u32 = 64;
 
-// The seven entry points' positions in `abi::ENTRIES`, the one list build.rs
+// The seven entry points' positions in `abi::BAR_ENTRIES`, the one list build.rs
 // bakes and `caustics-reload` recompiles: a pipeline is named by its index in
 // that list, which is also the order `reload_all` takes the modules in.
 const BUILD: usize = 0;
@@ -115,48 +115,48 @@ const VISIBILITY: usize = 4;
 const SAMPLE: usize = 5;
 const DRAW: usize = 6;
 
-/// The seven entry points, in `abi::ENTRIES` order: each one's name, its
+/// The seven entry points, in `abi::BAR_ENTRIES` order: each one's name, its
 /// pipeline's label, and its `[numthreads]`.
-static ENTRY_POINTS: [Entry; abi::ENTRIES.len()] = [
+static ENTRY_POINTS: [Entry; abi::BAR_ENTRIES.len()] = [
     Entry {
-        name: abi::ENTRIES[BUILD],
+        name: abi::BAR_ENTRIES[BUILD],
         label: "caustics-bar-build",
         workgroup: (1, 1, 1),
     },
     Entry {
-        name: abi::ENTRIES[COMPOSE],
+        name: abi::BAR_ENTRIES[COMPOSE],
         label: "caustics-bar-compose",
         workgroup: (1, 1, 1),
     },
     Entry {
-        name: abi::ENTRIES[SHAPE],
+        name: abi::BAR_ENTRIES[SHAPE],
         label: "caustics-bar-shape",
         workgroup: (SHAPE_GROUP, 1, 1),
     },
     Entry {
-        name: abi::ENTRIES[APPLY],
+        name: abi::BAR_ENTRIES[APPLY],
         label: "caustics-bar-apply",
         workgroup: (1, 1, 1),
     },
     Entry {
-        name: abi::ENTRIES[VISIBILITY],
+        name: abi::BAR_ENTRIES[VISIBILITY],
         label: "caustics-bar-visibility",
         workgroup: (TILE, TILE, 1),
     },
     Entry {
-        name: abi::ENTRIES[SAMPLE],
+        name: abi::BAR_ENTRIES[SAMPLE],
         label: "caustics-bar-sample",
         workgroup: (1, 1, 1),
     },
     Entry {
-        name: abi::ENTRIES[DRAW],
+        name: abi::BAR_ENTRIES[DRAW],
         label: "caustics-bar-draw",
         workgroup: (TILE, TILE, 1),
     },
 ];
 
-/// The seven baked modules for one swapchain format, in `abi::ENTRIES` order.
-type BakedSpv = [&'static [u8]; abi::ENTRIES.len()];
+/// The seven baked modules for one swapchain format, in `abi::BAR_ENTRIES` order.
+type BakedSpv = [&'static [u8]; abi::BAR_ENTRIES.len()];
 
 const SPV_RGBA8UNORM: BakedSpv = [
     include_bytes!(concat!(env!("OUT_DIR"), "/bar_build.rgba8unorm.spv")),
@@ -1164,7 +1164,7 @@ impl Gpu {
     /// literals disagree — a device-lost on one driver, silently wrong buffers
     /// on another.
     ///
-    /// `spirv` is one module per entry point, in `abi::ENTRIES` order. The
+    /// `spirv` is one module per entry point, in `abi::BAR_ENTRIES` order. The
     /// swap and its refusal are `caustics_host::program::Program::reload`'s;
     /// what is the bar's is the wording of a refusal and the cold pass it
     /// owes the watchdog.
@@ -1953,7 +1953,7 @@ impl Gpu {
     }
 
     /// Load `bar_check` as an eighth pipeline, for the oracle alone
-    /// (docs/abi.md, *Bindings and the oracle*). Production's `ENTRIES` never names it and the
+    /// (docs/abi.md, *Bindings and the oracle*). Production's `BAR_ENTRIES` never names it and the
     /// baked SPIR-V never carries it.
     #[cfg(test)]
     pub fn set_check(&mut self, spirv: &[u8]) -> Result<()> {

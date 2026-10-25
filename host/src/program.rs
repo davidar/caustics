@@ -17,7 +17,7 @@
 //!
 //! The entry points are the host's: an [`Entry`] per point, in dispatch order,
 //! and a pipeline is named by its index in that list (the bar's list is the
-//! ABI crate's `ENTRIES`).
+//! ABI crate's `BAR_ENTRIES`).
 
 use std::num::NonZeroU64;
 

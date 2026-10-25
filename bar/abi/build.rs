@@ -20,9 +20,11 @@
 //!    build-dependency). It is a wire contract too: `caustics-glyphs` fills
 //!    that arena with a `Bytes` frame, so an engine whose arena changed is a
 //!    new set.
-//! 4. `bar/abi/src/entries.rs` — the entry list a `Module` frame is named by.
+//! 4. `bar/abi/src/entries.rs` — the entry lists a `Module` frame is named by;
+//! 5. `bar/abi/src/canvas.rs` — the canvas's buffer contract, from which
+//!    `canvas_abi.slang` is rendered (docs/abi.md, *The canvas's buffer*).
 //!
-//! The bar's two rendered modules are not in the tree and this script cannot
+//! The three rendered modules are not in the tree and this script cannot
 //! call the crate it is building, so their declarations are hashed instead.
 //! Every source file is hashed as *source*, comments and all: a superset of
 //! hashing its rendering, and coarse in the safe direction — a comment edit
@@ -42,6 +44,7 @@ fn main() {
         repo.join("bar/abi/src/buffer.rs"),
         repo.join("bar/abi/src/wire.rs"),
         repo.join("bar/abi/src/entries.rs"),
+        repo.join("bar/abi/src/canvas.rs"),
     ];
     println!("cargo:rerun-if-changed=build.rs");
     for file in &files {
@@ -54,6 +57,7 @@ fn main() {
         read(&files[1]),
         punchcutter_slang::modules::SHAPE_ABI.as_bytes().to_vec(),
         read(&files[2]),
+        read(&files[3]),
     ];
 
     // FNV-1a, 64-bit: no dependency, no ordering surprise, and a value a

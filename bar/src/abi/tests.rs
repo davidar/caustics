@@ -584,7 +584,7 @@ fn the_samples_body_is_8336_bytes_in_the_documented_layout() {
 /// The variants come from `DstFormat`, which is what `bar/build.rs` bakes
 /// and what `gpu.rs` selects between at run time — so a format added there
 /// is tested here without anyone remembering to add it. The entry names
-/// come from [`ENTRIES`], which is the one list all four readers share.
+/// come from [`BAR_ENTRIES`], which is the one list all four readers share.
 #[test]
 fn the_caustic_compiles_for_every_variant() {
     let source = bar_slang();
@@ -598,7 +598,7 @@ fn the_caustic_compiles_for_every_variant() {
         // is an `Err` here rather than something to re-check by hand.
         let program = punchcutter_slang::compile_program(
             &source,
-            &ENTRIES,
+            &BAR_ENTRIES,
             &Options {
                 defines: &[define],
                 includes: &includes,
@@ -620,7 +620,7 @@ fn the_caustic_compiles_for_every_variant() {
             .map(|entry| entry.name.as_str())
             .collect();
         assert_eq!(
-            names, ENTRIES,
+            names, BAR_ENTRIES,
             "{define}: one module per entry point, in order"
         );
         for entry in &program.entries {

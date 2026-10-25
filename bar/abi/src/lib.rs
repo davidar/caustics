@@ -12,12 +12,16 @@
 //!
 //! They are two declarations because they are two promises; both feed one [`ABI_HASH`], and an install set is built whole.
 //!
+//! A third, [`canvas`], is the canvas host's buffer contract with its own
+//! caustic (docs/abi.md, *The canvas's buffer*): the buffer's kind of promise,
+//! for a second program, rendered into `canvas_abi.slang`.
+//!
 //! Its own crate so a sidecar can import the layout
 //! without the bar's dependencies: `punchcutter-core`'s `plain` and `decl`
 //! modules and these declarations, nothing else.
 //!
-//! [`ENTRIES`], the caustic's entry-point names, lives here too: the compiler
-//! sidecar compiles every entry in that list and names each `Module` frame
+//! [`BAR_ENTRIES`] and [`CANVAS_ENTRIES`], the two caustics' entry-point names, live here too: the compiler
+//! sidecar compiles every entry in the list of the program it was asked for and names each `Module` frame
 //! after one (docs/abi.md, *Module*), so it is a thing two separately built processes must
 //! agree on — which is what this crate is for. The buffer's layout tests stay
 //! in `bar/src/abi.rs` because the reflection test needs the compiler; the wire's
@@ -53,6 +57,7 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 pub mod buffer;
+pub mod canvas;
 pub mod wire;
 
 /// **Declared once**, and declared once for two projects: the macros and the
@@ -73,9 +78,9 @@ pub use format::DstFormat;
 /// How the rendered modules say where they came from, in their first line.
 const RENDERER: &str = "`caustics_bar_abi::rendered()`";
 
-// `pub const ABI_HASH: u64`, hashed by `build.rs` from the four inputs that
-// *are* the contract — the buffer's and the wire's declarations as source, the
-// text engine's arena header, and the entry list. Its doc comment is here because a build
+// `pub const ABI_HASH: u64`, hashed by `build.rs` from the five inputs that
+// *are* the contract — the buffer's, the wire's and the canvas's declarations
+// as source, the text engine's arena header, and the entry lists. Its doc comment is here because a build
 // script cannot write one that rustdoc will keep.
 //
 /// **One number for the whole contract** (docs/abi.md, *Hello*).
@@ -105,20 +110,23 @@ pub(crate) const NORMATIVE: &[&str] = &[
     "and is not in the tree. Edit the Rust; a build renders it again.",
 ];
 
-/// The file names of the two rendered modules, as a caustic's `import`
-/// resolves them: the buffer, then the wire.
-pub const RENDERED: [&str; 2] = ["bar_abi.slang", "bar_wire.slang"];
+/// The file names of the three rendered modules, as a caustic's `import`
+/// resolves them: the bar's buffer, the wire, and the canvas's buffer
+/// (docs/abi.md, *The canvas's buffer*).
+pub const RENDERED: [&str; 3] = ["bar_abi.slang", "bar_wire.slang", "canvas_abi.slang"];
 
-/// The two rendered modules, each with the file name in [`RENDERED`]: what
-/// the compiler reads when the caustic says `import bar_abi;`.
-pub fn rendered() -> [(&'static str, String); 2] {
+/// The three rendered modules, each with the file name in [`RENDERED`]: what
+/// the compiler reads when a caustic says `import bar_abi;` or `import
+/// canvas_abi;`.
+pub fn rendered() -> [(&'static str, String); 3] {
     [
         (RENDERED[0], buffer::slang_module()),
         (RENDERED[1], wire::slang_module()),
+        (RENDERED[2], canvas::slang_module()),
     ]
 }
 
-/// Writes the two rendered modules into `dir`, creating it, so that `dir` can
+/// Writes the three rendered modules into `dir`, creating it, so that `dir` can
 /// go on the compiler's search path. A build script writes them under `OUT_DIR`;
 /// a process that compiles at run time calls [`rendered_dir`] instead.
 pub fn write_rendered(dir: &Path) -> io::Result<()> {
@@ -129,14 +137,14 @@ pub fn write_rendered(dir: &Path) -> io::Result<()> {
     Ok(())
 }
 
-/// Whether `dir` already holds the two, byte for byte.
+/// Whether `dir` already holds the three, byte for byte.
 fn is_rendered(dir: &Path) -> bool {
     rendered().iter().all(|(name, text)| {
         std::fs::read(dir.join(name)).is_ok_and(|on_disk| on_disk == text.as_bytes())
     })
 }
 
-/// A directory holding the two rendered modules, for a process that compiles
+/// A directory holding the rendered modules, for a process that compiles
 /// the caustic at run time: put it on the compiler's search path.
 ///
 /// It is `$XDG_CACHE_HOME/caustics/rendered/<ABI_HASH>/` (`~/.cache` when
@@ -210,8 +218,8 @@ fn materialise(dir: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests;
 
-// `pub const ENTRIES`, in its own file so `build.rs` can hash it as source, one
-// of the four inputs the ABI hash covers.
+// `pub const BAR_ENTRIES` and `CANVAS_ENTRIES`, in their own file so `build.rs`
+// can hash it as source, one of the five inputs the ABI hash covers.
 include!("entries.rs");
 
 /// The buffer's names, unqualified: the bar's call sites keep reading

@@ -96,6 +96,12 @@ pub const WIRE_PIXMAP: u32 = 9;
 pub const WIRE_MODULE: u32 = 10;
 /// **A sidecar's first frame**: which contract it was built against (docs/abi.md, *Hello*).
 pub const WIRE_HELLO: u32 = 11;
+/// One piece of a keyed image of any size up to [`IMAGE_MAX_PX`] square, for
+/// the canvas (docs/abi.md, *Image*). Not a [`Pixmap`]: that one is a slot of
+/// the bar's fixed array, this one is a picture the canvas covers an output with.
+pub const WIRE_IMAGE: u32 = 12;
+/// A command for the canvas: show an image, dim, undim (docs/abi.md, *Canvas*).
+pub const WIRE_CANVAS: u32 = 13;
 
 /// Which buffer a `Bytes` frame writes. The four curve buffers are
 /// the text engine's `text.slang`'s (`punchcutter-text`'s layout);
@@ -285,6 +291,29 @@ abi_consts! {
     pub const APP_ICON_PIXMAP: u32 = 1 << 2;
 }
 
+/// The largest side an `Image` may have, in px (docs/abi.md, *Image*):
+/// wgpu's default `max_texture_dimension_2d`, so an image the reader passes is
+/// one any device the canvas runs on can hold as one texture.
+pub const IMAGE_MAX_PX: u32 = 8192;
+
+abi_consts! {
+    CANVAS_COMMANDS = "`CanvasBody::command` (docs/abi.md, *Canvas*): what the canvas is told to do. \
+                       How a fade or a dim looks is `canvas_tunables.slang`'s";
+
+    /// Cross-fade to the image the key names, which the same sidecar has
+    /// already sent as an `Image`, from `start` over `duration_ms` (0 is a cut).
+    pub const CANVAS_SHOW: u32 = 1;
+    /// Dim towards `alpha_milli` thousandths of the dim colour, from `start`
+    /// over `duration_ms`.
+    pub const CANVAS_DIM: u32 = 2;
+    /// No dim, now.
+    pub const CANVAS_UNDIM: u32 = 3;
+    /// The highest `CANVAS_*`; a `Canvas` naming more is skipped.
+    pub const CANVAS_LAST: u32 = 3;
+    /// The most a dim may be: all dim colour.
+    pub const DIM_MAX_MILLI: u32 = 1000;
+}
+
 abi_consts! {
     REQUESTS = "`RequestBody::kind` (docs/abi.md, *Request*): what the bar asks a sidecar to resolve";
 
@@ -319,9 +348,28 @@ abi_consts! {
     /// action it belongs to, never remembered and never replayed — a token
     /// for a child that has gone is as stale as the click.
     pub const REQ_ACTIVATION: u32 = 6;
+    /// The **size the canvas covers**, from the canvas host to the wallpaper
+    /// sidecar: `name` is the largest output's buffer size in px as
+    /// `WIDTHxHEIGHT`, and `arg` is the host's count of the sizes it has sent,
+    /// so that every change is a request of its own (the pipe remembers a
+    /// request once and replays the list in order, so the last one a child
+    /// reads is the size now). Nothing answers it; the next `Image` is fitted
+    /// to it.
+    pub const REQ_OUTPUT_SIZE: u32 = 7;
     /// The highest `REQ_*`; a `Request` naming more is skipped (docs/abi.md, *Request*).
-    pub const REQ_LAST: u32 = 6;
+    pub const REQ_LAST: u32 = 7;
 }
+
+/// `RequestBody::arg` of a [`REQ_PROGRAM`]: **which caustic** to compile
+/// (docs/abi.md, *Request*). The bar's is zero, which is what its request
+/// carried before there was a second program, so its frames keep their
+/// meaning.
+pub const PROGRAM_BAR: u32 = 0;
+/// The canvas's caustic (`caustics/canvas.slang`, `CANVAS_ENTRIES`).
+pub const PROGRAM_CANVAS: u32 = 1;
+/// The highest `PROGRAM_*`; the compiler sidecar witnesses one past it and
+/// compiles nothing.
+pub const PROGRAM_LAST: u32 = 1;
 
 /// Longest name a `Glyph`, `Request`, `App` field or `Pixmap` key may carry.
 ///
@@ -1009,6 +1057,259 @@ pub struct Pixmap {
     pub rgba: Vec<u8>,
 }
 
+/// *Image* — the fixed head of a `WIRE_IMAGE` body; `key_len` bytes of key,
+/// then **one piece** of the image's straight RGBA8, follow. 16 B.
+///
+/// An image is `width * height * 4` bytes, which at the cap is 256 MiB and
+/// at an ordinary output tens of them, so it crosses the way a `Module` does:
+/// in pieces under [`WIRE_MAX_BODY`], in order, each saying where its bytes
+/// land ([`Image::chunks`], [`ImageAssembly`]). Every piece repeats the key
+/// and the size, so a reader can tell where a piece belongs from the piece.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImageHeader {
+    pub key_len: u32,
+    /// 1..=[`IMAGE_MAX_PX`].
+    pub width: u32,
+    /// 1..=[`IMAGE_MAX_PX`].
+    pub height: u32,
+    /// Byte offset of this piece within the image's `width * height * 4`.
+    pub offset: u32,
+}
+unsafe impl Plain for ImageHeader {}
+
+/// A `WIRE_IMAGE` frame, decoded: one **piece** of one image.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ImageChunk {
+    pub key: String,
+    pub width: u32,
+    pub height: u32,
+    pub offset: u32,
+    /// This piece of the straight RGBA8, row-major.
+    pub bytes: Vec<u8>,
+}
+
+impl ImageChunk {
+    /// The whole image's length in bytes, which every piece implies.
+    pub fn total(&self) -> usize {
+        self.width as usize * self.height as usize * 4
+    }
+}
+
+/// One whole image: what a writer holds before it cuts it up, and what a
+/// reader holds once it has put it back together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Image {
+    /// The sidecar's name for it; a `CANVAS_SHOW` names it again.
+    pub key: String,
+    pub width: u32,
+    pub height: u32,
+    /// Straight (not premultiplied) RGBA8, row-major, `width * height * 4`
+    /// bytes.
+    pub rgba: Vec<u8>,
+}
+
+impl Image {
+    /// Cut this image into frames whose body is at most `max_body` bytes,
+    /// header and key included. [`WIRE_MAX_BODY`] in every caller; a
+    /// parameter so a test can force several pieces from a small image.
+    pub fn chunks(&self, max_body: usize) -> Vec<ImageChunk> {
+        let room = max_body
+            .saturating_sub(size_of::<ImageHeader>() + self.key.len())
+            .max(4);
+        self.rgba
+            .chunks(room)
+            .enumerate()
+            .map(|(i, run)| ImageChunk {
+                key: self.key.clone(),
+                width: self.width,
+                height: self.height,
+                offset: (i * room) as u32,
+                bytes: run.to_vec(),
+            })
+            .collect()
+    }
+}
+
+/// The pieces of one image, collected until it is whole: *Module*'s rule for
+/// an image (docs/abi.md, *Image*). A writer sends an image's pieces **in
+/// order**, so a piece whose `offset` is not where the last one ended, or
+/// that names another key or size, starts over.
+///
+/// The bytes in hand grow as pieces arrive, never ahead of them: a first
+/// piece that claims the cap costs what it carries, not 256 MiB.
+#[derive(Clone, Debug, Default)]
+pub struct ImageAssembly {
+    head: Option<(String, u32, u32)>,
+    rgba: Vec<u8>,
+}
+
+impl ImageAssembly {
+    pub fn new() -> ImageAssembly {
+        ImageAssembly::default()
+    }
+
+    /// Bytes in hand, and the image's whole length.
+    pub fn progress(&self) -> (usize, usize) {
+        let total = self
+            .head
+            .as_ref()
+            .map_or(0, |(_, w, h)| *w as usize * *h as usize * 4);
+        (self.rgba.len(), total)
+    }
+
+    /// Forget what is held.
+    pub fn clear(&mut self) {
+        self.head = None;
+        self.rgba = Vec::new();
+    }
+
+    /// File one piece; `Some` once the image is whole.
+    pub fn push(&mut self, chunk: ImageChunk) -> Option<Image> {
+        let continues = match &self.head {
+            Some((key, width, height)) => {
+                *key == chunk.key
+                    && *width == chunk.width
+                    && *height == chunk.height
+                    && self.rgba.len() == chunk.offset as usize
+            }
+            None => false,
+        };
+        if !continues {
+            self.clear();
+            if chunk.offset != 0 {
+                // The tail of an image whose head this reader never saw.
+                return None;
+            }
+        }
+        let total = chunk.total();
+        self.rgba.extend_from_slice(&chunk.bytes);
+        if self.rgba.len() < total {
+            self.head = Some((chunk.key, chunk.width, chunk.height));
+            return None;
+        }
+        self.head = None;
+        let mut rgba = std::mem::take(&mut self.rgba);
+        rgba.truncate(total);
+        Some(Image {
+            key: chunk.key,
+            width: chunk.width,
+            height: chunk.height,
+            rgba,
+        })
+    }
+}
+
+abi_struct! {
+    /// *Canvas* — the fixed head of a `WIRE_CANVAS` body; `key_len` bytes of key
+    /// follow (a `CANVAS_SHOW`'s; none for the others). 32 B.
+    ///
+    /// The canvas host copies this head whole into the canvas caustic's
+    /// `facts` (docs/abi.md, *The canvas's buffer*), the last show and the last
+    /// dim each in a place of its own, and the caustic reads the words. So the
+    /// times are the sidecar's, never the host's: a fade that sleeps through a
+    /// suspend lands where `CLOCK_BOOTTIME` says.
+    { #[repr(C)] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] }
+    pub struct CanvasBody {
+        /// `CANVAS_*`.
+        pub command: u32,
+        /// The key's bytes following this head: a `CANVAS_SHOW`'s image, else 0.
+        pub key_len: u32,
+        /// When the fade or the dim begins, `CLOCK_BOOTTIME` ms, low word.
+        pub start_lo: u32,
+        /// The high word.
+        pub start_hi: u32,
+        /// How long it takes, ms; 0 is at once.
+        pub duration_ms: u32,
+        /// `CANVAS_DIM`: how far, 0..=DIM_MAX_MILLI thousandths of the dim
+        /// colour. 0 for the others.
+        pub alpha_milli: u32,
+        pub _rsvd0: u32,
+        pub _rsvd1: u32,
+    }
+}
+unsafe impl Plain for CanvasBody {}
+
+impl CanvasBody {
+    /// `start_lo` and `start_hi` as one number.
+    pub fn start_ms(&self) -> u64 {
+        u64::from(self.start_lo) | (u64::from(self.start_hi) << 32)
+    }
+}
+
+/// A `WIRE_CANVAS` frame, decoded.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Canvas {
+    /// Cross-fade to the image `key` names.
+    Show {
+        key: String,
+        /// `CLOCK_BOOTTIME` ms.
+        fade_start_ms: u64,
+        fade_duration_ms: u32,
+    },
+    /// Dim towards `alpha_milli` thousandths of the dim colour.
+    Dim {
+        alpha_milli: u32,
+        /// `CLOCK_BOOTTIME` ms.
+        start_ms: u64,
+        duration_ms: u32,
+    },
+    /// No dim.
+    Undim,
+}
+
+impl Canvas {
+    /// The fixed head this command crosses as, and what the canvas host
+    /// copies to the GPU.
+    pub fn body(&self) -> CanvasBody {
+        let split = |ms: u64| (ms as u32, (ms >> 32) as u32);
+        match self {
+            Canvas::Show {
+                key,
+                fade_start_ms,
+                fade_duration_ms,
+            } => {
+                let (start_lo, start_hi) = split(*fade_start_ms);
+                CanvasBody {
+                    command: CANVAS_SHOW,
+                    key_len: key.len() as u32,
+                    start_lo,
+                    start_hi,
+                    duration_ms: *fade_duration_ms,
+                    ..CanvasBody::default()
+                }
+            }
+            Canvas::Dim {
+                alpha_milli,
+                start_ms,
+                duration_ms,
+            } => {
+                let (start_lo, start_hi) = split(*start_ms);
+                CanvasBody {
+                    command: CANVAS_DIM,
+                    start_lo,
+                    start_hi,
+                    duration_ms: *duration_ms,
+                    alpha_milli: *alpha_milli,
+                    ..CanvasBody::default()
+                }
+            }
+            Canvas::Undim => CanvasBody {
+                command: CANVAS_UNDIM,
+                ..CanvasBody::default()
+            },
+        }
+    }
+
+    /// The image a show names.
+    pub fn key(&self) -> Option<&str> {
+        match self {
+            Canvas::Show { key, .. } => Some(key),
+            _ => None,
+        }
+    }
+}
+
 /// *Module* — the fixed head of a `WIRE_MODULE` body, and behind it **one piece**
 /// of the module's payload.
 ///
@@ -1324,6 +1625,10 @@ pub enum Frame {
     /// *Hello*: a sidecar's first frame, naming the contract it was built
     /// against.
     Hello(Hello),
+    /// *Image*: one piece of an image for the canvas.
+    Image(ImageChunk),
+    /// *Canvas*: a command for the canvas.
+    Canvas(Canvas),
     /// Read whole, understood not at all — and that is fine (docs/abi.md, *Framing*, rules 5–7).
     Skipped(Skipped),
 }
@@ -1343,6 +1648,8 @@ impl Frame {
             Frame::Pixmap(_) => WIRE_PIXMAP,
             Frame::Module(_) => WIRE_MODULE,
             Frame::Hello(_) => WIRE_HELLO,
+            Frame::Image(_) => WIRE_IMAGE,
+            Frame::Canvas(_) => WIRE_CANVAS,
             Frame::Skipped(skipped) => skipped.kind,
         }
     }
@@ -1460,6 +1767,14 @@ pub fn read<R: Read>(input: &mut R) -> io::Result<Option<Frame>> {
         },
         WIRE_HELLO => match decode_hello(&body) {
             Ok(hello) => Ok(Some(Frame::Hello(hello))),
+            Err(why) => skip(why),
+        },
+        WIRE_IMAGE => match decode_image(&body) {
+            Ok(image) => Ok(Some(Frame::Image(image))),
+            Err(why) => skip(why),
+        },
+        WIRE_CANVAS => match decode_canvas(&body) {
+            Ok(canvas) => Ok(Some(Frame::Canvas(canvas))),
             Err(why) => skip(why),
         },
         _ => skip(Skip::Kind),
@@ -1651,6 +1966,55 @@ fn decode_module(body: &[u8]) -> Result<ModuleChunk, Skip> {
         total: head.total,
         bytes: tail.to_vec(),
     })
+}
+
+/// *Image*'s rules: a size inside the cap, a key, and a piece that lands
+/// inside the image.
+fn decode_image(body: &[u8]) -> Result<ImageChunk, Skip> {
+    let (head, mut tail): (ImageHeader, _) = split_head(body)?;
+    if !(1..=IMAGE_MAX_PX).contains(&head.width) || !(1..=IMAGE_MAX_PX).contains(&head.height) {
+        return Err(Skip::Body);
+    }
+    let key = take_name(&mut tail, head.key_len)?;
+    if key.is_empty() {
+        return Err(Skip::Body);
+    }
+    let total = u64::from(head.width) * u64::from(head.height) * 4;
+    if tail.is_empty() || u64::from(head.offset) + tail.len() as u64 > total {
+        return Err(Skip::Body);
+    }
+    Ok(ImageChunk {
+        key,
+        width: head.width,
+        height: head.height,
+        offset: head.offset,
+        bytes: tail.to_vec(),
+    })
+}
+
+/// *Canvas*'s rules: a known command, a key on a show and on nothing else, a
+/// dim no deeper than all of it.
+fn decode_canvas(body: &[u8]) -> Result<Canvas, Skip> {
+    let (head, mut tail): (CanvasBody, _) = split_head(body)?;
+    let key = take_name(&mut tail, head.key_len)?;
+    if !tail.is_empty() {
+        return Err(Skip::Length);
+    }
+    let start = head.start_ms();
+    match head.command {
+        CANVAS_SHOW if !key.is_empty() => Ok(Canvas::Show {
+            key,
+            fade_start_ms: start,
+            fade_duration_ms: head.duration_ms,
+        }),
+        CANVAS_DIM if key.is_empty() && head.alpha_milli <= DIM_MAX_MILLI => Ok(Canvas::Dim {
+            alpha_milli: head.alpha_milli,
+            start_ms: start,
+            duration_ms: head.duration_ms,
+        }),
+        CANVAS_UNDIM if key.is_empty() => Ok(Canvas::Undim),
+        _ => Err(Skip::Body),
+    }
 }
 
 /// *Hello*: two words of hash and a name that is UTF-8 and not longer than a
@@ -1976,6 +2340,55 @@ pub fn write<W: Write>(out: &mut W, frame: &Frame) -> io::Result<()> {
             buf.extend_from_slice(as_bytes(&head));
             buf.extend_from_slice(name);
         }
+        Frame::Image(chunk) => {
+            let key = name_bytes(&chunk.key)?;
+            if key.is_empty() {
+                return Err(invalid("an Image frame names no key"));
+            }
+            if !(1..=IMAGE_MAX_PX).contains(&chunk.width)
+                || !(1..=IMAGE_MAX_PX).contains(&chunk.height)
+            {
+                return Err(invalid("an Image frame's size is outside 1..=IMAGE_MAX_PX"));
+            }
+            if chunk.bytes.is_empty() || chunk.offset as usize + chunk.bytes.len() > chunk.total() {
+                return Err(invalid("an Image frame's piece lands outside its image"));
+            }
+            let len = size_of::<ImageHeader>() + key.len() + chunk.bytes.len();
+            if len > WIRE_MAX_BODY {
+                return Err(invalid(&format!(
+                    "image body of {len} bytes, over the {WIRE_MAX_BODY} cap: chunk it"
+                )));
+            }
+            let head = ImageHeader {
+                key_len: key.len() as u32,
+                width: chunk.width,
+                height: chunk.height,
+                offset: chunk.offset,
+            };
+            buf.reserve(WireHeader::SIZE + len);
+            buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_IMAGE, len as u32)));
+            buf.extend_from_slice(as_bytes(&head));
+            buf.extend_from_slice(key);
+            buf.extend_from_slice(&chunk.bytes);
+        }
+        Frame::Canvas(canvas) => {
+            let key = name_bytes(canvas.key().unwrap_or(""))?;
+            match canvas {
+                Canvas::Show { key, .. } if key.is_empty() => {
+                    return Err(invalid("a show names no image"));
+                }
+                Canvas::Dim { alpha_milli, .. } if *alpha_milli > DIM_MAX_MILLI => {
+                    return Err(invalid("a dim deeper than DIM_MAX_MILLI"));
+                }
+                _ => {}
+            }
+            let head = canvas.body();
+            let len = size_of::<CanvasBody>() + key.len();
+            buf.reserve(WireHeader::SIZE + len);
+            buf.extend_from_slice(as_bytes(&WireHeader::new(WIRE_CANVAS, len as u32)));
+            buf.extend_from_slice(as_bytes(&head));
+            buf.extend_from_slice(key);
+        }
         Frame::Skipped(skipped) => {
             return Err(invalid(&format!(
                 "a skipped frame has no bytes to write ({skipped})"
@@ -1996,6 +2409,11 @@ pub fn write<W: Write>(out: &mut W, frame: &Frame) -> io::Result<()> {
 /// Every constant group the wire renders, in order.
 pub(crate) const CONST_GROUPS: &[ConstGroup] =
     &[CHARTS, APPLETS, ROWS, ACTIONS, GLYPHS, APPS, REQUESTS];
+
+/// The canvas's commands, which `canvas_abi.slang` renders and `bar_wire.slang`
+/// does not: no bar caustic reads a `Canvas` body (docs/abi.md, *The canvas's
+/// buffer*).
+pub(crate) const CANVAS_GROUP: ConstGroup = CANVAS_COMMANDS;
 
 /// Every wire struct the GPU reads, or will: [`ChartRow`] and [`Samples`] are
 /// bound by the samples buffer (docs/abi.md, *Samples*). The four heads after them are what the

@@ -180,7 +180,7 @@ of those, out of process, can only cost its own feature.
 ### The caustic
 
 `caustics/bar.slang` is seven compute entry points, in dispatch order
-(`ENTRIES` in `bar/abi/src/entries.rs`), each a short sequence of calls into
+(`BAR_ENTRIES` in `bar/abi/src/entries.rs`), each a short sequence of calls into
 the modules beside it: the bar's own (`bar_state`, the bindings and the
 private buffer; `bar_popups`; `bar_layout`; `bar_paint`; `bar_table`), one
 module per subject the bar shows (`sysmon`, the charts; `notify`, the toasts;

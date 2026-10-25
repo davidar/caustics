@@ -23,6 +23,11 @@ Slang twins (`bar_abi.slang` for the buffer, `bar_wire.slang` for the frames
 the caustic reads whole) are rendered from it wherever a compile needs them;
 neither is in the tree.
 
+A second program hosts a caustic of its own: the canvas (docs/canvas.md),
+whose host and caustic share a buffer contract of the same kind, smaller,
+declared beside the bar's and rendered into `canvas_abi.slang` (*The
+canvas's buffer*). Its sidecars speak the same wire.
+
 ## The two contracts
 
 | | the buffer | the wire |
@@ -105,7 +110,7 @@ never reads a byte of either. Their layouts are the engine's
 Both start zero (wgpu zero-initialises a buffer at creation) and the caustic
 initialises itself (*The private buffer*).
 
-The seven entry points and their order (`ENTRIES` in
+The seven entry points and their order (`BAR_ENTRIES` in
 `bar/abi/src/entries.rs`): `bar_build`, `bar_compose`, `bar_shape` in the
 shape submission when something built is owed; `bar_apply`, then
 `bar_visibility`/`bar_sample`/`bar_draw` per mapped target, every frame.
@@ -567,7 +572,7 @@ position, so a gap is a panic at startup. A reload whose bindings differ in
 name, set, index, kind or stride is refused.
 
 **The oracle** (`CAUSTICS_BAR_ORACLE=1`) is a GPU pass. `caustics/bar_check.slang`
-is a test-only eighth entry point, not in `ENTRIES`, `#include`d into
+is a test-only eighth entry point, not in `BAR_ENTRIES`, `#include`d into
 `bar.slang` under `-DCAUSTICS_BAR_CHECK` and compiled by the oracle test alone.
 It walks `private` after `bar_build`/`bar_compose`/`bar_shape` and pushes
 witnesses: `check: …` for each violated structural invariant (every window
@@ -630,6 +635,59 @@ rather than comparing it.
 
 No functions live in the ABI, and the process mints no hash at all.
 
+### The canvas's buffer
+
+The canvas host (`caustics-canvas`, docs/canvas.md) and its caustic
+(`caustics/canvas.slang`) share four bindings, declared in
+`caustics/canvas_state.slang` and bound by name from the reflection as the
+bar's are. Their layouts are `caustics_bar_abi::canvas`, rendered into
+`canvas_abi.slang`, which imports nothing of the bar's: the few names both
+caustics use (`Note`, `NO_INDEX`, `WITNESS_*`) are rendered there again from
+the same Rust declarations, and `CanvasBody` is the wire's `WIRE_CANVAS` head
+(*Canvas*).
+
+| binding (set 0, by name) | struct / bytes | writer | reader |
+|---|---|---|---|
+| `params` | `CanvasParams`, 32 B, one per output | the host, before every frame it draws on that output | both entries |
+| `facts` | `CanvasFacts`, 80 B | the host, whole, when a `Canvas` frame lands | both entries |
+| `state` | `CanvasState`: `wants_redraw` and a witness ring, 1552 B | the caustic | the host, one frame late (the only readback) |
+| `private` | the caustic's own, stride from reflection | the caustic | the caustic; tests by reflection |
+| `image_a`, `image_b`, `tex_sampler` | two textures of straight RGBA8, each the size of the image in it | the host (`write_texture`) | `canvas_draw` |
+| `dst` | storage texture, the output's swapchain image | `canvas_draw` | the swapchain |
+
+```
+struct CanvasParams {   // 32 B — one output's frame facts
+    uint width, height; // 0   the output's buffer, px
+    uint scale;         // 8   the output's scale in 120ths (240 at scale 2)
+    uint frame;         // 12  ≥ 1, the witness ring's stamp (rule 1)
+    uint now_lo, now_hi;// 16  CLOCK_BOOTTIME ms when the frame is drawn
+    uint _pad0, _pad1;  // 24
+}
+struct CanvasFacts {    // 80 B — what the host was told
+    CanvasBody show;    // 0   the last CANVAS_SHOW, as it crossed the wire; zero before one
+    CanvasBody dim;     // 32  the last CANVAS_DIM or CANVAS_UNDIM; zero before one
+    uint from_slot;     // 64  SLOT_A / SLOT_B: the picture the show fades from; NO_INDEX for none
+    uint to_slot;       // 68  the picture it fades to; NO_INDEX before any
+    uint shows;         // 72  shows applied: a new value is a new fade
+    uint _pad0;         // 76
+}
+struct CanvasState {    // 1552 B — read back
+    uint wants_redraw;  // 0   a fade or a dim is in progress
+    uint witness_frame, witness_count, witness_lost; // 4
+    Note witnesses[MAX_CANVAS_WITNESSES];            // 16  32 of them
+}
+```
+
+**The host routes, and decides nothing.** An `Image` is held whole until the
+`CANVAS_SHOW` that names it arrives, then copied into whichever slot the
+picture on screen is not in; `from_slot` becomes the slot that was showing,
+`to_slot` the new one, and the show's head is copied into `facts.show`. A
+dim's head is copied into `facts.dim`. When the fade is, how far along it is
+and what it looks like are the caustic's, from the heads' times and
+`params.now`; so is `wants_redraw`, the host's only reason to draw a frame
+that no event asked for. `CANVAS_ENTRIES` (`bar/abi/src/entries.rs`) are
+`canvas_apply`, once per frame, and `canvas_draw` over the output drawn.
+
 ## The wire
 
 ### What the caustic reads whole
@@ -642,7 +700,9 @@ verbatim and are read there through `bar_wire.slang`: `Samples`
 a named buffer untouched. `Pixmap` (*Pixmap*) is pixels for a texture, `Font`
 (*Font*) is two numbers the process needs for `Params` and a witness, `Module`
 (*Module*) is SPIR-V for the device, and `Action`/`Request` (*Action*, *Request*) are
-what the process writes.
+what the process writes. The canvas host reads two kinds the bar never sees:
+`Image` (*Image*), pixels for one of its two textures, and `Canvas`
+(*Canvas*), whose head it copies into its caustic's `facts`.
 
 ### Framing
 
@@ -660,13 +720,14 @@ struct WireHeader {     // 12 B
 `WIRE_SAMPLES` 1 (*Samples*), `WIRE_ROWS` 2 (*Rows*), `WIRE_ACTION` 3 (*Action*),
 `WIRE_BYTES` 4 (*Bytes*), `WIRE_FONT` 5 (*Font*), `WIRE_GLYPH` 6 (*Glyph*),
 `WIRE_REQUEST` 7 (*Request*, the bar → a sidecar), `WIRE_APP` 8 (*App*),
-`WIRE_PIXMAP` 9 (*Pixmap*), `WIRE_MODULE` 10 (*Module*), `WIRE_HELLO` 11 (*Hello*).
+`WIRE_PIXMAP` 9 (*Pixmap*), `WIRE_MODULE` 10 (*Module*), `WIRE_HELLO` 11 (*Hello*),
+`WIRE_IMAGE` 12 (*Image*), `WIRE_CANVAS` 13 (*Canvas*).
 
 `WIRE_MAX_BODY` = **1 MiB** (`1 << 20`): a body longer than that is a broken
 writer. Every fixed body is small (`Samples` is 8336 B), so this bounds only
 the variable-size kinds, and it bounds them before a byte of one is
-allocated. A `Module` larger than the cap is chunked (*Module*), and so is a
-`Bytes` run (*Bytes*).
+allocated. A `Module` larger than the cap is chunked (*Module*), and so are a
+`Bytes` run (*Bytes*) and an `Image` (*Image*).
 
 **Reader rules** (`wire::read`, used by the bar and available to sidecars for
 their stdin):
@@ -1087,7 +1148,8 @@ without it.
 struct RequestBody {    // 16 B
     uint kind;          // 0   REQ_*
     uint name_len;      // 4   UTF-8 following
-    uint arg;           // 8   the kind's one word: REQ_ACTIVATION's row id; 0 for the others
+    uint arg;           // 8   the kind's one word: REQ_ACTIVATION's row id, REQ_PROGRAM's program,
+                        //     REQ_OUTPUT_SIZE's count; 0 for the others
     uint _rsvd1;        // 12
 }
 // then `name_len` bytes
@@ -1099,10 +1161,11 @@ struct RequestBody {    // 16 B
 | 2 | `REQ_APP` | an app id | `App` |
 | 3 | `REQ_ICON` | a themed icon name that is not curves | `Pixmap` keyed by the name |
 | 4 | `REQ_COVER` | the bytes of a string | the curves sidecar appends what its font lacks, and answers in `Bytes` |
-| 5 | `REQ_PROGRAM` | the swapchain format's define | a generation of `Module`s |
+| 5 | `REQ_PROGRAM` | the swapchain format's define; `arg` the program | a generation of `Module`s |
 | 6 | `REQ_ACTIVATION` | an xdg-activation token | none |
+| 7 | `REQ_OUTPUT_SIZE` | `WIDTHxHEIGHT`, the largest output's buffer px | none; the next `Image` is fitted to it |
 
-`REQ_LAST` is 6; a kind past it is skipped.
+`REQ_LAST` is 7; a kind past it is skipped.
 
 **`REQ_COVER`** is the one whose `name` is not a name: it is the UTF-8 of a
 text block the caustic flagged as having a glyph the font lacks (an
@@ -1164,6 +1227,22 @@ spells it. The bar sends it once, when the device comes up and it first knows
 the format; `caustics-reload` compiles for it on receipt and on every save
 thereafter, and compiles nothing before it. The replay above is what makes a
 restarted compiler work with no code in the bar for restarting it.
+
+`arg` says **which caustic**: `PROGRAM_BAR` 0, the bar's (`bar.slang`,
+`BAR_ENTRIES`, `bar_tunables.slang`), which is the word every request the
+bar has sent carries; `PROGRAM_CANVAS` 1, the canvas's (`canvas.slang`,
+`CANVAS_ENTRIES`, `canvas_tunables.slang`). One `caustics/` directory holds
+both, and each caustic watches only its own modules (the canvas's are named
+`canvas*.slang`, the bar's are the rest), so a save of one never recompiles
+the other. A word past `PROGRAM_LAST` is one witness and no compile.
+
+**`REQ_OUTPUT_SIZE`** is the canvas host telling the wallpaper sidecar the
+size of the largest output it covers, in buffer px (`1920x1080`), at start
+and whenever an output comes, goes or changes scale. It answers nothing: the
+sidecar fits the next image it sends to that size. Because the pipe sends a
+remembered request once and replays the list in order, `arg` is the host's
+count of the sizes it has sent, so each change is a request of its own and
+the last one a restarted sidecar reads is the size now.
 
 ### App: `WIRE_APP`
 
@@ -1244,7 +1323,7 @@ reflection arrive as bytes like a font does, and go to the device.
 struct ModuleHeader {   // 40 B
     uint generation;    // 0   which compile; complete when `count` entry points have arrived whole
     uint index;         // 4   this entry point's place in the caustic's entry list; < count
-    uint count;         // 8   entry points in this generation (`ENTRIES`, seven)
+    uint count;         // 8   entry points in this generation (`BAR_ENTRIES`, seven; `CANVAS_ENTRIES`, two)
     uint format;        // 12  wire::format_code() of the define this was built for
     uint spirv_len;     // 16  the whole module's runs, repeated in every piece
     uint reflection_len;// 20
@@ -1274,10 +1353,12 @@ together (`wire::ModuleAssembly`), and a piece whose `offset` is not where
 the last one ended starts the payload over rather than splicing two compiles
 together.
 
-The entry list is `ENTRIES` in `caustics-bar-abi`, the ABI crate rather than the
-bar, because it is a thing two separately built processes must agree on.
-Both ends read the same one: `bar/build.rs` bakes it, `caustics-reload` compiles
-it, `bar/src/gpu.rs` names the pipelines from it.
+The entry lists are `BAR_ENTRIES` and `CANVAS_ENTRIES` in `caustics-bar-abi`,
+the ABI crate rather than either host, because each is a thing two separately
+built processes must agree on. Both ends read the same one: `bar/build.rs`
+bakes the bar's, `canvas/build.rs` the canvas's, `caustics-reload` compiles
+the one its `REQ_PROGRAM` names, and each host names its pipelines from its
+own.
 
 **A generation is all or nothing.** `Gpu::reload_all` rebuilds every pipeline
 or none, so the bar collects entry points by generation and swaps only when
@@ -1299,7 +1380,74 @@ of 0 or past `MAX_NAME_LEN` → skip (body); the three runs not adding up to
 `total`, or `offset + len` past `total` → skip (body). Then the bar's own
 three, each one witness and no swap, applied to the assembled module: a
 `format` that is not this session's, a `count` that is not this bar's entry
-count, a name that is not `ENTRIES[index]`.
+count, a name that is not the host's entry list at `index`.
+
+### Image: `WIRE_IMAGE`
+
+A keyed image for the canvas: any size up to `IMAGE_MAX_PX`² (8192², wgpu's
+default largest texture), **straight** RGBA8 like a `Pixmap`, and not one:
+a `Pixmap` is a 64² slot of the bar's fixed array, an `Image` is a picture
+the canvas covers an output with. It crosses **in pieces**, in order, the way
+a `Module` does (*Module*): an image the size of an output is tens of
+mebibytes, and the frame cap stays where *Framing* put it.
+
+```
+struct ImageHeader {    // 16 B
+    uint key_len;       // 0   the key following, in every piece
+    uint width;         // 4   1..=IMAGE_MAX_PX
+    uint height;        // 8   1..=IMAGE_MAX_PX
+    uint offset;        // 12  where this piece lands in the width * height * 4 bytes
+}
+// then `key_len` bytes of key, then this piece of the RGBA8, row-major
+```
+
+A writer cuts an image with `Image::chunks`; a reader puts it back together
+with `wire::ImageAssembly`, which takes pieces in order and starts over on a
+piece of another key or size, or one whose `offset` is not where the last
+ended. The bytes in hand grow as pieces arrive: a first piece claiming the cap
+costs what it carries. The key is the sidecar's own name for the picture,
+unique among the images it has sent (`caustics-wallpaper` mints
+`caustics-wallpaper:<pid>-<n>`); a `CANVAS_SHOW` names it again.
+
+Reader rules: `width` or `height` 0 or past `IMAGE_MAX_PX` → skip (body); an
+empty key or one past `MAX_NAME_LEN` → skip (body); an empty piece, or one
+reaching past `width * height * 4` → skip (body).
+
+### Canvas: `WIRE_CANVAS`
+
+A command for the canvas: show an image, dim, undim. The head crosses the
+pipe and is then copied whole into the canvas caustic's `facts` (*The
+canvas's buffer*), which is why it is a struct the caustic reads and why its
+times are the sidecar's: `CLOCK_BOOTTIME` ms, the clock that counts a
+suspend, so a fade that sleeps through one lands where the clock says.
+
+```
+struct CanvasBody {     // 32 B
+    uint command;       // 0   CANVAS_*
+    uint key_len;       // 4   the key following: a CANVAS_SHOW's image; 0 for the others
+    uint start_lo;      // 8   when the fade or the dim begins, CLOCK_BOOTTIME ms, low word
+    uint start_hi;      // 12  high word
+    uint duration_ms;   // 16  how long it takes; 0 is at once
+    uint alpha_milli;   // 20  CANVAS_DIM: how far, 0..=DIM_MAX_MILLI (1000) of the dim colour
+    uint _rsvd0, _rsvd1;// 24
+}
+// then `key_len` bytes of key
+```
+
+| `CANVAS_*` | | means |
+|---|---|---|
+| 1 | `CANVAS_SHOW` | cross-fade from the picture on screen to the `Image` the key names, sent before it by the same sidecar, from `start` over `duration_ms` |
+| 2 | `CANVAS_DIM` | dim towards `alpha_milli` of the dim colour, from `start` over `duration_ms` |
+| 3 | `CANVAS_UNDIM` | no dim, now |
+
+A fade interpolates between the two **source** pictures at alpha(t), never a
+compound of the last frame (docs/canvas.md, *Time*); how alpha(t) is shaped
+and what the dim colour is are `canvas_tunables.slang`'s. A show whose key
+names no image the host holds is one witness and nothing on screen.
+
+Reader rules: `command` 0 or past `CANVAS_LAST` → skip (body); a show with no
+key, a dim or an undim with one, or a dim past `DIM_MAX_MILLI` → skip (body);
+key bytes the head does not count → skip (length).
 
 ### The ABI hash
 
@@ -1313,7 +1461,7 @@ read a table directory out of a sorted list of `(codepoint, gid)` pairs, took
 stopped.
 
 So there is **one number for the whole contract**: `ABI_HASH`
-(`caustics-bar-abi`), hashed at build time over the four inputs that *are*
+(`caustics-bar-abi`), hashed at build time over the five inputs that *are*
 the contract:
 
 1. `bar/abi/src/buffer.rs`, the buffer contract's declaration, which
@@ -1326,7 +1474,9 @@ the contract:
    the engine (`punchcutter_slang::modules::SHAPE_ABI`, a build-dependency of
    `caustics-bar-abi`), so a dependency bump that changes the arena is a new
    set;
-4. `bar/abi/src/entries.rs`, the entry list a `Module` frame is named by.
+4. `bar/abi/src/entries.rs`, the entry lists a `Module` frame is named by;
+5. `bar/abi/src/canvas.rs`, the canvas's buffer contract, which
+   `canvas_abi.slang` is rendered from (*The canvas's buffer*).
 
 The bar's own files are hashed as source, comments and all, which is a
 superset of hashing what they render: coarse in the safe direction, since a

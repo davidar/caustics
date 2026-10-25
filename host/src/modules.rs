@@ -18,7 +18,7 @@
 //!   one the device negotiated; SPIR-V bakes the storage-image format in);
 //! - it is the **caustic's entry points**, in order, by name, one each (the
 //!   list the host passes to [`Modules::new`]; the bar's is the ABI crate's
-//!   `ENTRIES`);
+//!   `BAR_ENTRIES`);
 //! - nothing else. The bindings are `Gpu::reload_all`'s check and the SPIR-V
 //!   is the device's.
 //!

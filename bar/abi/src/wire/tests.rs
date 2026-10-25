@@ -613,6 +613,8 @@ fn the_m_heads_are_the_documented_sizes() {
     assert_eq!(size_of::<AppBody>(), 32);
     assert_eq!(size_of::<PixmapBody>(), 16);
     assert_eq!(size_of::<ModuleHeader>(), 40);
+    assert_eq!(size_of::<ImageHeader>(), 16);
+    assert_eq!(size_of::<CanvasBody>(), 32);
 }
 
 #[test]
@@ -960,10 +962,18 @@ fn the_format_code_separates_the_two_variants() {
     );
 }
 
-/// `REQ_LAST` (`REQ_ACTIVATION`) is the highest kind a `Request` may name, and 4 is `REQ_COVER`: both must pass the bound, and one past it must not.
+/// `REQ_LAST` (`REQ_OUTPUT_SIZE`) is the highest kind a `Request` may name, and 4 is `REQ_COVER`: both must pass the bound, and one past it must not.
 #[test]
 fn the_request_bound_admits_every_kind_the_wire_has_numbered() {
-    for kind in [REQ_GLYPH, REQ_APP, REQ_ICON, 4, REQ_PROGRAM] {
+    for kind in [
+        REQ_GLYPH,
+        REQ_APP,
+        REQ_ICON,
+        4,
+        REQ_PROGRAM,
+        REQ_ACTIVATION,
+        REQ_OUTPUT_SIZE,
+    ] {
         let frame = Frame::Request(Request {
             kind,
             arg: 0,
@@ -1028,4 +1038,276 @@ fn a_module_larger_than_the_cap_splits_and_reassembles() {
         back = assembly.push(read_back);
     }
     assert_eq!(back, Some(module), "the pieces reassemble byte for byte");
+}
+
+// -- Image and Canvas (docs/abi.md, *Image*, *Canvas*) -------------------------
+
+/// The bytes of one frame with its header's `len` and the head's words
+/// rewritten, for the reader-rule tests: a writer refuses what these build.
+fn with_words(frame: &Frame, words: &[(usize, u32)], trailing: &[u8]) -> Vec<u8> {
+    let mut raw = bytes(frame);
+    for (at, word) in words {
+        let at = WireHeader::SIZE + at;
+        raw[at..at + 4].copy_from_slice(&word.to_le_bytes());
+    }
+    raw.extend_from_slice(trailing);
+    let len = (raw.len() - WireHeader::SIZE) as u32;
+    raw[8..12].copy_from_slice(&len.to_le_bytes());
+    raw
+}
+
+fn read_one(raw: Vec<u8>) -> Frame {
+    read(&mut std::io::Cursor::new(raw))
+        .expect("reads")
+        .expect("a frame")
+}
+
+fn image(key: &str, width: u32, height: u32) -> Image {
+    Image {
+        key: key.into(),
+        width,
+        height,
+        rgba: (0..width * height * 4).map(|i| (i % 251) as u8).collect(),
+    }
+}
+
+/// *Image*: a small image is one piece at offset 0, and it reads back whole.
+#[test]
+fn an_image_that_fits_is_one_piece_and_round_trips() {
+    let picture = image("caustics-wallpaper:1-1", 3, 2);
+    let pieces = picture.chunks(WIRE_MAX_BODY);
+    assert_eq!(pieces.len(), 1);
+    assert_eq!(pieces[0].offset, 0);
+    let back = round_trip(Frame::Image(pieces[0].clone()));
+    assert_eq!(back, Frame::Image(pieces[0].clone()));
+    let mut assembly = ImageAssembly::new();
+    let Frame::Image(piece) = back else {
+        unreachable!()
+    };
+    assert_eq!(assembly.push(piece), Some(picture));
+}
+
+/// An image past the frame cap is several pieces, in order, and only the
+/// last completes it; the bytes come back exact.
+#[test]
+fn an_image_larger_than_a_frame_splits_and_reassembles() {
+    let picture = image("big", 64, 48);
+    let pieces = picture.chunks(1024);
+    assert!(pieces.len() > 1, "{} pieces", pieces.len());
+    let mut assembly = ImageAssembly::new();
+    let last = pieces.len() - 1;
+    for (i, piece) in pieces.into_iter().enumerate() {
+        let read = round_trip(Frame::Image(piece));
+        let Frame::Image(piece) = read else {
+            panic!("piece {i} did not read back as an image: {read:?}")
+        };
+        let whole = assembly.push(piece);
+        if i < last {
+            assert!(whole.is_none(), "piece {i} completed the image early");
+            assert!(assembly.progress().0 > 0);
+        } else {
+            assert_eq!(whole.as_ref(), Some(&picture));
+        }
+    }
+}
+
+/// A piece out of order, or of another image, starts over: two images are
+/// never spliced, and a tail whose head never arrived is dropped.
+#[test]
+fn an_image_assembly_takes_its_pieces_in_order_and_nothing_else() {
+    let a = image("a", 16, 16).chunks(256);
+    let b = image("b", 16, 16).chunks(256);
+    let mut assembly = ImageAssembly::new();
+    assert!(assembly.push(a[1].clone()).is_none(), "a tail alone");
+    assert_eq!(assembly.progress(), (0, 0));
+    assert!(assembly.push(a[0].clone()).is_none());
+    // Another image's second piece where `a`'s was owed: dropped, and `a`
+    // with it.
+    assert!(assembly.push(b[1].clone()).is_none());
+    assert_eq!(assembly.progress(), (0, 0));
+    let mut whole = None;
+    for piece in &b {
+        whole = assembly.push(piece.clone());
+    }
+    assert_eq!(whole.map(|image| image.key), Some("b".to_owned()));
+}
+
+/// *Image*'s reader rules: a side of zero or past the cap, an empty key, an
+/// empty piece and a piece past the image are each a skip, never a frame.
+#[test]
+fn a_malformed_image_is_skipped_rule_by_rule() {
+    let piece = image("k", 2, 2).chunks(WIRE_MAX_BODY).remove(0);
+    let frame = Frame::Image(piece);
+    // ImageHeader: key_len 0, width 4, height 8, offset 12.
+    let cases: [(&str, Vec<u8>); 6] = [
+        ("width 0", with_words(&frame, &[(4, 0)], &[])),
+        (
+            "width past the cap",
+            with_words(&frame, &[(4, IMAGE_MAX_PX + 1)], &[]),
+        ),
+        (
+            "height past the cap",
+            with_words(&frame, &[(8, IMAGE_MAX_PX + 1)], &[]),
+        ),
+        (
+            "a piece past the image",
+            with_words(&frame, &[(12, 4)], &[]),
+        ),
+        (
+            "a piece longer than the image",
+            with_words(&frame, &[], &[0; 4]),
+        ),
+        (
+            "a key past the name cap",
+            with_words(&frame, &[(0, MAX_NAME_LEN as u32 + 1)], &[]),
+        ),
+    ];
+    for (what, raw) in cases {
+        assert!(
+            matches!(
+                read_one(raw),
+                Frame::Skipped(Skipped {
+                    kind: WIRE_IMAGE,
+                    ..
+                })
+            ),
+            "{what} was not skipped"
+        );
+    }
+    // The largest image the cap admits is a size the reader passes.
+    let edge = Frame::Image(ImageChunk {
+        key: "edge".into(),
+        width: IMAGE_MAX_PX,
+        height: IMAGE_MAX_PX,
+        offset: IMAGE_MAX_PX * IMAGE_MAX_PX * 4 - 4,
+        bytes: vec![1, 2, 3, 4],
+    });
+    assert_eq!(round_trip(edge.clone()), edge);
+    // And the writer refuses what the reader would skip.
+    for bad in [
+        ImageChunk {
+            key: String::new(),
+            width: 1,
+            height: 1,
+            offset: 0,
+            bytes: vec![0; 4],
+        },
+        ImageChunk {
+            key: "k".into(),
+            width: 0,
+            height: 1,
+            offset: 0,
+            bytes: vec![0; 4],
+        },
+        ImageChunk {
+            key: "k".into(),
+            width: 1,
+            height: 1,
+            offset: 4,
+            bytes: vec![0; 4],
+        },
+    ] {
+        assert!(
+            write(&mut Vec::new(), &Frame::Image(bad.clone())).is_err(),
+            "{bad:?}"
+        );
+    }
+}
+
+/// *Canvas*: the three commands round-trip, and a show's head carries its
+/// start as two words, low first, so a start past 2^32 ms survives.
+#[test]
+fn the_canvas_commands_round_trip() {
+    let start = (1u64 << 32) + 1234;
+    for command in [
+        Canvas::Show {
+            key: "caustics-wallpaper:7-2".into(),
+            fade_start_ms: start,
+            fade_duration_ms: 4000,
+        },
+        Canvas::Dim {
+            alpha_milli: 600,
+            start_ms: start,
+            duration_ms: 30_000,
+        },
+        Canvas::Undim,
+    ] {
+        assert_eq!(
+            round_trip(Frame::Canvas(command.clone())),
+            Frame::Canvas(command)
+        );
+    }
+    let body = Canvas::Show {
+        key: "k".into(),
+        fade_start_ms: start,
+        fade_duration_ms: 1,
+    }
+    .body();
+    assert_eq!((body.start_lo, body.start_hi), (1234, 1));
+    assert_eq!(body.start_ms(), start);
+    assert_eq!(body.key_len, 1);
+}
+
+/// *Canvas*'s reader rules: an unknown command, a show with no key, a key on
+/// a dim or an undim, and a dim past all of it are skips.
+#[test]
+fn a_malformed_canvas_command_is_skipped_rule_by_rule() {
+    let show = Frame::Canvas(Canvas::Show {
+        key: "k".into(),
+        fade_start_ms: 0,
+        fade_duration_ms: 0,
+    });
+    let dim = Frame::Canvas(Canvas::Dim {
+        alpha_milli: 500,
+        start_ms: 0,
+        duration_ms: 0,
+    });
+    let undim = Frame::Canvas(Canvas::Undim);
+    // CanvasBody: command 0, key_len 4, alpha_milli 20.
+    let cases: [(&str, Vec<u8>); 6] = [
+        ("command 0", with_words(&undim, &[(0, 0)], &[])),
+        (
+            "a command past the last",
+            with_words(&undim, &[(0, CANVAS_LAST + 1)], &[]),
+        ),
+        ("a show with no key", with_words(&show, &[(4, 0)], &[])),
+        ("a key on a dim", with_words(&dim, &[(4, 1)], b"k")),
+        ("a key on an undim", with_words(&undim, &[(4, 1)], b"k")),
+        (
+            "a dim past all of it",
+            with_words(&dim, &[(20, DIM_MAX_MILLI + 1)], &[]),
+        ),
+    ];
+    for (what, raw) in cases {
+        let read = read_one(raw);
+        assert!(
+            matches!(
+                read,
+                Frame::Skipped(Skipped {
+                    kind: WIRE_CANVAS,
+                    ..
+                })
+            ),
+            "{what} was not skipped: {read:?}"
+        );
+    }
+    // A key the head does not count is a wrong length.
+    assert!(matches!(
+        read_one(with_words(&undim, &[], b"x")),
+        Frame::Skipped(Skipped {
+            kind: WIRE_CANVAS,
+            why: Skip::Length
+        })
+    ));
+    assert!(
+        write(
+            &mut Vec::new(),
+            &Frame::Canvas(Canvas::Dim {
+                alpha_milli: DIM_MAX_MILLI + 1,
+                start_ms: 0,
+                duration_ms: 0,
+            })
+        )
+        .is_err()
+    );
 }

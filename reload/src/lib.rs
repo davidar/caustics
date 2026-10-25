@@ -1,15 +1,22 @@
 //! `caustics-reload` — the compiler sidecar.
 //!
-//! The bar's hot reload: its caustic, and its configuration too, because they
+//! A host's hot reload: its caustic, and its configuration too, because they
 //! are the same kind of file (docs/architecture.md, *Configuration is the
-//! caustic*). A few times a second this process asks whether `bar.slang` or any
-//! module it imports, `bar_tunables.slang` among them, has moved in the
-//! `caustics/` directory the bar was built from ([`caustics_dir`]); on a change
-//! it compiles every entry point, with Slang in this process, and writes the
-//! SPIR-V and the reflection to the bar as `Module` frames (docs/abi.md, *Module*). The bar collects a
-//! generation and swaps it in with `Gpu::reload_all`, which is all-or-nothing
-//! and never touches the state buffer: the bar keeps its popup, its menu level
-//! and its animations across the swap.
+//! caustic*). A few times a second this process asks whether the caustic's
+//! entry file or any module of its own, its tunables among them, has moved in
+//! the `caustics/` directory the host was built from ([`caustics_dir`]); on a
+//! change it compiles every entry point, with Slang in this process, and
+//! writes the SPIR-V and the reflection to the host as `Module` frames
+//! (docs/abi.md, *Module*). The bar collects a generation and swaps it in
+//! with `Gpu::reload_all`, which is all-or-nothing and never touches the
+//! state buffer: the bar keeps its popup, its menu level and its animations
+//! across the swap. The canvas does the same with its own.
+//!
+//! **Which caustic** is the host's to say, in the `REQ_PROGRAM` it sends
+//! ([`Caustic`]): the bar's (`bar.slang`, `BAR_ENTRIES`), which is what a
+//! request whose program word is zero has always meant, or the canvas's
+//! (`canvas.slang`, `CANVAS_ENTRIES`). Each caustic owns its own modules in
+//! the one directory, and an edit to one never recompiles the other.
 //!
 //! The reload loop lives outside the bar's address space on purpose: the poll,
 //! the compiler and its memory, and the invariant that a failed compile sends
@@ -70,33 +77,90 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::SystemTime;
 
-use caustics_bar_abi::DstFormat;
-use caustics_bar_abi::ENTRIES;
 use caustics_bar_abi::wire::{
-    self, Frame, MAX_MODULES, Module, REQ_PROGRAM, WIRE_MAX_BODY, format_code,
+    self, Frame, MAX_MODULES, Module, PROGRAM_BAR, PROGRAM_CANVAS, REQ_PROGRAM, WIRE_MAX_BODY,
+    format_code,
 };
+use caustics_bar_abi::{BAR_ENTRIES, CANVAS_ENTRIES, DstFormat};
 use punchcutter_slang::{Options, SlangError};
 
 use crate::watch::{MtimeWatch, POLL_INTERVAL};
 
 pub mod watch;
 
-/// The caustic itself, the file every compile is handed.
-pub const ENTRY: &str = "bar.slang";
+/// One caustic this sidecar compiles: the file every compile of it is handed,
+/// its configuration, its entry points, and which of the directory's modules
+/// are its own.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Caustic {
+    /// What the witnesses call it: "the bar's program is …".
+    pub name: &'static str,
+    /// The entry file, handed to the compiler.
+    pub entry: &'static str,
+    /// The tunables module: its configuration, watched like the rest.
+    pub tunables: &'static str,
+    /// Its entry points, in dispatch order: the ABI crate's list.
+    pub entries: &'static [&'static str],
+}
 
-/// The bar caustic and every module of its own: each `*.slang` file in `dir`,
-/// [`ENTRY`] first and the rest by name. A copy of a [`RENDERED`] or an
-/// [`ENGINE`] module that sits beside them is not one of them: it is found
-/// by [`unwatched_file`] and is never a live edit.
+/// The bar's caustic. A `REQ_PROGRAM` whose program word is [`PROGRAM_BAR`],
+/// zero, which is every one the bar has ever sent.
+pub const BAR: Caustic = Caustic {
+    name: "bar",
+    entry: "bar.slang",
+    tunables: "bar_tunables.slang",
+    entries: &BAR_ENTRIES,
+};
+
+/// The canvas's caustic ([`PROGRAM_CANVAS`]): `canvas.slang` and the
+/// `canvas_*.slang` modules beside it.
+pub const CANVAS: Caustic = Caustic {
+    name: "canvas",
+    entry: "canvas.slang",
+    tunables: "canvas_tunables.slang",
+    entries: &CANVAS_ENTRIES,
+};
+
+/// The file-name prefix the canvas's modules share, and the bar's lack: how
+/// one directory holds two caustics whose edits never recompile each other.
+const CANVAS_PREFIX: &str = "canvas";
+
+impl Caustic {
+    /// The caustic a `REQ_PROGRAM`'s program word names, or `None` for one
+    /// this build does not know.
+    pub fn of(program: u32) -> Option<&'static Caustic> {
+        match program {
+            PROGRAM_BAR => Some(&BAR),
+            PROGRAM_CANVAS => Some(&CANVAS),
+            _ => None,
+        }
+    }
+
+    /// Whether `name`, a `.slang` file in the directory, is one of this
+    /// caustic's own modules: the canvas's are `canvas*.slang`, and the bar's
+    /// are every other.
+    fn owns(&self, name: &str) -> bool {
+        let canvas = name.starts_with(CANVAS_PREFIX);
+        if *self == CANVAS { canvas } else { !canvas }
+    }
+}
+
+/// The bar's entry file, the one every compile of its caustic is handed.
+pub const ENTRY: &str = BAR.entry;
+
+/// One caustic and every module of its own: each `*.slang` file in `dir` that
+/// it [owns](Caustic::owns), its entry file first and the rest by name. A copy
+/// of a [`RENDERED`] or an [`ENGINE`] module that sits beside them is not one
+/// of them: it is found by [`unwatched_file`] and is never a live edit.
 ///
-/// A change to any of them has to reach the running bar the same way a change
-/// to the tunables does. The directory is **listed when this is called**,
-/// which for the watch is once, at start: a module added to `caustics/` later
-/// is compiled (an edit to an existing module has to import it, and the
-/// compile reads the directory as it finds it) but is not itself watched
-/// until the sidecar restarts. [`ENTRY`] is always listed, present or not, so
-/// a tree without it has no cache key.
-pub fn watched(dir: &Path) -> Vec<String> {
+/// A change to any of them has to reach the running host the same way a
+/// change to the tunables does. The directory is **listed when this is
+/// called**, which for the watch is once, when the program is learned: a
+/// module added to `caustics/` later is compiled (an edit to an existing
+/// module has to import it, and the compile reads the directory as it finds
+/// it) but is not itself watched until the sidecar restarts. The entry file
+/// is always listed, present or not, so a tree without it has no cache key.
+pub fn watched(dir: &Path, caustic: &Caustic) -> Vec<String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
@@ -104,13 +168,14 @@ pub fn watched(dir: &Path) -> Vec<String> {
         .filter_map(|entry| entry.file_name().into_string().ok())
         .filter(|name| {
             name.ends_with(".slang")
-                && name != ENTRY
+                && name != caustic.entry
+                && caustic.owns(name)
                 && !RENDERED.contains(&name.as_str())
                 && !ENGINE.contains(&name.as_str())
         })
         .collect();
     names.sort();
-    names.insert(0, ENTRY.to_owned());
+    names.insert(0, caustic.entry.to_owned());
     names
 }
 
@@ -153,9 +218,9 @@ pub fn unwatched_file(dir: &Path, name: &str) -> PathBuf {
     }
 }
 
-/// The tunables module's file name: the bar's configuration, watched like
+/// The bar's tunables module's file name: its configuration, watched like
 /// every other module the caustic imports.
-pub const TUNABLES: &str = "bar_tunables.slang";
+pub const TUNABLES: &str = BAR.tunables;
 
 /// This sidecar's witness line: `caustics-reload: …` on stderr, in **one write**
 /// (docs/abi.md, *Writing a sidecar*; the one copy is `caustics_sidecar::Witness`).
@@ -205,25 +270,30 @@ pub fn caustics_dir() -> PathBuf {
 // The watch, and what one compile is built from
 // ---------------------------------------------------------------------------
 
-/// The poller over every file [`watched`] lists in `dir` now, primed with
-/// the state on disk so that startup is not a change.
-pub fn watch(dir: &Path) -> MtimeWatch {
-    MtimeWatch::new(watched(dir).iter().map(|name| dir.join(name)).collect())
+/// The poller over every file [`watched`] lists in `dir` now for `caustic`,
+/// primed with the state on disk so that learning the program is not a change.
+pub fn watch(dir: &Path, caustic: &Caustic) -> MtimeWatch {
+    MtimeWatch::new(
+        watched(dir, caustic)
+            .iter()
+            .map(|name| dir.join(name))
+            .collect(),
+    )
 }
 
-/// The `bar.slang` to hand the compiler and the module search path: the
+/// The entry file to hand the compiler and the module search path: the
 /// directory itself, compiled in place, so Slang's diagnostics name the files
-/// a person edits, then the bar's rendered contract ([`RENDERED`]). The text
+/// a person edits, then the rendered contracts ([`RENDERED`]). The text
 /// engine's modules ([`ENGINE`]) follow these on every compile by themselves.
 pub struct Source {
     pub entry_file: PathBuf,
     pub includes: Vec<PathBuf>,
 }
 
-/// Where a compile of `dir` comes from.
-pub fn source(dir: &Path) -> Source {
+/// Where a compile of `caustic` in `dir` comes from.
+pub fn source(dir: &Path, caustic: &Caustic) -> Source {
     Source {
-        entry_file: dir.join(ENTRY),
+        entry_file: dir.join(caustic.entry),
         includes: vec![
             dir.to_path_buf(),
             caustics_bar_abi::rendered_dir().to_path_buf(),
@@ -414,8 +484,8 @@ fn give_back() {
 /// The files whose bytes reach the compiler, in a fixed order: [`watched`], in
 /// `dir`, then [`RENDERED`] and [`ENGINE`], wherever [`unwatched_file`] finds
 /// each.
-fn inputs(dir: &Path) -> Vec<PathBuf> {
-    watched(dir)
+fn inputs(dir: &Path, caustic: &Caustic) -> Vec<PathBuf> {
+    watched(dir, caustic)
         .iter()
         .map(|name| dir.join(name))
         .chain(
@@ -433,7 +503,13 @@ fn inputs(dir: &Path) -> Vec<PathBuf> {
 /// `None` when an input cannot be read, which is a compile about to fail
 /// anyway: no key means no hit and no entry written, so a broken tree never
 /// leaves a cache behind for a working one to find.
-pub fn cache_key(tools: &Toolchain, dir: &Path, define: &str, entries: &[&str]) -> Option<u64> {
+pub fn cache_key(
+    tools: &Toolchain,
+    dir: &Path,
+    caustic: &Caustic,
+    define: &str,
+    entries: &[&str],
+) -> Option<u64> {
     let mut key = Fnv::new();
     key.field(&CACHE_MAGIC);
     key.field(tools.version.as_bytes());
@@ -442,7 +518,7 @@ pub fn cache_key(tools: &Toolchain, dir: &Path, define: &str, entries: &[&str]) 
     for entry in entries {
         key.field(entry.as_bytes());
     }
-    for path in inputs(dir) {
+    for path in inputs(dir, caustic) {
         // The *name* and the bytes, never the directory: the same files
         // compiled from a checkout and from an install produce the same
         // program.
@@ -626,7 +702,7 @@ pub fn prune(dir: &Path) {
 // The compile, and the frames it becomes
 // ---------------------------------------------------------------------------
 
-/// One compile's modules, in [`ENTRIES`] order, ready to be framed.
+/// One compile's modules, in its caustic's entry order, ready to be framed.
 pub struct Program {
     pub modules: Vec<Module>,
     pub bytes: usize,
@@ -655,12 +731,13 @@ enum Lookup {
 fn lookup(
     tools: &Toolchain,
     dir: &Path,
+    caustic: &Caustic,
     define: &str,
     generation: u32,
     entries: &[&str],
 ) -> Lookup {
     let started = std::time::Instant::now();
-    let key = cache_key(tools, dir, define, entries);
+    let key = cache_key(tools, dir, caustic, define, entries);
     let file = key.and_then(|key| tools.entry_file(key));
     if let (Some(file), Some(key)) = (&file, key)
         && let Some(cached) = read_entry(file, key, entries)
@@ -690,25 +767,26 @@ fn lookup(
 /// The startup rule: the cached generation for `dir` as it is now, or `None`
 /// with nothing compiled.
 ///
-/// The bar starts on SPIR-V its own `build.rs` baked from this directory, so a
+/// A host starts on SPIR-V its own `build.rs` baked from this directory, so a
 /// compile here would be seconds of compiling to arrive, most of the time, where
-/// the bar already is — and a slow first second on a small machine. A hit
+/// the host already is — and a slow first second on a small machine. A hit
 /// costs milliseconds and is what puts an edit made since the build back on
 /// screen after a restart.
 pub fn warm_start(
     tools: &Toolchain,
     dir: &Path,
+    caustic: &Caustic,
     define: &str,
     generation: u32,
     entries: &[&str],
 ) -> Option<Program> {
-    match lookup(tools, dir, define, generation, entries) {
+    match lookup(tools, dir, caustic, define, generation, entries) {
         Lookup::Hit(program) => Some(program),
         Lookup::Miss { .. } => None,
     }
 }
 
-/// Compile every entry point of the caustic in `dir` for `define`.
+/// Compile every entry point of `caustic` in `dir` for `define`.
 ///
 /// `None` carries nothing back: the diagnostics are already on stderr,
 /// verbatim, and the contract with the bar is **silence** (docs/abi.md,
@@ -716,11 +794,17 @@ pub fn warm_start(
 /// That invariant is also why this returns a whole [`Program`] rather than
 /// yielding modules one at a time: half a generation on the wire is a
 /// generation the bar would hold for ever.
-pub fn compile(tools: &Toolchain, dir: &Path, define: &str, generation: u32) -> Option<Program> {
-    compile_entries(tools, dir, define, generation, &ENTRIES)
+pub fn compile(
+    tools: &Toolchain,
+    dir: &Path,
+    caustic: &Caustic,
+    define: &str,
+    generation: u32,
+) -> Option<Program> {
+    compile_entries(tools, dir, caustic, define, generation, caustic.entries)
 }
 
-/// [`compile`] over a given entry list, which is [`ENTRIES`] everywhere but
+/// [`compile`] over a given entry list, which is the caustic's everywhere but
 /// the tests: a run over every entry point is the slowest thing in this
 /// workspace's test suite, and running it beside the bar's own — whose pipe
 /// tests time children — makes them flake. One entry point proves this path;
@@ -729,12 +813,13 @@ pub fn compile(tools: &Toolchain, dir: &Path, define: &str, generation: u32) -> 
 pub fn compile_entries(
     tools: &Toolchain,
     dir: &Path,
+    caustic: &Caustic,
     define: &str,
     generation: u32,
     entries: &[&str],
 ) -> Option<Program> {
     let started = std::time::Instant::now();
-    let (key, file) = match lookup(tools, dir, define, generation, entries) {
+    let (key, file) = match lookup(tools, dir, caustic, define, generation, entries) {
         Lookup::Hit(program) => return Some(program),
         Lookup::Miss { key, file } => (key, file),
     };
@@ -745,7 +830,7 @@ pub fn compile_entries(
         .into_iter()
         .find(|format| format.define() == define)
         .is_some_and(DstFormat::image_format_unknown);
-    let source = source(dir);
+    let source = source(dir, caustic);
     let includes: Vec<&Path> = source.includes.iter().map(PathBuf::as_path).collect();
     let options = Options {
         defines: &[define],
@@ -759,7 +844,7 @@ pub fn compile_entries(
     let program = match (tools.compiler)(&source.entry_file, entries, &options) {
         Ok(program) => program,
         Err(err) => {
-            witness("failed; keeping the old bar");
+            witness(&format!("failed; keeping the old {}", caustic.name));
             match err.diagnostics() {
                 Some(text) => diagnostics(text),
                 None => witness(&format!("{err}")),
@@ -837,8 +922,9 @@ fn assemble(
 /// What the stdin thread hands the main loop. Everything else on that stream
 /// is witnessed there and never reaches here.
 enum Input {
-    /// The bar's swapchain format, as the format's define (`REQ_PROGRAM`).
-    Program(String),
+    /// The host's swapchain format, as the format's define, and the program
+    /// word naming its caustic (`REQ_PROGRAM`).
+    Program(String, u32),
     /// The bar is gone.
     Eof,
 }
@@ -871,7 +957,7 @@ fn listen(into: mpsc::Sender<Input>) {
                 return;
             }
             Ok(Some(Frame::Request(request))) if request.kind == REQ_PROGRAM => {
-                into.send(Input::Program(request.name))
+                into.send(Input::Program(request.name, request.arg))
             }
             Ok(Some(Frame::Request(request))) => {
                 witness(&format!(
@@ -926,25 +1012,26 @@ pub fn run() -> i32 {
             dir.display()
         ));
         // A set installed without its source tree (a distribution image) has
-        // nothing to reload, and the bar's baked caustic is the one it runs.
+        // nothing to reload, and the host's baked caustic is the one it runs.
         // A sidecar that exits is restarted with a backoff for as long as the
-        // bar runs (host/src/pipe.rs), so this one stays, idle, until
-        // the bar closes the pipe.
+        // host runs (host/src/pipe.rs), so this one stays, idle, until
+        // the host closes the pipe.
         idle_until_eof(&mut io::stdin().lock());
         return 0;
     }
-    if ENTRIES.len() > MAX_MODULES {
-        witness(&format!(
-            "{} entry points is more than one generation carries",
-            ENTRIES.len()
-        ));
-        return 1;
+    for caustic in [&BAR, &CANVAS] {
+        if caustic.entries.len() > MAX_MODULES {
+            witness(&format!(
+                "the {}'s {} entry points are more than one generation carries",
+                caustic.name,
+                caustic.entries.len()
+            ));
+            return 1;
+        }
     }
-    let mut watch = watch(&dir);
     witness(&format!(
-        "watching {} ({} entry points); waiting for the bar's program",
-        dir.display(),
-        ENTRIES.len()
+        "watching {}; waiting for the host's program",
+        dir.display()
     ));
 
     let (sender, inbox) = mpsc::channel();
@@ -968,9 +1055,14 @@ pub fn run() -> i32 {
             .map_or_else(|| "off".to_owned(), |dir| dir.display().to_string())
     ));
 
-    let mut define: Option<String> = None;
+    // The program as the host named it: its format's define, its caustic and
+    // the watch over that caustic's files. Nothing is watched before it
+    // arrives, and the watch is made when it does, primed with the files as
+    // they are then: the host is running what it was built from, and the
+    // cache (below) is what answers for an edit made since.
+    let mut asked: Option<(String, &'static Caustic, MtimeWatch)> = None;
     let mut generation = 0u32;
-    // Generation 0 never goes out: it is what the bar's collector holds before
+    // Generation 0 never goes out: it is what a host's collector holds before
     // the first frame, so a wrap skips straight past it.
     let next = |generation: u32| generation.wrapping_add(1).max(1);
     loop {
@@ -978,37 +1070,48 @@ pub fn run() -> i32 {
         // format arriving (the cache only), or a file moving under a format
         // already known (a compile).
         let program = match wait(&inbox) {
-            Ok(Some(Input::Program(asked))) => {
-                witness(&format!("the bar's program is {asked}"));
+            Ok(Some(Input::Program(define, word))) => {
+                let Some(caustic) = Caustic::of(word) else {
+                    witness(&format!(
+                        "program {word} is not one this build compiles; compiling nothing"
+                    ));
+                    continue;
+                };
+                witness(&format!(
+                    "the {}'s program is {define} ({} entry points)",
+                    caustic.name,
+                    caustic.entries.len()
+                ));
                 generation = next(generation);
-                let program = warm_start(&tools, &dir, &asked, generation, &ENTRIES);
+                let program =
+                    warm_start(&tools, &dir, caustic, &define, generation, caustic.entries);
                 if program.is_some() {
                     witness("the cache holds this directory's program; sending it");
                 } else {
-                    witness(
-                        "nothing cached for this directory; the bar runs what it was built \
+                    witness(&format!(
+                        "nothing cached for this directory; the {} runs what it was built \
                          from until a save",
-                    );
+                        caustic.name
+                    ));
                 }
-                define = Some(asked);
+                asked = Some((define, caustic, watch(&dir, caustic)));
                 program
             }
             Ok(Some(Input::Eof)) => return 0,
             // The listener thread ended without saying so: treat it as EOF
             // rather than spinning on a dead channel.
             Err(()) => return 0,
-            Ok(None) => {
-                // Read on every poll, the format known or not, so a save made
-                // before the format arrived is not a change afterwards.
-                let changed = watch.changed();
-                match define.as_deref() {
-                    Some(define) if changed => {
+            Ok(None) => match asked.as_mut() {
+                Some((define, caustic, watch)) => {
+                    if watch.changed() {
                         generation = next(generation);
-                        compile(&tools, &dir, define, generation)
+                        compile(&tools, &dir, caustic, define, generation)
+                    } else {
+                        None
                     }
-                    _ => None,
                 }
-            }
+                None => None,
+            },
         };
         let Some(program) = program else { continue };
         if let Err(err) = send(&program) {
@@ -1027,7 +1130,7 @@ pub fn run() -> i32 {
             program.millis,
             if program.warm { "warm" } else { "cold" },
         ));
-        // And the cache last of all: the bar has its frames before this
+        // And the cache last of all: the host has its frames before this
         // process spends a megabyte and a half of disk on never compiling
         // them again.
         tools.store(&program);

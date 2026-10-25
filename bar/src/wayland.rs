@@ -348,7 +348,7 @@ pub struct Bar {
     /// *Module*).
     ///
     /// **The bar runs no compiler.** `caustics-reload` watches the `.slang` files
-    /// and compiles them; one frame of SPIR-V and reflection per entry point ([`ENTRIES`]) arrives here and
+    /// and compiles them; one frame of SPIR-V and reflection per entry point ([`BAR_ENTRIES`]) arrives here and
     /// `Gpu::reload_all` swaps them in, all or nothing.
     modules: Modules,
     /// Everything that is pixels: [`abi::MAX_IMAGE_SLOTS`] slots, LRU by
@@ -537,7 +537,7 @@ impl Bar {
             font: None,
             curves_landed: false,
             pending_bytes: Vec::new(),
-            modules: Modules::new(&abi::ENTRIES),
+            modules: Modules::new(&abi::BAR_ENTRIES),
             images: Images::new(),
             preview_pending: false,
             preview_size: [0, 0],

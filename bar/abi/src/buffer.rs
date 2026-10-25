@@ -434,6 +434,12 @@ pub(crate) const CONST_GROUPS: &[ConstGroup] = &[
     COMMANDS,
 ];
 
+/// `NO_INDEX`'s group, which `canvas_abi.slang` renders again (docs/abi.md,
+/// *The canvas's buffer*): the canvas imports nothing of the bar's.
+pub(crate) const NOTHING_GROUP: ConstGroup = NOTHING;
+/// The witness levels' group, rendered again for the canvas likewise.
+pub(crate) const WITNESS_GROUP: ConstGroup = WITNESSES;
+
 // ---------------------------------------------------------------------------
 // The structs (docs/abi.md, *Structs*)
 // ---------------------------------------------------------------------------

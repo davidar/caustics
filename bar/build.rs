@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 // The entry points and the swapchain formats, from the one place each is
 // named: the compiler sidecar reads the same two from the same crate.
-use caustics_bar_abi::{DstFormat, ENTRIES};
+use caustics_bar_abi::{BAR_ENTRIES, DstFormat};
 use punchcutter_slang::Options;
 
 fn main() {
@@ -70,7 +70,7 @@ fn main() {
             includes: &includes,
             image_format_unknown,
         };
-        let program = punchcutter_slang::compile_program(&source, &ENTRIES, &options)
+        let program = punchcutter_slang::compile_program(&source, &BAR_ENTRIES, &options)
             .unwrap_or_else(|err| panic!("{err}"));
         // Nothing subscribes to `tracing` in a build script, so Slang's
         // success-path warnings are surfaced by hand.

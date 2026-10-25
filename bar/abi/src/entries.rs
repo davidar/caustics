@@ -18,7 +18,7 @@
 /// assemble. `bar/build.rs` still reaches it by `include!` rather than `use`,
 /// because a build script cannot depend on the crate it builds — one list,
 /// one `pub use`, one inclusion, no copy.
-pub const ENTRIES: [&str; 7] = [
+pub const BAR_ENTRIES: [&str; 7] = [
     "bar_build",
     "bar_compose",
     "bar_shape",
@@ -27,3 +27,12 @@ pub const ENTRIES: [&str; 7] = [
     "bar_sample",
     "bar_draw",
 ];
+
+/// The entry points of the canvas caustic (`caustics/canvas.slang`), in
+/// dispatch order: `canvas_apply` once per frame, then `canvas_draw` over the
+/// output being drawn (docs/canvas.md, *Time*).
+///
+/// Here beside the bar's for the same reason: `canvas/build.rs` bakes it,
+/// `caustics-reload` compiles it when the canvas host asks for its program
+/// (`PROGRAM_CANVAS`), and the canvas names its pipelines from it.
+pub const CANVAS_ENTRIES: [&str; 2] = ["canvas_apply", "canvas_draw"];

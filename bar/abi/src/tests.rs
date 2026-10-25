@@ -38,7 +38,7 @@ fn the_rendered_dir_holds_the_rendering() {
 /// `ABI_HASH` is a hash of something.
 ///
 /// There is no second copy to compare it against — that is the point of it —
-/// so what can be asserted is that `build.rs` read its four inputs and folded
+/// so what can be asserted is that `build.rs` read its five inputs and folded
 /// them in: a value still at FNV's offset basis means it hashed nothing, and
 /// zero means it was never written at all. The property that matters, "the
 /// number moves when the contract does", is `build.rs`'s `rerun-if-changed`
@@ -80,7 +80,7 @@ fn the_two_modules_declare_disjoint_names() {
 /// and a constant would be a second copy that could drift.
 #[test]
 fn no_binding_number_is_declared_as_a_constant() {
-    let [(_, abi), (_, wire)] = crate::rendered();
+    let [(_, abi), (_, wire), (_, canvas)] = crate::rendered();
     for gone in [
         // The bindings are read from the reflection by name (docs/abi.md, *Bindings and the oracle*).
         "SAMPLES_BINDING",
@@ -88,7 +88,11 @@ fn no_binding_number_is_declared_as_a_constant() {
         "FACTS_BINDING",
     ] {
         let needle = format!(" {gone} ");
-        for (name, source) in [("bar_abi", &abi), ("bar_wire", &wire)] {
+        for (name, source) in [
+            ("bar_abi", &abi),
+            ("bar_wire", &wire),
+            ("canvas_abi", &canvas),
+        ] {
             let found = source
                 .lines()
                 .filter(|line| !line.trim_start().starts_with("//"))
@@ -96,4 +100,47 @@ fn no_binding_number_is_declared_as_a_constant() {
             assert!(!found, "`{gone}` is declared again in {name}");
         }
     }
+}
+
+/// The canvas's module stands alone: it imports nothing (the bar's modules
+/// declare names the canvas renders again), it declares no name twice, and
+/// the wire's canvas words reach it and not `bar_wire` (no bar caustic reads
+/// a `Canvas` body).
+#[test]
+fn the_canvas_module_imports_nothing_of_the_bar_s() {
+    let [_, (_, wire), (_, canvas)] = crate::rendered();
+    let code = |source: &str| -> Vec<String> {
+        source
+            .lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert!(
+        !code(&canvas).iter().any(|line| line.contains("import ")),
+        "canvas_abi imports something"
+    );
+    assert!(
+        code(&canvas)
+            .iter()
+            .any(|line| line.contains(" CANVAS_SHOW "))
+    );
+    assert!(
+        !code(&wire)
+            .iter()
+            .any(|line| line.contains(" CANVAS_SHOW "))
+    );
+    let mut names: Vec<&str> = Vec::new();
+    for group in crate::canvas::CONST_GROUPS {
+        names.extend(group.consts.iter().map(|decl| decl.name));
+    }
+    names.extend(crate::canvas::STRUCTS.iter().map(|entry| entry.decl.name));
+    let before = names.len();
+    names.sort_unstable();
+    names.dedup();
+    assert_eq!(
+        before,
+        names.len(),
+        "a name is declared twice in canvas_abi"
+    );
 }

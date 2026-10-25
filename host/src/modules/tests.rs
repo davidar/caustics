@@ -1,6 +1,6 @@
 use super::*;
 
-use caustics_bar_abi::ENTRIES;
+use caustics_bar_abi::BAR_ENTRIES;
 use caustics_bar_abi::wire::{WIRE_MAX_BODY, format_code};
 
 const RGBA8: &str = "DST_FORMAT_RGBA8";
@@ -18,9 +18,9 @@ fn module(generation: u32, index: usize, format: u32) -> Module {
     Module {
         generation,
         index: index as u32,
-        count: ENTRIES.len() as u32,
+        count: BAR_ENTRIES.len() as u32,
         format,
-        name: ENTRIES[index].to_owned(),
+        name: BAR_ENTRIES[index].to_owned(),
         // Four bytes of nothing: this file never looks inside, and the device
         // is the only thing that can say whether SPIR-V is SPIR-V.
         spirv: vec![0, 0, 0, 0],
@@ -29,19 +29,19 @@ fn module(generation: u32, index: usize, format: u32) -> Module {
 }
 
 fn collecting() -> Modules {
-    let mut modules = Modules::new(&ENTRIES);
+    let mut modules = Modules::new(&BAR_ENTRIES);
     modules.expect(format_code(RGBA8));
     modules
 }
 
 /// The whole of the happy path: frames arrive one at a time, nothing happens
-/// until the last one, and then the generation is whole and in `ENTRIES`
+/// until the last one, and then the generation is whole and in `BAR_ENTRIES`
 /// order.
 #[test]
 fn a_generation_is_ready_only_when_every_entry_point_has_arrived() {
     let mut modules = collecting();
     let format = format_code(RGBA8);
-    for index in 0..ENTRIES.len() - 1 {
+    for index in 0..BAR_ENTRIES.len() - 1 {
         match modules.collect(one(module(4, index, format))) {
             Collected::Waiting {
                 generation,
@@ -50,18 +50,18 @@ fn a_generation_is_ready_only_when_every_entry_point_has_arrived() {
             } => {
                 assert_eq!(generation, 4);
                 assert_eq!(have, index + 1);
-                assert_eq!(count, ENTRIES.len());
+                assert_eq!(count, BAR_ENTRIES.len());
             }
             _ => panic!("entry {index} completed a generation on its own"),
         }
     }
-    let last = one(module(4, ENTRIES.len() - 1, format));
+    let last = one(module(4, BAR_ENTRIES.len() - 1, format));
     let Collected::Ready(ready) = modules.collect(last) else {
         panic!("the last frame did not complete the generation");
     };
     assert_eq!(ready.generation, 4);
-    assert_eq!(ready.len(), ENTRIES.len());
-    assert_eq!(ready.spirv().len(), ENTRIES.len());
+    assert_eq!(ready.len(), BAR_ENTRIES.len());
+    assert_eq!(ready.spirv().len(), BAR_ENTRIES.len());
     assert!(
         ready
             .reflection()
@@ -72,13 +72,13 @@ fn a_generation_is_ready_only_when_every_entry_point_has_arrived() {
 }
 
 /// Out of order is ordinary — the wire says nothing about arrival order — and
-/// what comes back is `ENTRIES` order regardless, because that is the order
+/// what comes back is `BAR_ENTRIES` order regardless, because that is the order
 /// `reload_all` builds the pipelines in.
 #[test]
 fn frames_out_of_order_still_land_in_dispatch_order() {
     let mut modules = collecting();
     let format = format_code(RGBA8);
-    let mut order: Vec<usize> = (0..ENTRIES.len()).collect();
+    let mut order: Vec<usize> = (0..BAR_ENTRIES.len()).collect();
     order.reverse();
     let mut ready = None;
     for index in order {
@@ -87,7 +87,7 @@ fn frames_out_of_order_still_land_in_dispatch_order() {
         }
     }
     let ready = ready.expect("every entry point's frame completed");
-    for (module, entry) in ready.modules.iter().zip(ENTRIES) {
+    for (module, entry) in ready.modules.iter().zip(BAR_ENTRIES) {
         assert_eq!(module.name, entry);
     }
 }
@@ -123,7 +123,7 @@ fn a_module_arriving_in_pieces_completes_on_the_last() {
 
     // And the rest of the generation still completes it.
     let mut ready = None;
-    for index in 1..ENTRIES.len() {
+    for index in 1..BAR_ENTRIES.len() {
         if let Collected::Ready(whole) = modules.collect(one(module(5, index, format))) {
             ready = Some(whole);
         }
@@ -167,7 +167,7 @@ fn a_generation_for_another_program_is_refused_and_never_held() {
     let format = format_code(RGBA8);
 
     // Before the device has a format there is nothing to compare against.
-    let mut cold = Modules::new(&ENTRIES);
+    let mut cold = Modules::new(&BAR_ENTRIES);
     assert!(matches!(
         cold.collect(one(module(1, 0, format))),
         Collected::Refused(_)
@@ -198,7 +198,7 @@ fn a_generation_for_another_program_is_refused_and_never_held() {
     // And none of them left anything behind: the good generation still needs
     // one frame per entry point and then completes.
     let mut ready = None;
-    for index in 0..ENTRIES.len() {
+    for index in 0..BAR_ENTRIES.len() {
         if let Collected::Ready(whole) = modules.collect(one(module(1, index, format))) {
             ready = Some(whole);
         }
@@ -214,7 +214,7 @@ fn the_literals_are_merged_across_the_entry_points() {
     let mut modules = collecting();
     let format = format_code(RGBA8);
     let mut ready = None;
-    for index in 0..ENTRIES.len() {
+    for index in 0..BAR_ENTRIES.len() {
         let mut frame = module(1, index, format);
         frame.reflection = Reflection {
             strings: [(index as u32, format!("word{index}"))].into(),
@@ -230,12 +230,12 @@ fn the_literals_are_merged_across_the_entry_points() {
         .reflection()
         .expect("readable")
         .strings;
-    assert_eq!(table.len(), ENTRIES.len());
+    assert_eq!(table.len(), BAR_ENTRIES.len());
     assert_eq!(table.get(&3).map(String::as_str), Some("word3"));
 
     let mut modules = collecting();
     let mut ready = None;
-    for index in 0..ENTRIES.len() {
+    for index in 0..BAR_ENTRIES.len() {
         let mut frame = module(2, index, format);
         if index == 2 {
             frame.reflection = "{ not json".to_owned();
