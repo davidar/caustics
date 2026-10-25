@@ -48,7 +48,7 @@ use caustics_host::pacing::Pacing;
 use caustics_host::pipe::{Event, Pipe};
 use caustics_host::strings::Strings;
 use caustics_host::surface::Surface;
-use caustics_host::witness::Printer;
+use caustics_host::witness::{Caustic, Printer};
 use smithay_client_toolkit::reexports::protocols::wp::fractional_scale::v1::client::{
     wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
     wp_fractional_scale_v1::{self, WpFractionalScaleV1},
@@ -218,7 +218,7 @@ impl Canvas {
             pipes,
             modules: Modules::new(&CANVAS_ENTRIES),
             strings,
-            printer: Printer::new(),
+            printer: Printer::new(Caustic::Canvas),
             slots: Slots::new(),
             assemblies: HashMap::new(),
             unplaced: [None, None],

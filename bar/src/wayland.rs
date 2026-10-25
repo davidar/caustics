@@ -86,7 +86,7 @@ use crate::model::{Action, Model, Update, Updates};
 use caustics_host::images::Images;
 use caustics_host::modules::{Collected, Modules};
 use caustics_host::pacing::Pacing;
-use caustics_host::witness::Printer;
+use caustics_host::witness::{Caustic, Printer};
 
 /// Which screen edge the bar takes. `FrameInputs::edge` carries it to the
 /// caustic (which flips the popup gravity and the focus underline), and the
@@ -554,7 +554,7 @@ impl Bar {
             loop_handle: None,
             capture_token: None,
             capture_deadline: None,
-            printer: Printer::new(),
+            printer: Printer::new(Caustic::Bar),
             drained_actions: (0, 0),
             drained_witnesses: (0, 0),
             logged_action_lost: 0,

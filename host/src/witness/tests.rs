@@ -142,9 +142,24 @@ fn the_target_is_the_word_before_the_first_colon() {
     assert_eq!(Target::of("no colon at all"), Target::Bar);
 }
 
+/// The canvas's lines go out under the canvas's name, whatever their first
+/// word, and the bar's under the bar's rule.
+#[test]
+fn each_host_prints_under_its_own_name() {
+    let canvas = Printer::new(Caustic::Canvas);
+    assert_eq!(
+        canvas.target("canvas: no picture yet; the dim colour"),
+        Target::Canvas
+    );
+    assert_eq!(canvas.target("layout: anything"), Target::Canvas);
+    let bar = Printer::new(Caustic::Bar);
+    assert_eq!(bar.target("canvas: a word"), Target::Bar);
+    assert_eq!(bar.target("layout: clock"), Target::Layout);
+}
+
 #[test]
 fn the_printer_warns_once_per_literal() {
-    let mut printer = Printer::new();
+    let mut printer = Printer::new(Caustic::Bar);
     assert!(printer.warned.is_empty());
     printer.print(&note(&[]), &Strings::new(), &[]);
     assert_eq!(

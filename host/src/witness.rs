@@ -32,7 +32,9 @@
 //! open-ended lookup: `layout:` → `caustics_bar::layout`, `shape:` →
 //! `caustics_bar::shape`, everything else → `caustics_bar`. The names are the
 //! bar's, kept when this file moved into the host crate so that the journal
-//! filters and the test harness that select them keep working. That is exactly what `RUST_LOG=info,caustics_bar::layout=debug,caustics_bar::shape=debug` turns on (the test harness sets it; bar/systemd/README.md shows how to set it on the unit), and a fourth target is a line here as well as a line in Slang.
+//! filters and the test harness that select them keep working. A printer is
+//! made for one host's caustic ([`Caustic`]), and the canvas's lines all go
+//! under the canvas's own name, `caustics_canvas`, never the bar's. That is exactly what `RUST_LOG=info,caustics_bar::layout=debug,caustics_bar::shape=debug` turns on (the test harness sets it; bar/systemd/README.md shows how to set it on the unit), and a fourth target is a line here as well as a line in Slang.
 //!
 //! # Once per change is the caustic's duty
 //!
@@ -46,12 +48,23 @@ use std::collections::HashSet;
 use crate::strings::Strings;
 use caustics_bar_abi::{self as abi, Note};
 
+/// Whose caustic a [`Printer`] prints, which is whose name its lines go out
+/// under in the journal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Caustic {
+    /// The bar's: `caustics_bar`, and its `layout` and `shape` targets.
+    Bar,
+    /// The canvas's: every line under `caustics_canvas`.
+    Canvas,
+}
+
 /// What a `tracing` event needs that a format literal cannot carry.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Target {
     Layout,
     Shape,
     Bar,
+    Canvas,
 }
 
 impl Target {
@@ -70,20 +83,34 @@ impl Target {
 ///
 /// One warning per literal per generation, because a caustic that names a
 /// format this build cannot resolve names it on every frame it draws.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Printer {
+    caustic: Caustic,
     warned: HashSet<u32>,
 }
 
 impl Printer {
-    pub fn new() -> Printer {
-        Printer::default()
+    /// A printer for this host's caustic.
+    pub fn new(caustic: Caustic) -> Printer {
+        Printer {
+            caustic,
+            warned: HashSet::new(),
+        }
     }
 
     /// A fresh caustic: whatever this printer could not resolve before is
     /// about a program that is no longer running.
     pub fn reset(&mut self) {
         self.warned.clear();
+    }
+
+    /// The target a rendered line goes out under: the bar's rule for the bar,
+    /// the canvas's one name for the canvas.
+    fn target(&self, line: &str) -> Target {
+        match self.caustic {
+            Caustic::Bar => Target::of(line),
+            Caustic::Canvas => Target::Canvas,
+        }
     }
 
     /// Print one record of the witness ring.
@@ -102,7 +129,7 @@ impl Printer {
         if !complete && self.warned.insert(note.head) {
             tracing::warn!("witness: {line:?} has a spec this bar could not fill");
         }
-        emit(Target::of(&line), note.aux, &line);
+        emit(self.target(&line), note.aux, &line);
     }
 }
 
@@ -172,7 +199,7 @@ fn spec(body: &str, note: &Note, strings: &Strings, bytes: &[u8]) -> Option<Stri
     })
 }
 
-/// The nine arms the two fixed facts — three targets, three levels — make.
+/// The twelve arms the two fixed facts — four targets, three levels — make.
 /// Both have to be literals at the call site, which is why this is a table and
 /// not a pair of variables.
 fn emit(target: Target, level: u32, line: &str) {
@@ -194,6 +221,13 @@ fn emit(target: Target, level: u32, line: &str) {
         (Target::Bar, abi::WITNESS_WARN) => tracing::warn!(target: "caustics_bar", "{line}"),
         (Target::Bar, abi::WITNESS_INFO) => tracing::info!(target: "caustics_bar", "{line}"),
         (Target::Bar, _) => tracing::debug!(target: "caustics_bar", "{line}"),
+        (Target::Canvas, abi::WITNESS_WARN) => {
+            tracing::warn!(target: "caustics_canvas", "{line}")
+        }
+        (Target::Canvas, abi::WITNESS_INFO) => {
+            tracing::info!(target: "caustics_canvas", "{line}")
+        }
+        (Target::Canvas, _) => tracing::debug!(target: "caustics_canvas", "{line}"),
     }
 }
 
