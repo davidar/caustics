@@ -308,6 +308,18 @@ wait_for_journal() { # wait_for_journal <pattern> <seconds>
     wait_charge "$t0" 0
 }
 
+# Like wait_for_journal, for a condition that is not a journal line: a
+# command run here (which may itself be an `on_target`) until it succeeds.
+wait_until() { # wait_until <what, for the timing table> <seconds> <command>
+    local deadline=$((SECONDS + $2)) t0
+    t0=$(now_us)
+    until eval "$3" >/dev/null 2>&1; do
+        ((SECONDS < deadline)) || { wait_charge "$t0" 1 "$1" "$2"; return 1; }
+        sleep 0.5
+    done
+    wait_charge "$t0" 0
+}
+
 # How many lines of the run so far carry `pattern`.
 journal_count() { # journal_count <pattern>
     journal | grep -cF -- "$1"
@@ -825,6 +837,72 @@ else
         fi
     fi
     shot dock-click.png
+fi
+
+# The harness's keyboard (`keys`, `key`: docs/testing.md, *The steps and their
+# targets*), proved end to end before anything relies on it: a terminal of
+# our own, focused by id, takes a typed shell line and a Return, and the line
+# writes a file whose bytes are the ones typed, shifted characters and all.
+# Then a chord: `ctrl+u` clears a half-typed `false && ` before it can veto
+# the line typed after it. The absolute path is typed, because a terminal's
+# shell need not start where it was spawned.
+
+say "6b. the harness types: text, Return and a chord reach a focused terminal"
+keys_typed='Typed: A-Z & a~z, 0-9 (ok)!'
+keys_home=$(on_target 10 'printf %s "$T_HOME"')
+keys_window=""
+if [[ -z "$guest_term" ]]; then
+    fail "the target has no terminal to type into"
+elif [[ ! "$keys_home" =~ ^[A-Za-z0-9/._-]+$ ]]; then
+    fail "the target's home '$keys_home' has characters this step will not type into a path"
+else
+    on_target 10 'rm -f "$T_HOME/caustics-keys-text" "$T_HOME/caustics-keys-chord"' >/dev/null
+    keys_focus_before=$(niri_msg --json focused-window | python3 -c "$WINDOWS_PY" id 2>/dev/null)
+    before_windows=${#OPENED_WINDOWS[@]}
+    guest_spawn "$guest_term"
+    if [[ ${#OPENED_WINDOWS[@]} -gt $before_windows ]]; then
+        keys_window=${OPENED_WINDOWS[-1]}
+    fi
+fi
+if [[ -n "$keys_window" ]]; then
+    niri_msg action focus-window --id "$keys_window" >/dev/null 2>&1
+    if wait_until "focused-window $keys_window" 10 \
+        '[[ "$(niri_msg --json focused-window | python3 -c "$WINDOWS_PY" id)" == "$keys_window" ]]'; then
+        pass "the terminal's window $keys_window has keyboard focus"
+    else
+        fail "window $keys_window never took focus; the keys below go elsewhere"
+    fi
+
+    keys "printf '%s\\n' '$keys_typed' > $keys_home/caustics-keys-text" && key Return
+    if wait_until "caustics-keys-text" 15 'on_target 10 "test -s \$T_HOME/caustics-keys-text"'; then
+        got=$(on_target 10 'cat "$T_HOME/caustics-keys-text"')
+        if [[ "$got" == "$keys_typed" ]]; then
+            pass "a typed line and Return ran, and wrote exactly what was typed: $got"
+        else
+            fail "the line ran but wrote '$got', not '$keys_typed'"
+        fi
+    else
+        fail "no caustics-keys-text within 15 s of typing the line and Return"
+    fi
+
+    keys "false && " && key ctrl+u &&
+        keys "printf '%s\\n' chord > $keys_home/caustics-keys-chord" && key Return
+    if wait_until "caustics-keys-chord" 15 'on_target 10 "test -s \$T_HOME/caustics-keys-chord"'; then
+        pass "ctrl+u cleared the half-typed 'false && ', and the line after it ran"
+    else
+        fail "no caustics-keys-chord within 15 s: ctrl+u did not clear 'false && '"
+    fi
+
+    # The window closed and the focus put back, for the steps after this one.
+    niri_msg action close-window --id "$keys_window" >/dev/null 2>&1
+    wait_until "window $keys_window closed" 10 \
+        '! niri_msg --json windows | python3 -c "import json, sys; sys.exit(not any(w[\"id\"] == $keys_window for w in json.load(sys.stdin)))"' ||
+        note "window $keys_window was still open 10 s after close-window"
+    [[ -n "$keys_focus_before" ]] &&
+        niri_msg action focus-window --id "$keys_focus_before" >/dev/null 2>&1
+    on_target 10 'rm -f "$T_HOME/caustics-keys-text" "$T_HOME/caustics-keys-chord"' >/dev/null
+elif [[ -n "$guest_term" && -n "$keys_home" ]]; then
+    fail "no window opened for the keyboard's terminal"
 fi
 
 say "7. hovering a dock entry opens a live window preview"
