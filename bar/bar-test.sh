@@ -412,16 +412,18 @@ trap 'exit 130' INT TERM
 
 say "1. build"
 # All sixteen binaries (the bar spawns each sidecar from beside itself, and
-# the canvas its own), the rows demo, and the sink sidecars' fake host.
+# the canvas its own), the rows demo, the sink sidecars' fake host, and the
+# lock's fake fprintd.
 if (cd "$REPO" &&
     cargo build --offline -p caustics-bar -p caustics-sysmon -p caustics-tray -p caustics-power \
         -p caustics-audio -p caustics-network -p caustics-bluetooth -p caustics-notify -p caustics-apps -p caustics-glyphs \
         -p caustics-reload -p caustics-canvas -p caustics-wallpaper -p caustics-polkit \
         -p caustics-lock &&
-    cargo build --offline -p caustics-bar-abi --example rows_demo --example fake_host); then
-    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit and lock sinks, the rows_demo example and the fake host"
+    cargo build --offline -p caustics-bar-abi --example rows_demo --example fake_host &&
+    cargo build --offline -p caustics-lock --example fake_fprintd); then
+    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit and lock sinks, the rows_demo example, the fake host and the fake fprintd"
 else
-    fail "cargo build of the set, the rows_demo example or the fake host"
+    fail "cargo build of the set, the rows_demo example, the fake host or the fake fprintd"
     exit 1
 fi
 
@@ -5429,6 +5431,150 @@ if [[ "$CANVAS_RUN" -eq 1 ]]; then
     else
         fail "the lock step's canvas or its lock sidecar outlived the fixture"
     fi
+    niri_msg action focus-workspace-up >/dev/null 2>&1
+fi
+
+say "35k. a fingerprint unlocks the canvas's lock beside the password, and the reader is released either way"
+# `caustics-lock` speaks to fprintd itself while the password conversation
+# runs (lock/README.md, *Behaviour*). Here fprintd is
+# `lock/examples/fake_fprintd.rs` on a private `dbus-daemon`, and the lock
+# sidecar's system bus is that bus: logind is not on it, so the socket's
+# `lock` is still the only trigger, and the real fprintd is never reached.
+# The fake's script answers the first verify with a finger that does not
+# match and the second with one that does; nobody types. Then a second lock,
+# whose verify waits for a finger that never comes, is unlocked by the
+# password, and the reader must be let go all the same.
+if [[ "$CANVAS_RUN" -ne 1 || "$LOCK_RUN" -ne 1 ]]; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the fingerprint lock runs on the nested target's canvas only"
+    SKIPS=$((SKIPS + 1))
+else
+    finger_right="gate-finger-$RANDOM$RANDOM-$RANDOM"
+    fprintd_log() { on_target 10 'cat "$T_HOME/fprintd.log" 2>/dev/null'; }
+    on_target 10 'rm -f "$T_HOME/canvas.log" "$T_HOME/fprintd.log" "$XDG_RUNTIME_DIR/fprint-bus"' >/dev/null
+    fixture_start fprint-bus 'dbus-daemon --session --nofork --nopidfile --address="unix:path=$XDG_RUNTIME_DIR/fprint-bus"'
+    if wait_until "the private system bus" 15 'on_target 5 "[ -S \"\$XDG_RUNTIME_DIR/fprint-bus\" ]"'; then
+        fixture_start fprintd 'bash -c '"'"'exec env DBUS_SYSTEM_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/fprint-bus" \
+            FAKE_FPRINTD_SCRIPT=no-match,match FAKE_FPRINTD_DELAY_MS=1500 \
+            "$2/examples/fake_fprintd" 2>>"$1/fprintd.log"'"'"' fprintd "$T_HOME" "$T_BIN"'
+    fi
+    if wait_until "the fake fprintd" 20 'fprintd_log | jgrep -F "fake-fprintd: ready"'; then
+        pass "a fake fprintd on a private bus: $(fprintd_log | grep -F 'ready' | tail -1)"
+    else
+        fail "the fake fprintd never served: $(fprintd_log | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    fixture_start fingerprint 'bash -c '"'"'cd "$1" && exec env \
+        CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload caustics-glyphs caustics-lock" \
+        CAUSTICS_LOCK_DRY_RUN_SECRET="$3" \
+        DBUS_SYSTEM_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/fprint-bus" \
+        RUST_LOG=info "$2/caustics-canvas" 2>>"$1/canvas.log"'"'"' fingerprint "$T_HOME" "$T_BIN" '"$finger_right"
+    FINGER_RUN=0
+    if wait_until "the fingerprint canvas's lock sidecar" 60 'canvas_log | jgrep -F "caustics-lock: listening on"'; then
+        FINGER_RUN=1
+        pass "the canvas started caustics-lock with the private bus as its system bus: $(canvas_last 'caustics-lock: no logind' | sed 's/^.*caustics-lock: //' | cut -c1-100)"
+    else
+        fail "the fingerprint canvas's caustics-lock never listened: $(canvas_log | tail -4 | tr '\n' '|' | cut -c1-400)"
+    fi
+fi
+if [[ "${FINGER_RUN:-0}" -eq 1 ]]; then
+    if canvas_lock_wait lock-wait-finger; then
+        pass "locked: lock --wait returned 0"
+    else
+        fail "the fingerprint lock: $(on_target 5 'cat "$T_HOME/lock-wait-finger.out"' | tr '\n' '|' | cut -c1-200)"
+    fi
+    if wait_until "the fingerprint's unlock" 30 'canvas_log | jgrep -F "caustics-lock: unlocked"'; then
+        # Two chains, each one stream's: the sidecar's witness and the
+        # host's own lines reach the log by different pipes, so only the
+        # order within each is the contract.
+        log=$(canvas_log)
+        missing=$(in_order "$log" \
+            "caustics-lock: fingerprint: reader Fake Fingerprint Reader claimed for " \
+            "caustics-lock: fingerprint: not recognised" \
+            "caustics-lock: fingerprint matched; unlocking" \
+            "caustics-lock: unlocked")
+        if [[ -z "$missing" ]]; then
+            pass "the sidecar: the reader claimed, a no-match, a match, unlocked: in that order, with nothing typed"
+        else
+            fail "the sidecar's fingerprint lines are not in order, from: $missing"
+        fi
+        missing=$(in_order "$log" \
+            "prompt: conversation 1: an info line" \
+            "prompt: conversation 1: an error line, no answer pending" \
+            "prompt: conversation 1 done, success" \
+            "lock: caustics-lock asked to unlock; unlocking" \
+            "lock: the session is unlocked; told to caustics-lock")
+        if [[ -z "$missing" ]]; then
+            pass "the host: the ready line, the no-match's error line on the panel, success, unlock, unlocked: in that order"
+        else
+            fail "the host's lines for the fingerprint are not in order, from: $missing"
+        fi
+    else
+        fail "the fingerprint never unlocked: $(canvas_log | grep -E 'fingerprint|prompt|lock: ' | tail -5 | tr '\n' '|' | cut -c1-400)"
+    fi
+    if canvas_log | jgrep -F "an error line after the answer"; then
+        fail "the reader's no-match was counted as a failed answer"
+    else
+        pass "the no-match was shown and not counted as an attempt"
+    fi
+    if wait_until "the reader released" 15 '[[ "$(fprintd_log | grep -cF "fake-fprintd: Release")" -ge 1 ]]'; then
+        missing=$(in_order "$(fprintd_log)" "fake-fprintd: Claim " "fake-fprintd: VerifyStart any" \
+            "fake-fprintd: VerifyStatus verify-no-match true" "fake-fprintd: VerifyStop" \
+            "fake-fprintd: VerifyStart any" "fake-fprintd: VerifyStatus verify-match true" \
+            "fake-fprintd: VerifyStop" "fake-fprintd: Release")
+        if [[ -z "$missing" ]]; then
+            pass "fprintd saw claim, verify, no-match, stop, verify, match, stop, release: in that order"
+        else
+            fail "fprintd's calls are not in order, from: $missing"
+        fi
+    else
+        fail "the reader was never released: $(fprintd_log | tail -4 | tr '\n' '|' | cut -c1-300)"
+    fi
+    # The second lock: the fake's script is spent, so its verify waits, and
+    # the password unlocks.
+    focus_before=$(canvas_count "seat: the keyboard is on the lock")
+    if canvas_lock_wait lock-wait-finger-again; then
+        pass "locked again: lock --wait returned 0"
+    else
+        fail "the second fingerprint lock: $(on_target 5 'cat "$T_HOME/lock-wait-finger-again.out"' | tr '\n' '|' | cut -c1-200)"
+    fi
+    if wait_until "the second lock's ready line" 20 'canvas_log | jgrep -F "prompt: conversation 2: an info line"' &&
+        wait_until "the second lock's ask" 20 'canvas_log | jgrep -E "canvas[a-z_:]*: prompt: conversation 2 asking \(echo 0, attempts 0\)"' &&
+        wait_until "the keyboard on the second lock" 15 "canvas_more 'seat: the keyboard is on the lock' $focus_before" &&
+        wait_until "the reader verifying again" 15 '[[ "$(fprintd_log | grep -cF "fake-fprintd: VerifyStart any")" -ge 3 ]]'; then
+        pass "the second lock's conversation says the reader is live, and asks"
+        keys "$finger_right"
+        key Return
+    else
+        fail "the second fingerprint lock never asked: $(canvas_log | grep -E 'fingerprint|prompt' | tail -4 | tr '\n' '|' | cut -c1-400)"
+    fi
+    if wait_until "the password's unlock" 20 "[[ \$(canvas_count 'caustics-lock: unlocked') -ge 2 ]]" &&
+        wait_until "the reader released again" 15 '[[ "$(fprintd_log | grep -cF "fake-fprintd: Release")" -ge 2 ]]'; then
+        pass "the password unlocked with the reader still verifying, and the reader was released: $(canvas_last 'caustics-lock: fingerprint: released' | sed 's/^.*caustics-lock: //')"
+    else
+        fail "after the password: $(canvas_log | grep -E 'fingerprint|lock: ' | tail -4 | tr '\n' '|' | cut -c1-300); fprintd: $(fprintd_log | tail -3 | tr '\n' '|')"
+    fi
+    if [[ "$(canvas_count 'fingerprint matched')" -eq 1 && "$(fprintd_log | grep -cF 'fake-fprintd: Claim ')" -eq 2 ]]; then
+        pass "one match in two locks, one claim each"
+    else
+        fail "$(canvas_count 'fingerprint matched') matches and $(fprintd_log | grep -cF 'fake-fprintd: Claim ') claims in two locks"
+    fi
+    leaks=$(on_target 10 "cat \"\$T_HOME/canvas.log\" \"\$T_HOME/fprintd.log\" \"\$T_HOME\"/lock-wait-finger*.out 2>/dev/null | grep -cF -- '$finger_right'")
+    if [[ "${leaks:-1}" -eq 0 ]] && ! journal | jgrep -F -- "$finger_right"; then
+        pass "the secret is in no line of the canvas, the fake fprintd, the client or the journal"
+    else
+        fail "the secret is in ${leaks:-?} lines of the canvas's, fprintd's or the client's logs, or the journal"
+    fi
+fi
+if [[ "$CANVAS_RUN" -eq 1 && "$LOCK_RUN" -eq 1 ]]; then
+    finger_canvas=$(canvas_last "set: " | sed -n 's/.*, pid \([0-9]*\)$/\1/p')
+    fixture_stop fingerprint
+    fixture_stop fprintd
+    fixture_stop fprint-bus
+    if wait_until "the fingerprint step's canvas gone" 20 "! on_target 5 'kill -0 ${finger_canvas:-0} 2>/dev/null || [ -S \"\$XDG_RUNTIME_DIR/caustics-lock.sock\" ]'"; then
+        pass "the canvas stopped, its lock sidecar with it, and the private bus and fake fprintd were stopped by pid"
+    else
+        fail "the fingerprint step's canvas or its lock sidecar outlived the fixture"
+    fi
+    on_target 5 'rm -f "$XDG_RUNTIME_DIR/fprint-bus"' >/dev/null
     niri_msg action focus-workspace-up >/dev/null 2>&1
 fi
 

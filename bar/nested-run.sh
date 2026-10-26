@@ -278,6 +278,7 @@ build() {
         cargo build --offline --workspace &&
         cargo build --offline -p caustics-power --example fake_upower &&
         cargo build --offline -p caustics-bar-abi --example rows_demo &&
+        cargo build --offline -p caustics-lock --example fake_fprintd &&
         cargo test --offline -p caustics-bar --no-run)
 }
 if ! build >"$RUN/build.log" 2>&1; then
