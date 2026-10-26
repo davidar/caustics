@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Preview the bar's wake off the GPU: the same height field, refraction and
-tone map as `caustics/wake.slang`'s `wake_field` and `wake_light`, stepped the
+tone map as `caustics/water.slang` (`water_field`, `water_floor`, `water_glow`)
+and `caustics/wake.slang`'s `wake_light`, stepped the
 way `step_wake` steps it, drawn by numpy into a PNG. Beside the per-pixel
 Jacobian picture the shader draws, it can also splat rays into a histogram
 (the logo renderer's method) as a ground truth for the approximation.
@@ -8,9 +9,10 @@ Jacobian picture the shader draws, it can also splat rays into a histogram
 Every knob is read out of the tree so the preview cannot drift from the
 shader: the `WAKE_*` tunables and `SLAB_RGB`/`HOVER_RGB` from
 `caustics/bar_tunables.slang`, the `static const` constants of the wake
-from `caustics/wake.slang`, and its ring's size, `WAKE_SOURCES`, from
+from `caustics/wake.slang` and of the water from `caustics/water.slang`, and
+its ring's size, `WAKE_SOURCES`, from
 `caustics/bar_state.slang`, where the private buffer's layout is. `--set NAME=VALUE` overrides any of them for a
-trial; the names are the shader's own without the `WAKE_` prefix.
+trial; the names are the shader's own without the `WAKE_` or `WATER_` prefix.
 
     python3 tools/wake/wake.py --out ~/.cache/wake-preview
     python3 tools/wake/wake.py --set HEIGHT=1.4 --set DISPERSION=6
@@ -30,21 +32,22 @@ from PIL import Image
 HERE = os.path.dirname(os.path.abspath(__file__))
 TREE = os.path.normpath(os.path.join(HERE, '..', '..'))
 TUNABLES = os.path.join(TREE, 'caustics', 'bar_tunables.slang')
-SHADERS = [os.path.join(TREE, 'caustics', name) for name in ('wake.slang', 'bar_state.slang')]
+SHADERS = [os.path.join(TREE, 'caustics', name)
+           for name in ('wake.slang', 'water.slang', 'bar_state.slang')]
 
 # The shader's name for each knob, and the name the functions below use.
 NAMES = {
     'WAKE_SOURCES': 'N', 'WAKE_SETTLE_S': 'LIFE', 'WAKE_SPACING': 'SPACING',
     'WAKE_SPEED': 'SPEED', 'WAKE_WAVELENGTH': 'WAVELENGTH', 'WAKE_HEIGHT': 'HEIGHT',
-    'WAKE_FULL_SPEED': 'FULL_SPEED', 'WAKE_DEPTH': 'DEPTH', 'WAKE_IOR': 'IOR',
+    'WAKE_FULL_SPEED': 'FULL_SPEED', 'WAKE_DEPTH': 'DEPTH', 'WATER_IOR': 'IOR',
     'WAKE_DISPERSION': 'DISPERSION', 'WAKE_ALPHA': 'ALPHA', 'WAKE_CLICK': 'CLICK',
     'WAKE_EXPOSURE': 'EXPOSURE', 'WAKE_CONTRAST': 'CONTRAST', 'WAKE_IMAX': 'IMAX',
-    'WAKE_TRAIN': 'ENVELOPE', 'WAKE_RISE_S': 'RISE', 'WAKE_MIN_HEIGHT': 'MIN_HEIGHT',
+    'WAKE_TRAIN': 'ENVELOPE', 'WATER_RISE_S': 'RISE', 'WAKE_MIN_HEIGHT': 'MIN_HEIGHT',
 }
 
 
 def read_knobs():
-    """Every WAKE_ constant the Slang files declare, by the short name."""
+    """Every WAKE_ and WATER_ constant the Slang files declare, by the short name."""
     text = open(TUNABLES).read() + ''.join(open(path).read() for path in SHADERS)
     knobs = {}
     for name, short in NAMES.items():
@@ -66,7 +69,7 @@ T = read_knobs()
 SLAB = read_rgb('SLAB_RGB')
 SLAB_A = 0.85  # the slab's alpha as drawn over a dark wallpaper
 HOVER = read_rgb('HOVER_RGB')
-# Water's dispersion, as `WAKE_IOR_SPREAD` in the shader: offsets from the green index.
+# Water's dispersion, as `WATER_IOR_SPREAD` in the shader: offsets from the green index.
 WATER = np.array([-0.002, 0.0, 0.004])
 
 
