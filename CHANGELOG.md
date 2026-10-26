@@ -95,7 +95,10 @@ ask's words, the answer's field, the last line, an error in red), and takes
 the keyboard. Until the first ask the panel is held, title and no field
 (`PROMPT_HELD`): a PAM stack that tries a fingerprint reader first asks for
 the password only after that module gives up, and a panel that waited for
-the ask showed nothing for those seconds. That state moved the ABI hash. The seat's keymap is compiled by libxkbcommon, opened at run
+the ask showed nothing for those seconds. That state moved the ABI hash. A
+title too long for the panel takes up to `PROMPT_TITLE_LINES` lines, broken
+at a space or, in a word with none (a command's path), inside it, instead of
+ending at the panel's edge after two. The seat's keymap is compiled by libxkbcommon, opened at run
 time, with compose; Return answers, Escape dismisses, BackSpace takes a
 character, Control-U clears. What is typed lives in one zeroing buffer in
 the host and leaves it once, down the asking sidecar's pipe; the caustic is

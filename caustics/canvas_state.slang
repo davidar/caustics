@@ -161,13 +161,16 @@ public struct PromptLayout
     public float4 panel;
     /// The answer's field, the same way.
     public float4 field;
-    /// The title's first line's box, its run's own width: what the oracle
-    /// looks inside.
+    /// The title's box: its lines' height, its widest line's width. What
+    /// the oracle looks inside.
     public float4 title_box;
-    /// Where the title wraps (`wrap_at`), or `NO_INDEX` for one line: its
-    /// second line is the glyphs after it, from the next line's start.
-    public uint title_break;
-    public float title_shift;
+    /// The title's lines, 1 to `PROMPT_TITLE_LINES` (at most five): line
+    /// `k + 1` starts at glyph `title_starts[k]` (`wrap_from`), drawn
+    /// shifted left by `title_shifts[k]`, the pen position of that glyph.
+    /// Lines past `title_lines` are `NO_INDEX`.
+    public uint title_lines;
+    public uint4 title_starts;
+    public float4 title_shifts;
     /// The ask's words' box, as the title's.
     public float4 ask_box;
     /// Top-left of the line's row.

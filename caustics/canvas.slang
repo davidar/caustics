@@ -258,9 +258,32 @@ void layout_prompt(CanvasPrompt pr)
     float lh = text_line_height(text_px);
     float field_h = lh + 2.0 * PROMPT_FIELD_PADDING * s;
     float pw = min(PROMPT_WIDTH * s, max(w - 2.0 * pad, 1.0));
-    // A title too long for the panel takes a second line, broken at a space.
-    uint title_break = wrap_at(BLOCK_TITLE, title_px, pw - 2.0 * pad);
-    float title_h = title_break == NO_INDEX ? title_lh : 2.0 * title_lh;
+    // A title too long for the panel takes more lines, up to
+    // PROMPT_TITLE_LINES, broken at a space or, failing one, inside the
+    // word; the last line ends at the edge like any other.
+    float title_w_max = pw - 2.0 * pad;
+    uint max_lines = clamp(PROMPT_TITLE_LINES, 1u, 5u);
+    uint4 starts = uint4(NO_INDEX, NO_INDEX, NO_INDEX, NO_INDEX);
+    float4 shifts = float4(0.0, 0.0, 0.0, 0.0);
+    uint lines = 1u;
+    uint start = 0u;
+    float title_w = 0.0;
+    for (uint k = 0u; k + 1u < max_lines; ++k)
+    {
+        uint next = wrap_from(BLOCK_TITLE, start, title_px, title_w_max);
+        if (next == NO_INDEX)
+        {
+            break;
+        }
+        float x0 = glyph_x(BLOCK_TITLE, start, title_px);
+        title_w = max(title_w, glyph_x(BLOCK_TITLE, next, title_px) - x0);
+        starts[k] = next;
+        shifts[k] = glyph_x(BLOCK_TITLE, next, title_px);
+        start = next;
+        lines += 1u;
+    }
+    title_w = max(title_w, text_width(BLOCK_TITLE, title_px) - glyph_x(BLOCK_TITLE, start, title_px));
+    float title_h = float(lines) * title_lh;
     float ph = pad + title_h + gap + lh + 0.5 * gap + field_h + gap + lh + pad;
     float x0 = floor(0.5 * (w - pw));
     float y0 = floor(0.5 * (h - ph));
@@ -272,12 +295,11 @@ void layout_prompt(CanvasPrompt pr)
     l.radius = PROMPT_RADIUS * s;
     float left = x0 + pad;
     float y = y0 + pad;
-    l.title_break = title_break;
-    l.title_shift = title_break == NO_INDEX ? 0.0 : glyph_x(BLOCK_TITLE, title_break + 1u, title_px);
-    float title_w = title_break == NO_INDEX ? text_width(BLOCK_TITLE, title_px)
-                                            : glyph_x(BLOCK_TITLE, title_break, title_px);
+    l.title_lines = lines;
+    l.title_starts = starts;
+    l.title_shifts = shifts;
     title_w = min(title_w, l.clip - left);
-    l.title_box = float4(left, y, left + title_w, y + title_lh);
+    l.title_box = float4(left, y, left + title_w, y + title_h);
     y += title_h + gap;
     float ask_w = min(text_width(BLOCK_ASK, text_px), l.clip - left);
     l.ask_box = float4(left, y, left + ask_w, y + lh);
@@ -372,17 +394,26 @@ float3 draw_prompt(CanvasPrompt pr, float3 colour, float2 p)
         col = ink(PROMPT_FIELD_COLOUR, rounded(l.field, 0.5 * l.radius, p), col);
     }
 
-    if (l.title_break == NO_INDEX)
+    // The title's lines: line k is the glyphs from its start to the next
+    // line's, moved left by its start's pen position; the last runs to the
+    // end of the block.
     {
-        col = paint_text(BLOCK_TITLE, l.title_box.xy, l.title_px, l.clip, PROMPT_INK, p, col);
-    }
-    else
-    {
-        col = paint_glyphs(BLOCK_TITLE, 0u, l.title_break, 0.0, l.title_box.xy, l.title_px,
-                           l.clip, PROMPT_INK, p, col);
-        float2 second = float2(l.title_box.x, l.title_box.w);
-        col = paint_glyphs(BLOCK_TITLE, l.title_break + 1u, 0xffffffffu, l.title_shift, second,
-                           l.title_px, l.clip, PROMPT_INK, p, col);
+        float title_lh = text_line_height(l.title_px);
+        uint start = 0u;
+        float shift = 0.0;
+        for (uint k = 0u; k < l.title_lines; ++k)
+        {
+            uint end = k < 4u && k + 1u < l.title_lines ? l.title_starts[k] : 0xffffffffu;
+            float2 org = float2(l.title_box.x, l.title_box.y + float(k) * title_lh);
+            col = paint_glyphs(BLOCK_TITLE, start, end, shift, org, l.title_px, l.clip, PROMPT_INK,
+                               p, col);
+            if (end == 0xffffffffu)
+            {
+                break;
+            }
+            start = end;
+            shift = l.title_shifts[k];
+        }
     }
     col = paint_text(BLOCK_ASK, l.ask_box.xy, l.text_px, l.clip, PROMPT_MUTED_INK, p, col);
 

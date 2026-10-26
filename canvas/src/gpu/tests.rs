@@ -615,7 +615,9 @@ fn layout_box(gpu: &Gpu, field: &str) -> [f32; 4] {
 /// are shaped by `canvas_shape` against a real font and drawn by
 /// `canvas_draw` on the prompt's pane. Inside each run's box the panel has
 /// ink on it; in the gap between the two rows, and beside the title past
-/// its end, it is the bare panel colour.
+/// its end, it is the bare panel colour. `CANVAS_TEST_TITLE` replaces the
+/// title (a long one shows the wrap) and `CANVAS_TEST_DUMP` names a PPM to
+/// write the pane to, for looking at.
 #[test]
 fn the_prompt_draws_its_text_on_the_device() {
     use caustics_bar_abi::canvas::{CanvasPrompt, PROMPT_ASKING, TARGET_PROMPT};
@@ -626,7 +628,8 @@ fn the_prompt_draws_its_text_on_the_device() {
     let strings = caustics_host::strings::Strings::baked(BAKED_REFLECTION);
     let literal_count = gpu.write_literals(&strings);
     assert!(literal_count > 0, "the baked caustic names literals");
-    let title = b"Canvas text";
+    let title = std::env::var("CANVAS_TEST_TITLE").unwrap_or_else(|_| "Canvas text".to_owned());
+    let title = title.as_bytes();
     gpu.write_prompt_text(title);
     gpu.write_facts(&CanvasFacts {
         from_slot: NO_INDEX,
@@ -690,7 +693,11 @@ fn the_prompt_draws_its_text_on_the_device() {
             );
         }
     }
-    for x in (title_box[2] as u32 + 3)..(title_box[2] as u32 + 60) {
+    // Beside the title, as far as the panel goes: a title as wide as the
+    // panel leaves no room, and the range is empty.
+    let panel_box = layout_box(&gpu, "panel");
+    let beside_end = (title_box[2] + 60.0).min(panel_box[2] - 2.0) as u32;
+    for x in (title_box[2] as u32 + 3)..beside_end {
         let y = (0.5 * (title_box[1] + title_box[3])) as u32;
         assert!(
             is_panel(at(x, y)),

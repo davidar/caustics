@@ -301,23 +301,33 @@ uint byte_at(uint source, uint off)
     return (word >> (8u * (off % 4u))) & 0xffu;
 }
 
-/// Where block `b` breaks to fit `width` px at em size `px`: the index of
-/// the last space whose line before it fits, or `NO_INDEX` when the run fits
-/// whole or has no space to break at. One line more, never two: a second
-/// line too long ends at the edge like any other.
-public uint wrap_at(uint b, float px, float width)
+/// Where the line of block `b` that starts at glyph `g0` ends, to fit
+/// `width` px at em size `px`: the index of the glyph the next line starts
+/// at, or `NO_INDEX` when the rest of the run fits on this line. The break
+/// is after the last space, slash or hyphen whose line before it fits (a
+/// path breaks after a slash); a run with none to break at breaks at the
+/// last glyph that fits, so a long word is cut across lines rather than
+/// off at the edge. Always past `g0`, so a caller walking the lines
+/// terminates.
+public uint wrap_from(uint b, uint g0, float px, float width)
 {
-    if (b >= CANVAS_TEXT_BLOCKS || text_width(b, px) <= width)
+    if (b >= CANVAS_TEXT_BLOCKS)
     {
         return NO_INDEX;
     }
     CanvasRun run = private[0].text[b];
     uint n = min(run.glyphs, block_slots(b));
+    if (g0 + 1u >= n || text_width(b, px) - glyph_x(b, g0, px) <= width)
+    {
+        return NO_INDEX;
+    }
     uint capacity;
     uint stride;
     runs.GetDimensions(capacity, stride);
-    uint found = NO_INDEX;
-    for (uint i = 1u; i < n; ++i)
+    float x0 = glyph_x(b, g0, px);
+    uint space = NO_INDEX;
+    uint fits = g0 + 1u;
+    for (uint i = g0 + 1u; i < n; ++i)
     {
         uint at = run.first + i;
         if (at >= min(capacity, CANVAS_GLYPHS))
@@ -325,17 +335,25 @@ public uint wrap_at(uint b, float px, float width)
             break;
         }
         ShapedGlyph g = runs[at];
-        if (float(g.x) / 64.0 * px / SHAPE_PX > width)
+        if (float(g.x) / 64.0 * px / SHAPE_PX - x0 > width)
         {
             break;
         }
+        fits = i;
         uint cluster = g.cluster;
-        if (cluster >= run.off && cluster < run.off + run.len && byte_at(run.source, cluster) == 0x20u)
+        if (cluster >= run.off && cluster < run.off + run.len)
         {
-            found = i;
+            uint byte = byte_at(run.source, cluster);
+            if (byte == 0x20u || byte == 0x2fu || byte == 0x2du)
+            {
+                space = i;
+            }
         }
     }
-    return found;
+    // The next line starts after the space (or slash, or hyphen), or at the
+    // first glyph that did not fit; `fits` is the last that did, so it is at
+    // least g0 + 1.
+    return space != NO_INDEX ? space + 1u : max(fits, g0 + 1u);
 }
 
 /// `count` dots in a row from `org`, each the dot block's glyph at em size

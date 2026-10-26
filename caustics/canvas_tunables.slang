@@ -69,6 +69,10 @@ public static const float PROMPT_PADDING = 24.0;
 public static const float PROMPT_GAP = 12.0;
 /// The corners' radius.
 public static const float PROMPT_RADIUS = 14.0;
+/// How many lines a long title may take before it ends at the panel's
+/// edge: a polkit message names the command, and a command's path is one
+/// long word, cut across lines. At most five.
+public static const uint PROMPT_TITLE_LINES = 4u;
 /// The em sizes of the title and of every other line.
 public static const float PROMPT_TITLE_PX = 17.0;
 public static const float PROMPT_TEXT_PX = 14.0;
