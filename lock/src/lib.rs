@@ -232,7 +232,7 @@ pub async fn serve(
         }
         Some(dir) => {
             let path = dir.join(socket::SOCKET);
-            match socket::bind(&path) {
+            match socket::bind(&path, socket::TAKEOVER_WINDOW) {
                 Ok(listener) => match socket::serve(listener, events.clone()) {
                     Ok(()) => {
                         witness(&format!("listening on {}", path.display()));

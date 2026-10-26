@@ -30,17 +30,40 @@ fn scratch(name: &str) -> PathBuf {
     dir.join(SOCKET)
 }
 
-/// A stale socket file (nothing listening) is taken over; a live one is
-/// another lock's and is not.
+/// A stale socket file (nothing listening) is taken over; a live one that
+/// answers for the whole window is another lock's and is not.
 #[test]
 fn a_stale_socket_is_replaced_and_a_live_one_is_not() {
     let path = scratch("bind");
+    let window = Duration::from_millis(200);
     drop(UnixListener::bind(&path).unwrap());
     assert!(path.exists(), "a stale socket file to start from");
-    let live = bind(&path).expect("the stale socket replaced");
-    let err = bind(&path).expect_err("a live socket taken");
+    let live = bind(&path, window).expect("the stale socket replaced");
+    let err = bind(&path, window).expect_err("a live socket taken");
     assert_eq!(err.kind(), io::ErrorKind::AddrInUse);
     drop(live);
+    let _ = std::fs::remove_dir_all(path.parent().unwrap());
+}
+
+/// A listener that stops answering inside the window is the previous lock
+/// on its way out, and its socket is taken once it has gone, not at the
+/// window's end.
+#[test]
+fn a_listener_that_closes_during_the_window_is_taken() {
+    let path = scratch("closing");
+    let first = bind(&path, Duration::from_millis(200)).expect("binds");
+    let closer = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        drop(first);
+    });
+    let started = Instant::now();
+    let second = bind(&path, Duration::from_secs(5)).expect("taken once the first closed");
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the window was waited out instead of the listener's closing"
+    );
+    closer.join().unwrap();
+    drop(second);
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 
@@ -51,7 +74,7 @@ fn a_stale_socket_is_replaced_and_a_live_one_is_not() {
 async fn a_line_in_is_a_command_and_its_reply_comes_back() {
     let path = scratch("serve");
     let (events, mut inbox) = unbounded_channel();
-    serve(bind(&path).unwrap(), events).unwrap();
+    serve(bind(&path, Duration::ZERO).unwrap(), events).unwrap();
     let client = std::thread::spawn({
         let path = path.clone();
         move || {

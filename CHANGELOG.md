@@ -124,7 +124,11 @@ is ignored. A hint already set at start re-locks before anything else.
 replaces PAM with one ask, for the tests. A new wire kind, `Lock`, and two
 canvas events, `locked` and `unlocked`, moved the ABI hash, so the whole
 set (now sixteen binaries) is rebuilt and installed together; the canvas
-does not start the sidecar until it has lock surfaces.
+does not start the sidecar until it has lock surfaces. Its socket gives a
+previous lock still on its way out two seconds to let go, as the
+wallpaper's does, instead of running without a socket; `caustics-canvasctl
+status` says on stderr when the lock refused to run rather than printing
+nothing; and the canvas journals the keyboard arriving on an overlay.
 
 **The canvas's lock surfaces.** The canvas host now locks: the lock
 sidecar's `Lock` takes `ext_session_lock_v1`, a lock surface goes on every

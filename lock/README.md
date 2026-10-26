@@ -67,7 +67,8 @@ as the wallpaper's:
 and 1 otherwise; `lock --wait` is the before-sleep hold, a sleep hook's
 `caustics-canvasctl lock --wait && systemctl suspend`. `caustics-canvasctl
 status` prints the lock's line after the wallpaper's when this socket
-answers.
+answers; without a lock sidecar there is no line, and a lock that refused
+to run says why on stderr.
 
 ## Settings
 

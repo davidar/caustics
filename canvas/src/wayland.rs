@@ -1773,10 +1773,13 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for Canvas {
                 ..
             } => canvas.key_pressed(key),
             // The keyboard arriving on a prompt's pane, or a lock pane, is
-            // when typing can begin: said, once each time.
+            // when typing can begin; arriving on an overlay, it is what lets
+            // a key cancel the dim. Said, once each time, so the journal
+            // shows where a key went.
             wl_keyboard::Event::Enter { surface, .. } => {
                 if let Some(index) = canvas.pane_of_surface(&surface)
-                    && canvas.panes[index].role.carries_prompt()
+                    && (canvas.panes[index].role.carries_prompt()
+                        || canvas.panes[index].role == Role::Overlay)
                 {
                     tracing::info!(
                         "seat: the keyboard is on the {} (output {})",

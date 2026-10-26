@@ -66,11 +66,22 @@ fn main() {
     };
     let reply = send(caustics_wallpaper::SOCKET, &line, wait);
     // The lock's line, printed after the wallpaper's, when its socket
-    // answers; the exit is still the wallpaper's.
+    // answers; the exit is still the wallpaper's. No lock sidecar is no line
+    // (the wallpaper runs without one); a lock that is there and refuses
+    // says why on stderr, so the two never look the same.
     let lock_line = (line == "status")
         .then(|| send(LOCK_SOCKET, "status", None).ok())
         .flatten()
-        .and_then(|reply| reply.strip_prefix("ok ").map(str::to_owned));
+        .and_then(|reply| match reply.strip_prefix("ok ") {
+            Some(rest) => Some(rest.to_owned()),
+            None => {
+                eprintln!(
+                    "caustics-canvasctl: the lock: {}",
+                    reply.strip_prefix("error ").unwrap_or(&reply)
+                );
+                None
+            }
+        });
     let code = match reply {
         Ok(reply) if reply == caustics_wallpaper::dim::DONE => EXIT_OK,
         Ok(reply) if reply == caustics_wallpaper::dim::CANCELLED => {
