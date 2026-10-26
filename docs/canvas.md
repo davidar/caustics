@@ -206,10 +206,15 @@ Held ─ask→ Asking ─Return→ Verifying ─error line→ Failed ─ask→ A
 ```
 
 - **A conversation** is a sink's `Prompt` frames under one id (docs/abi.md,
-  *Prompt*). Its title and any line before the first ask are **held**:
-  nothing is drawn and the keyboard is not taken, so a helper that fails
-  before it asks flashes no panel. The first `PROMPT_SECRET` or
-  `PROMPT_ECHO` raises the pane on every output and takes the keyboard.
+  *Prompt*). Its first frame, the title usually, raises the pane on every
+  output and takes the keyboard; until the first ask the conversation is
+  **held**: the panel shows the title and any line, and no field. A PAM
+  stack that tries a fingerprint reader before it asks for a password asks
+  only after that module's timeout, and a user who sees nothing for those
+  seconds thinks nothing happened; held, they see what is wanted and can
+  touch the reader or wait. The cost is a panel for a helper that fails
+  before it asks, which is rare and brief. The first `PROMPT_SECRET` or
+  `PROMPT_ECHO` is **Asking**: the field appears, and keys type into it.
 - **Asking**: keys type into the host's buffer. Return writes
   `Answer::Text` down the asking sidecar's stdin, one write, and the buffer
   is zeroed as the answer leaves it; **Verifying** follows, with the dots

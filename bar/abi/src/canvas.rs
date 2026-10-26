@@ -87,6 +87,12 @@ abi_consts! {
     pub const PROMPT_VERIFYING: u32 = 2;
     /// An error line followed the answer; the next ask is another attempt.
     pub const PROMPT_FAILED: u32 = 3;
+    /// Held: the conversation has begun (its title, perhaps a line) and has
+    /// not asked yet. The panel is up with no field, so the user sees that
+    /// something is wanted of them while the sink's helper is at work, say
+    /// a fingerprint module waiting for a finger before PAM asks for a
+    /// password. Escape dismisses; other keys do nothing.
+    pub const PROMPT_HELD: u32 = 4;
 }
 
 abi_consts! {
@@ -151,7 +157,7 @@ abi_struct! {
     pub struct CanvasPrompt {
         /// The conversation's id, as its sidecar numbered it; 0 when idle.
         pub id: u32,
-        /// `PROMPT_*`: idle, asking, verifying or failed.
+        /// `PROMPT_*`: idle, held, asking, verifying or failed.
         pub state: u32,
         /// 1 when the ask echoes what is typed (`PROMPT_ECHO`).
         pub echo: u32,

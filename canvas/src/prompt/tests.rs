@@ -42,14 +42,29 @@ fn a_conversation_asks_answers_and_ends() {
         &prompt(1, PROMPT_INFO, PROMPT_INFO_TITLE, "Allow it?"),
     );
     assert!(
-        !effects.contains(&Effect::Raise),
-        "a title alone raises nothing"
+        effects.contains(&Effect::Raise),
+        "the title raises the panel: the user sees the conversation before its ask"
     );
-    assert!(!prompts.takes_keys());
-    assert_eq!(prompts.facts().0.state, PROMPT_IDLE);
+    assert!(prompts.takes_keys());
+    let (facts, text, _) = prompts.facts();
+    assert_eq!(
+        (facts.state, facts.typed, facts.ask_len),
+        (PROMPT_HELD, 0, 0)
+    );
+    assert_eq!(
+        &text[facts.title_off as usize..][..facts.title_len as usize],
+        b"Allow it?"
+    );
+    assert!(
+        prompts.key(typed("x")).is_empty(),
+        "keys do nothing while held"
+    );
 
     let effects = prompts.frame(POLKIT, &prompt(1, PROMPT_SECRET, 0, "Password: "));
-    assert!(effects.contains(&Effect::Raise));
+    assert!(
+        !effects.contains(&Effect::Raise),
+        "the ask raises nothing more: the panel is already up"
+    );
     assert!(prompts.takes_keys());
     for text in ["s", "e", "c"] {
         assert!(prompts.key(typed(text)).contains(&Effect::Changed));
@@ -99,6 +114,27 @@ fn a_conversation_asks_answers_and_ends() {
     assert!(effects.contains(&Effect::Lower));
     assert!(!prompts.takes_keys());
     assert_eq!(prompts.facts().0.state, PROMPT_IDLE);
+}
+
+/// Escape while held dismisses the conversation like Escape while asking:
+/// `ANSWER_CANCELLED` to the sink, the panes go, and the ask that follows is
+/// dismissed again.
+#[test]
+fn escape_while_held_dismisses() {
+    let mut prompts = Prompts::new();
+    let effects = prompts.frame(
+        POLKIT,
+        &prompt(7, PROMPT_INFO, PROMPT_INFO_TITLE, "Allow it?"),
+    );
+    assert!(effects.contains(&Effect::Raise));
+    let effects = prompts.key(keysym(crate::keys::KEY_ESCAPE));
+    assert_eq!(answers(&effects), vec![&Answer::Cancelled { id: 7 }]);
+    assert!(effects.contains(&Effect::Lower));
+    assert!(!prompts.takes_keys());
+    assert_eq!(prompts.facts().0.state, PROMPT_IDLE);
+    let effects = prompts.frame(POLKIT, &prompt(7, PROMPT_SECRET, 0, ""));
+    assert_eq!(answers(&effects), vec![&Answer::Cancelled { id: 7 }]);
+    assert!(!effects.contains(&Effect::Raise));
 }
 
 /// An error line after an answer is a failed attempt, counted; the next ask
@@ -321,11 +357,12 @@ fn the_lock_reserves_the_prompt_for_its_own() {
     ));
     assert!(!effects.contains(&Effect::Raise));
     assert!(!prompts.raised());
-    // The lock's own replaces the dismissed one.
+    // The lock's own replaces the dismissed one: its title raises the panel.
     let effects = prompts.frame(LOCK, &prompt(1, PROMPT_INFO, PROMPT_INFO_TITLE, "user"));
     assert!(answers(&effects).is_empty());
-    let effects = prompts.frame(LOCK, &prompt(1, PROMPT_SECRET, 0, "Password: "));
     assert!(effects.contains(&Effect::Raise));
+    let effects = prompts.frame(LOCK, &prompt(1, PROMPT_SECRET, 0, "Password: "));
+    assert!(!effects.contains(&Effect::Raise));
     assert!(prompts.takes_keys());
     // A reservation again for the same sidecar dismisses nothing of its own.
     assert!(prompts.reserve(Some(LOCK)).is_empty());

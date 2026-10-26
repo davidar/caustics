@@ -181,8 +181,9 @@ void canvas_apply()
     apply_text();
 }
 
-/// The prompt's steps, each said once: a conversation asking (and on which
-/// attempt), verifying, failed, closed. The typed count is never said.
+/// The prompt's steps, each said once: a conversation held (begun, no ask
+/// yet), asking (and on which attempt), verifying, failed, closed. The typed
+/// count is never said.
 void apply_prompt(CanvasPrompt pr)
 {
     if (pr.id != private[0].said_prompt_id || pr.state != private[0].said_prompt_state
@@ -194,7 +195,11 @@ void apply_prompt(CanvasPrompt pr)
         private[0].said_prompt_attempts = pr.attempts;
         Args a = args_new();
         arg(a, pr.id);
-        if (pr.state == PROMPT_ASKING)
+        if (pr.state == PROMPT_HELD)
+        {
+            witness(WITNESS_INFO, getStringHash("prompt: conversation {0} held, no ask yet"), a);
+        }
+        else if (pr.state == PROMPT_ASKING)
         {
             arg(a, pr.echo);
             arg(a, pr.attempts);
@@ -349,7 +354,9 @@ float rounded(float4 r, float radius, float2 p)
 }
 
 /// The prompt's pane at `p`, over the wallpaper's `colour` there: the
-/// wallpaper darkened by `PROMPT_DARKEN`, the panel, its four rows.
+/// wallpaper darkened by `PROMPT_DARKEN`, the panel, its four rows. Held
+/// (no ask yet) the panel has its title and line and no field: the same
+/// size, so nothing moves when the ask comes.
 float3 draw_prompt(CanvasPrompt pr, float3 colour, float2 p)
 {
     float4 col = float4(lerp(colour, DIM_COLOUR, saturate(PROMPT_DARKEN)), 1.0);
@@ -359,7 +366,11 @@ float3 draw_prompt(CanvasPrompt pr, float3 colour, float2 p)
         return col.rgb;
     }
     col = ink(PROMPT_PANEL_COLOUR, rounded(l.panel, l.radius, p), col);
-    col = ink(PROMPT_FIELD_COLOUR, rounded(l.field, 0.5 * l.radius, p), col);
+    bool asked = pr.state != PROMPT_HELD;
+    if (asked)
+    {
+        col = ink(PROMPT_FIELD_COLOUR, rounded(l.field, 0.5 * l.radius, p), col);
+    }
 
     if (l.title_break == NO_INDEX)
     {
@@ -383,7 +394,7 @@ float3 draw_prompt(CanvasPrompt pr, float3 colour, float2 p)
     float2 inside = float2(l.field.x + fpad, l.field.y + fpad);
     float inner_right = l.field.z - fpad;
     float3 typed_ink = pr.state == PROMPT_VERIFYING ? PROMPT_MUTED_INK : PROMPT_INK;
-    if (p.x >= l.field.x && p.x < l.field.z)
+    if (asked && p.x >= l.field.x && p.x < l.field.z)
     {
         if (pr.echo != 0u && p.x >= inside.x)
         {

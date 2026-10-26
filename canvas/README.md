@@ -98,9 +98,10 @@ again. The look (the dim colour, the fade's curve, cover or contain) is
 
 A sink sidecar asks the canvas for a typed answer over the wire
 (docs/abi.md, *Prompt*, *Answer*); the canvas takes the keyboard, draws a
-panel over the darkened wallpaper on every output, and writes what was typed
-down that sidecar's stdin, then zeroes it (docs/canvas.md, *The prompt
-core*). Return answers, Escape dismisses, BackSpace takes a character,
+panel over the darkened wallpaper on every output from the conversation's
+first frame (the title alone, with no field, while a fingerprint module or
+whatever PAM runs first is at work), and writes what was typed down that
+sidecar's stdin, then zeroes it (docs/canvas.md, *The prompt core*). Return answers, Escape dismisses, BackSpace takes a character,
 Control-U clears the line. One prompt at a time: a second sink asking while
 one is up is told no at once. The panel's sizes and inks are
 `canvas_tunables.slang`'s (`PROMPT_*`). The keymap is the seat's, compiled by
@@ -200,7 +201,8 @@ output winit: background surface configured …       one per output
 output winit: overlay surface configured …          one per output, while a dim is up
 output size: 2880x1800 px, told to caustics-wallpaper
 sidecar caustics-reload: generation 2, 3 modules, swapped …   a tunables save
-prompt: conversation 1 from caustics-polkit began                a sink's conversation
+prompt: conversation 1 from caustics-polkit began                a sink's conversation; the panel comes up
+prompt: conversation 1 held, no ask yet                          the caustic drew the title, no field
 prompt: conversation 1 asking (echo 0, attempts 0)               the caustic drew its ask
 output winit: prompt surface configured …                        one per output, while a prompt is up
 seat: the keyboard is on the prompt (output winit)

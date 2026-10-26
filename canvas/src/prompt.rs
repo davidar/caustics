@@ -16,8 +16,12 @@
 //! ```
 //!
 //! - **Held**: a conversation whose title (or a line) has arrived and no ask
-//!   yet. Nothing is drawn and the keyboard is not taken: a helper that fails
-//!   before it asks should not flash a panel.
+//!   yet. The panes are up on every output with the title and no field, and
+//!   the keyboard is taken, so that the user sees at once that something is
+//!   wanted of them: a PAM stack that tries a fingerprint reader first asks
+//!   for the password only after that module's timeout, and a conversation
+//!   that drew nothing until then looked like nothing had happened. Escape
+//!   dismisses; other keys do nothing until the ask.
 //! - **Asking**: the panes are up on every output and keys type into the
 //!   [`Entry`]. Return writes `Answer::Text` (one write; the entry is zeroed
 //!   as the answer leaves it) and goes on to **Verifying**, where the dots
@@ -52,7 +56,8 @@
 //! byte or a count; the `Debug` of a [`Prompts`] shows no typed byte.
 
 use caustics_bar_abi::canvas::{
-    CanvasPrompt, PROMPT_ASKING, PROMPT_FAILED, PROMPT_IDLE, PROMPT_TEXT_BYTES, PROMPT_VERIFYING,
+    CanvasPrompt, PROMPT_ASKING, PROMPT_FAILED, PROMPT_HELD, PROMPT_IDLE, PROMPT_TEXT_BYTES,
+    PROMPT_VERIFYING,
 };
 use caustics_bar_abi::wire::{
     Answer, PROMPT_CANCEL, PROMPT_DONE, PROMPT_ECHO, PROMPT_ERROR, PROMPT_INFO, PROMPT_INFO_TITLE,
@@ -74,7 +79,10 @@ pub enum Phase {
 impl Phase {
     /// Whether the panes are up for it.
     fn raised(self) -> bool {
-        matches!(self, Phase::Asking | Phase::Verifying | Phase::Failed)
+        matches!(
+            self,
+            Phase::Held | Phase::Asking | Phase::Verifying | Phase::Failed
+        )
     }
 }
 
@@ -153,7 +161,7 @@ impl Prompts {
         Prompts::default()
     }
 
-    /// Whether a conversation's panel is shown: from its first ask until it
+    /// Whether a conversation's panel is shown: from its first frame until it
     /// ends or is dismissed, on whichever panes carry it (the top layer's, or
     /// the lock's while locked).
     pub fn raised(&self) -> bool {
@@ -271,6 +279,9 @@ impl Prompts {
                 effects.push(Effect::Note(format!(
                     "prompt: conversation {id} from {sidecar} began"
                 )));
+                // The panes come up for the conversation's first frame,
+                // title or ask, and stay up until its end.
+                effects.push(Effect::Raise);
             }
             Some(_) => {}
         }
@@ -296,7 +307,6 @@ impl Prompts {
                 }
             }
             PROMPT_SECRET | PROMPT_ECHO => {
-                let raise = !c.phase.raised();
                 c.ask = prompt.message.clone();
                 c.echo = prompt.kind == PROMPT_ECHO;
                 c.entry.clear();
@@ -308,9 +318,6 @@ impl Prompts {
                     u32::from(c.echo),
                     c.attempts
                 )));
-                if raise {
-                    effects.push(Effect::Raise);
-                }
             }
             PROMPT_CANCEL | PROMPT_DONE => {
                 let raised = c.phase.raised();
@@ -426,10 +433,11 @@ impl Prompts {
             return (facts, text, cut);
         };
         facts.state = match c.phase {
+            Phase::Held => PROMPT_HELD,
             Phase::Asking => PROMPT_ASKING,
             Phase::Verifying => PROMPT_VERIFYING,
             Phase::Failed => PROMPT_FAILED,
-            Phase::Held | Phase::Dismissed => PROMPT_IDLE,
+            Phase::Dismissed => PROMPT_IDLE,
         };
         if facts.state == PROMPT_IDLE {
             return (facts, text, cut);

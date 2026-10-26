@@ -675,7 +675,7 @@ struct CanvasParams {   // 32 B — one surface's frame facts
 }
 struct CanvasPrompt {   // 64 B — the prompt up now
     uint id;            // 0   the conversation, as its sink numbered it; 0 when idle
-    uint state;         // 4   PROMPT_IDLE 0, PROMPT_ASKING 1, PROMPT_VERIFYING 2, PROMPT_FAILED 3
+    uint state;         // 4   PROMPT_IDLE 0, PROMPT_ASKING 1, PROMPT_VERIFYING 2, PROMPT_FAILED 3, PROMPT_HELD 4 (begun, no ask yet)
     uint echo;          // 8   1 for an echo-on ask
     uint typed;         // 12  characters typed; frozen while verifying
     uint attempts;      // 16  answers an error line followed, this conversation
