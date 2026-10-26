@@ -2,7 +2,8 @@
 
 The session's lock, as a sink sidecar of the canvas (docs/canvas.md,
 *Sinks*, *How each job is wired*). It owns logind (this session's `Lock`
-signal and its `LockedHint`) and the PAM conversation; the canvas host owns
+signal and its `LockedHint`), the PAM conversation and the fingerprint
+reader (fprintd, on the system bus); the canvas host owns
 the lock surfaces and the prompt drawn on them. It asks the host to lock and
 unlock over the wire (docs/abi.md, *Lock*), hears back when the compositor
 confirmed each (*Canvas event*), and holds each attempt as a **prompt
@@ -42,6 +43,36 @@ adds it (*In the canvas's set*).
   the attempt the same way, uncounted: a lock screen is never dismissed. A
   PAM that fails without asking anything (a service that denies outright) is
   retried after a pause that doubles from 1 s to 30 s, so it cannot spin.
+- **The fingerprint reader** is a second way in, beside the password. PAM
+  asks one thing at a time (pam_fprintd's manual says, under its
+  limitations, that one stack cannot offer a password and a fingerprint at
+  once), so the reader is not in the PAM stack: while the session is
+  locked the sidecar claims fprintd's default reader for its user and keeps
+  a verification going (`VerifyStart` with `any`) as the password
+  conversation runs. The conversation on screen says so under its title
+  (`Touch the fingerprint reader`, or `Swipe a finger across the reader`),
+  and every fresh conversation says it again. A finger that does not match
+  is an error line (`Fingerprint not recognised; try again`) and a fresh
+  verify after half a second, never a counted failure; a scan to try again
+  (too short, off centre) is a line and the same verify. **A match is a
+  success**: the conversation on screen ends with `PROMPT_DONE` 1, the ask
+  PAM is waiting on is cancelled, and `LOCK_UNLOCK` follows. The password
+  keeps working throughout. A line that comes while an answer is with PAM
+  waits until PAM speaks, so it never reads as the answer's failure.
+- **The reader is released when the lock is over** (the unlock, by either
+  way, or the host going): the verify is stopped and the device released,
+  within two seconds. While the session is locked the reader is held, and a
+  polkit request waits for the unlock anyway (the canvas gives the locked
+  prompt to the lock alone); once unlocked, a polkit helper's
+  `pam_fprintd` finds the reader free.
+- **A reader that goes** while locked (a resume from suspend re-enumerates
+  it; another client holds it; fprintd says `verify-disconnected`, or
+  leaves the bus) is released and claimed again after a pause that doubles
+  from 1 s to 30 s, for as long as the session stays locked; no reader, or
+  no fprintd, after one that went is taken as one on its way back. **A reader that cannot verify**
+  for this lock (no reader, no enrolled prints, no permission, no system
+  bus, no fprintd) is one witness line, and the password alone, until the
+  next lock.
 - **Nothing unlocks but a success**: logind's `Unlock` signal is witnessed
   and ignored.
 - A transaction is `pam_start`, `pam_authenticate` and, on success,
@@ -77,17 +108,36 @@ From the sidecar's own environment:
 
 | variable | default | |
 |---|---|---|
-| `CAUSTICS_LOCK_PAM_SERVICE` | `swaylock` | the PAM service (`/etc/pam.d/<service>`); `swaylock` is the one a session built on the sway tools already has. Keeping the fingerprint module off the unlock path is that service file's business, and this is how a different one is chosen |
+| `CAUSTICS_LOCK_PAM_SERVICE` | `swaylock` | the PAM service (`/etc/pam.d/<service>`); `swaylock` is the one a session built on the sway tools already has. Keeping the fingerprint module off the unlock path is that service file's business, and this is how a different one is chosen: the reader is spoken to directly, so a stack that also waits on it only delays the password ask by its timeout |
+| `CAUSTICS_LOCK_FINGERPRINT` | `1` | `0` is no reader: no claim, the password alone. Unset or anything else is the reader verifying while locked |
 | `CAUSTICS_LOCK_DRY_RUN_SECRET` | unset | the **dry run**: PAM is not touched, and a conversation is one echo-off ask, `Password: `, compared with these bytes (not in constant time: they are in the environment, which is no secret). Empty is no dry run |
 
-The dry run still speaks to logind if a system bus answers, so a test points
-`DBUS_SYSTEM_BUS_ADDRESS` at a socket that does not exist. Without a system
+The dry run still speaks to logind and fprintd if a system bus answers, so
+a test points `DBUS_SYSTEM_BUS_ADDRESS` at a socket that does not exist, or
+at a private bus with `examples/fake_fprintd.rs` on it, which the nested
+gate runs beside the dry run's password. Without a system
 bus, or without a session on it, there is **no logind**: one witness, no
 signals, no hint, and the socket's `lock` as the only trigger. The tests
 (`tests/dry_run.rs`) and the nested gate run exactly that, under
 `bar/abi/examples/fake_host.rs` in the host's place, and the nested gate
 again under the canvas host itself, locking the nested compositor
 (docs/testing.md).
+
+## The witness lines
+
+Each on stderr as `caustics-lock: …`; the fingerprint's are the ones other
+tooling reads. None carries a secret, or which finger matched.
+
+```
+fingerprint: reader <name> claimed for <user>; verifying
+fingerprint: not recognised
+fingerprint: <a scan to try again: Swipe too short; try again, …>
+fingerprint matched; unlocking
+fingerprint: reader gone (<why>); again in <n> s
+fingerprint: no reader; password only           or no enrolled prints for <user>, no system bus (…), …
+fingerprint: released                           the lock is over, the reader let go
+fingerprint: off (CAUSTICS_LOCK_FINGERPRINT=0)
+```
 
 ## In the canvas's set
 

@@ -76,8 +76,8 @@ frames the host copies and the caustic lays out.
 - **`caustics-wallpaper`**: the control socket (`show`, `dim`, `undim`,
   `status`), image decoding (PNG, JPEG and JPEG XL), the schedule's
   cross-fades.
-- **`caustics-lock`**: logind (the `Lock` signal, `LockedHint`) and the PAM
-  conversation.
+- **`caustics-lock`**: logind (the `Lock` signal, `LockedHint`), the PAM
+  conversation and the fingerprint reader.
 - **`caustics-polkit`**: the authentication agent's registration and the
   polkit helper.
 - **`caustics-greet`**: greetd's protocol, the session list, the last choice.
@@ -267,11 +267,24 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   failure from its exit. Verify the line protocol against libpolkit-agent's
   `polkitagentsession.c` before writing a byte; soteria is a short Rust
   reimplementation to compare against.
-- **`caustics-lock`**: `pam_start` with the distribution's lock service and
-  a conversation routed through the prompt. A lock service that keeps the
-  fingerprint module off the unlock path avoids its timeout; whether to use
-  one is the sidecar's own setting (an environment variable on its unit),
-  never the host's.
+- **`caustics-lock`**: two ways in, at once. One is `pam_start` with the
+  distribution's lock service and a conversation routed through the
+  prompt. The other is the fingerprint reader, spoken to on fprintd's
+  D-Bus interface by the sidecar itself, not through PAM: PAM is
+  serialised, and pam_fprintd's manual says under its limitations that one
+  stack cannot offer a password and a fingerprint together. So while the
+  session is locked the sidecar claims the default reader and keeps a
+  verification going beside the conversation, as hyprlock does; a match
+  ends the conversation on screen as a success and unlocks, and the
+  password works throughout. GNOME's way is two PAM stacks, each in a
+  worker process of its own, with the display manager choosing between
+  them; one D-Bus client beside one PAM stack is less, and the reader has
+  one owner. The reader is claimed when the host says locked and released
+  (the verify stopped, the device let go) when the lock is over, so a
+  polkit helper's `pam_fprintd` finds it free after the unlock. A lock
+  service that keeps the fingerprint module off the unlock path avoids its
+  timeout; that, and the reader itself, are the sidecar's own settings
+  (environment variables on its unit), never the host's.
 - **`caustics-greet`**: length-prefixed JSON on `$GREETD_SOCK`:
   `create_session{username}` → `auth_message{type, text}` round trips via
   `post_auth_message_response{response}` → `start_session{cmd, env}`. greetd
@@ -368,6 +381,7 @@ process holding a secret is the canvas host, and the bar is not it.
 | `caustics-wallpaper` | mid-dim | the overlay goes with it (a dim without its owner is undone, so a crashed sidecar never leaves a dark screen); the picture stays; the host restarts it, and it comes back with no dim |
 | a fade | mid-fade | the waiting client gets EOF on the socket and exits 1; the idle stage locks anyway |
 | `caustics-lock` | locked | the host stays locked (it never unlocks on its own); the sidecar restarts, reads `LockedHint`, resumes the conversation |
+| the fingerprint reader | locked | the password keeps working; the sidecar releases what it held and claims the reader again after a pause that doubles from 1 s to 30 s while the session stays locked (a resume from suspend is the usual cause); fprintd itself dying releases its claim, and the next claim starts it again |
 | `caustics-polkit` | mid-prompt | the host takes the prompt down with its pipe; polkitd times out the request; the caller sees "not authorized"; the sidecar restarts and re-registers |
 | the host | greeting | the display manager restarts it; nothing was logged in |
 

@@ -294,6 +294,21 @@ host is killed while locked: niri stays locked, and a restarted host's lock
 is given `locked` at once in place of the dead one, with no `finished`;
 the right secret unlocks it, and the canvas is stopped at the end.
 
+**The fingerprint step** (35k) starts the canvas the same way, but with the
+lock sidecar's system bus a private `dbus-daemon` on which
+`lock/examples/fake_fprintd.rs` plays fprintd, scripted to answer the first
+verify with a finger that does not match and the second with one that
+does; logind is not on that bus, so the socket is still the only trigger,
+and the real fprintd is never reached. Nothing is typed. It checks: the
+sidecar's lines in order (the reader claimed, not recognised, matched,
+unlocked); the host's in order (the ready line, the no-match's error line
+beside the ask and not counted as an attempt, success, the unlock asked,
+`unlocked` told); fprintd's calls in order (claim, verify, no-match, stop,
+verify, match, stop, release). Then a second lock, whose verify waits for
+a finger that never comes: its conversation carries the ready line, the
+right secret typed unlocks it, and the reader is released all the same.
+The bus and the fake are stopped by PID with the canvas.
+
 ### Adding a step
 
 1. **Decide the tier first.** If what you want to prove is a property of the

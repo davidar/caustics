@@ -128,7 +128,13 @@ does not start the sidecar until it has lock surfaces. Its socket gives a
 previous lock still on its way out two seconds to let go, as the
 wallpaper's does, instead of running without a socket; `caustics-canvasctl
 status` says on stderr when the lock refused to run rather than printing
-nothing; and the canvas journals the keyboard arriving on an overlay.
+nothing; and the canvas journals the keyboard arriving on an overlay. The
+sidecar also verifies a fingerprint beside the password, speaking to
+fprintd on the system bus itself rather than through PAM (which asks one
+thing at a time): a match unlocks, a no-match is a line on the panel and a
+fresh verify, a reader that goes is claimed again with a backoff, and the
+reader is released at the unlock; `CAUSTICS_LOCK_FINGERPRINT=0` turns it
+off. The canvas journals a line shown beside an ask, without its words.
 
 **The canvas's lock surfaces.** The canvas host now locks: the lock
 sidecar's `Lock` takes `ext_session_lock_v1`, a lock surface goes on every

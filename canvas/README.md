@@ -138,8 +138,11 @@ the canvas: it locks on logind's `Lock` signal (`loginctl lock-session`, an
 idle timer, the lid) or `caustics-canvasctl lock`, and the canvas puts a
 lock surface on every output, draws the wallpaper darkened by
 `PROMPT_DARKEN` on it, and the PAM conversation's panel when it asks. Only
-a conversation PAM says succeeded unlocks; Escape starts a fresh one, and
-the screen is never dismissed. While locked, the prompt is the lock's
+a conversation PAM says succeeded, or a fingerprint fprintd says matched,
+unlocks; Escape starts a fresh one, and the screen is never dismissed. The
+fingerprint reader is the sidecar's own: it verifies beside the password
+while locked, its lines show on the panel under the conversation's title,
+and it is released at the unlock (lock/README.md, *Behaviour*). While locked, the prompt is the lock's
 alone: another sink asking (a polkit request) is told no at once. A dim up
 when the lock comes is ended.
 
@@ -186,7 +189,9 @@ or a unit. To take it on:
    drop-in removal and a hook away.
 
 The PAM service is the sidecar's own setting, `CAUSTICS_LOCK_PAM_SERVICE`
-in the same drop-in (lock/README.md, *Settings*).
+in the same drop-in, and so is the fingerprint reader,
+`CAUSTICS_LOCK_FINGERPRINT=0` to leave it out (lock/README.md,
+*Settings*).
 
 ## The journal lines worth knowing
 
@@ -208,6 +213,8 @@ output winit: prompt surface configured …                        one per outpu
 seat: the keyboard is on the prompt (output winit)
 prompt: conversation 1 answered; told to caustics-polkit         Return
 prompt: conversation 1: an error line after the answer (attempts 1)
+prompt: conversation 1: an info line                             a line beside the ask (the reader is live)
+prompt: conversation 1: an error line, no answer pending         shown, not counted (a finger not recognised)
 prompt: conversation 1 done, success
 prompt: conversation 1 dismissed; told to caustics-polkit        Escape
 lock: ext_session_lock_manager_v1 is bound                       at start
@@ -218,6 +225,9 @@ lock: the compositor locked the session; told to caustics-lock
 seat: the keyboard is on the lock (output winit)
 lock: caustics-lock asked to unlock; unlocking
 lock: the session is unlocked; told to caustics-lock
+caustics-lock: fingerprint: reader … claimed for …; verifying    the lock sidecar's own, relayed
+caustics-lock: fingerprint matched; unlocking
+caustics-lock: fingerprint: released                             the reader let go at the end of the lock
 exit: lock: the compositor ended caustics-lock's session lock …  `finished`: exit 1
 ```
 
