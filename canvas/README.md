@@ -94,6 +94,13 @@ the canvas is the dim colour; the path last shown is kept in
 again. The look (the dim colour, the fade's curve, cover or contain) is
 `caustics/canvas_tunables.slang`: save it and the running canvas changes.
 
+Moving the pointer over the bare desktop, or over the lock screen, stirs a
+shallow pool over the picture, the bar's wake: the picture bends under the
+waves and the light they focus is drawn on it, and the water is flat and
+the canvas draws nothing again `WAKE_SETTLE_S` after the pointer stops
+(docs/canvas.md, *The wake*). Its look is the `WAKE_*` block of the
+tunables; `WAKE_ALPHA` 0 turns it off.
+
 ## The prompt
 
 A sink sidecar asks the canvas for a typed answer over the wire

@@ -649,8 +649,8 @@ again from the same Rust declarations, and `CanvasBody` is the wire's
 | binding (by name) | struct / bytes | writer | reader |
 |---|---|---|---|
 | `params` | `CanvasParams`, 32 B, one per surface (an output's background, its overlay while a dim is up, its prompt pane while a prompt is, its lock surface while the session is locked) | the host, before every frame it draws on that surface | the entries |
-| `facts` | `CanvasFacts`, 144 B | the host, whole, whenever the picture, the dim, the literal pool or the prompt changes | the entries |
-| `state` | `CanvasState`: `wants_redraw`, the dim's depth, the shape pass's threshold, the runs to cover and a witness ring, 1648 B | the caustic | the host, after every frame (the only readback) |
+| `facts` | `CanvasFacts`, 160 B | the host, whole, whenever the picture, the dim, the literal pool or the prompt changes, and the pointer's words over the last facts once per dispatch the pointer moved in | the entries |
+| `state` | `CanvasState`: `wants_redraw`, `wants_pointer`, the dim's depth, the shape pass's threshold, the runs to cover and a witness ring, 1664 B | the caustic | the host, after every frame (the only readback) |
 | `private` | the caustic's own, stride from reflection | the caustic | the caustic; tests by reflection |
 | `runs` | `CANVAS_GLYPHS` (512) shaped glyphs, 32 B each | `canvas_shape` | `canvas_draw` |
 | `literals` | `MAX_CANVAS_LITERALS` (256) `Literal`s: `(hash, off, len)` into the strings buffer | the host, from the running caustic's literal table, at start and on every reload | the caustic |
@@ -670,8 +670,8 @@ struct CanvasParams {   // 32 B — one surface's frame facts
     uint scale;         // 8   the output's scale in 120ths (240 at scale 2)
     uint frame;         // 12  ≥ 1, the witness ring's stamp (rule 1)
     uint now_lo, now_hi;// 16  CLOCK_BOOTTIME ms when the frame is drawn
-    uint target;        // 24  TARGET_BACKGROUND 0, TARGET_OVERLAY 1 or TARGET_PROMPT 2
-    uint _pad1;         // 28
+    uint target;        // 24  TARGET_BACKGROUND 0, TARGET_OVERLAY 1, TARGET_PROMPT 2 or TARGET_LOCK 3
+    uint pane;          // 28  ≥ 1, this pane's id, never reused while the host runs
 }
 struct CanvasPrompt {   // 64 B — the prompt up now
     uint id;            // 0   the conversation, as its sink numbered it; 0 when idle
@@ -687,7 +687,7 @@ struct CanvasPrompt {   // 64 B — the prompt up now
     uint echo_off, echo_len;     // 52  what was typed, for an echo-on ask only
     uint _pad0;                  // 60
 }
-struct CanvasFacts {    // 144 B — what the host knows
+struct CanvasFacts {    // 160 B — what the host knows
     CanvasBody show;    // 0   the last CANVAS_SHOW, as it crossed the wire; zero before one
     CanvasBody dim;     // 32  the last CANVAS_DIM or CANVAS_UNDIM; zero before one
     uint from_slot;     // 64  SLOT_A / SLOT_B: the picture the show fades from; NO_INDEX for none
@@ -695,21 +695,26 @@ struct CanvasFacts {    // 144 B — what the host knows
     uint shows;         // 72  shows applied: a new value is a new fade
     uint literal_count; // 76  entries live in `literals`
     CanvasPrompt prompt;// 80
+    uint pointer_pane;  // 144 the pane the pointer is on, a background or a lock; 0 for neither
+    float pointer_x, pointer_y; // 148 where on it, its buffer's px
+    uint presses;       // 156 buttons pressed on those panes, ever: a new value is a press
 }
 struct CanvasCover {    // 16 B — a run the font could not draw
     uint source;        // 0   TEXT_LITERALS 0 (the strings buffer) or TEXT_PROMPT 1
     uint off, len;      // 4   its bytes there
     uint _pad0;         // 12
 }
-struct CanvasState {    // 1648 B — read back
+struct CanvasState {    // 1664 B — read back
     uint wants_redraw;  // 0   the surface just drawn has more to show: its fade, or its dim on the way
     uint witness_frame, witness_count, witness_lost; // 4
     uint dim_reached;   // 16  facts.dim is a CANVAS_DIM at its depth
     uint dim_id;        // 20  the id of the dim dim_reached is about
     uint shape_watchdog_ms;    // 24  SHAPE_WATCHDOG_MS, for the host's watchdog
     uint cover_count;          // 28
-    CanvasCover covers[CANVAS_TEXT_BLOCKS];          // 32  5 of them
-    Note witnesses[MAX_CANVAS_WITNESSES];            // 112 32 of them
+    uint wants_pointer;        // 32  the pointer moving on the surface just drawn is drawn (its wake)
+    uint _pad0, _pad1, _pad2;  // 36
+    CanvasCover covers[CANVAS_TEXT_BLOCKS];          // 48  5 of them
+    Note witnesses[MAX_CANVAS_WITNESSES];            // 128 32 of them
 }
 ```
 
@@ -727,16 +732,25 @@ and whether it is at its depth, which the host reads back in
 `dim_reached` and `dim_id` to tell the dim's sidecar once (*Canvas
 event*). `wants_redraw` is the host's only reason to draw a frame that no
 event asked for, and it is the drawn surface's own: the background's while
-its fade runs, the overlay's while its alpha moves; the prompt's pane
-redraws only when the host writes something new. `canvas_draw` reads
+its fade runs or a wake lives on it, the overlay's while its alpha moves, a
+lock surface's while a wake lives on it; the prompt's pane redraws only
+when the host writes something new. **The pointer**, on a background or a
+lock surface, is three words and a count in `facts` (docs/canvas.md, *The
+wake*): which pane (`params.pane` names each), where on its buffer, and the
+presses there; the host draws that pane again on the news only when
+`wants_pointer` said of its last frame that the pointer is something the
+caustic draws there, so a caustic that draws no wake costs no frame a
+motion. `canvas_draw` reads
 `params.target`: on the background, the pictures, opaque, and no dim; on
 the overlay, the same wallpaper from the same slots, fit and cross-fade,
 darkened towards `DIM_COLOUR` by the tunable `DIM_DARKEN`, at the dim's
 alpha, premultiplied: transparent where the alpha is 0, and at alpha 1 with
 `DIM_DARKEN` 0 pixel for pixel the background; and transparent while
 `facts.prompt` is not idle, so a prompt shows over a dim. On the prompt's
-pane and on a lock surface (both `TARGET_PROMPT`), the wallpaper darkened
-by `PROMPT_DARKEN`, opaque, and the panel while a conversation is up.
+pane (`TARGET_PROMPT`) and on a lock surface (`TARGET_LOCK`), the wallpaper
+darkened by `PROMPT_DARKEN`, opaque, and the panel while a conversation is
+up; on a lock surface and on the background, the picture seen through the
+pointer's wake.
 
 **The prompt** is the host's conversation as `facts.prompt` (docs/canvas.md,
 *The prompt core*). **The secret is not in it**: for an echo-off ask the

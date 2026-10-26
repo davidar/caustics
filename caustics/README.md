@@ -32,12 +32,13 @@ names, so that a subject is found in one place.
 | `sysmon.slang` | the charts (`caustics-sysmon`): the strip, each chart drawn from the samples body, the chart numbers' popup. The one reader of `samples` |
 | `notify.slang` | the toasts: a sidecar chip's attention rows shown without a click (`caustics-notify` is the sidecar that asks) |
 | `clock.slang` | the clock and its calendar |
-| `wake.slang` | the pointer's wake on the slab |
+| `wake.slang` | the pointer's wake on the slab: the bar's half, its sources and its light, over `water.slang`'s physics |
 | `dock.slang` | the overview button, the dock's entries and windows, an entry's menu, the hover preview |
 | `applets.slang` | the generic rows machinery every sidecar's applet rides on: chips, their levels, menus, menu rows, sliders, a row's body |
 | `bar_tunables.slang` | **the bar's configuration**: every knob as a `public static const`; edit it to configure the bar |
 | `bar_model.slang` | the caustic's private vocabulary: item, block and element kinds and flags, the `Id` type, the dock-menu verbs, the item accessors. Not a contract: no Rust reads it |
 | `bar_check.slang` | the oracle's invariants, a test-only eighth entry point (docs/testing.md) |
+| `water.slang` | **shared with the canvas**: a shallow pool's physics, the field a set of sources raises, its slope and curvature, the light it refracts onto the floor and the tone map, with no binding and no tunables of its own (*Conventions*) |
 
 Three rules keep the subjects apart. A subject module reads only its own
 frames and its own scratch (`Private.sysmon`, `Private.notify`, …). It names
@@ -74,6 +75,7 @@ after this directory: `bar/build.rs` writes them into a directory under
 
 ```
 bar.slang ── bar_dispatch ─┬─ sysmon, notify, clock, wake, dock, applets
+     │                     │   wake ── water           (binding-free, the canvas's too)
      │                     └─ (every bar_* module below)
      │      each subject ─── bar_table, bar_paint, bar_layout, bar_popups, bar_state
      │                       as it needs, and never another subject
@@ -116,6 +118,17 @@ dispatch*).
   declared there is the same global parameter in every module that imports
   it; every `[numthreads]` is in `bar.slang`. `bar_abi`, `bar_wire`,
   `bar_model` and `bar_tunables` are importable anywhere at no cost.
+- **A module with no bindings is shared; one with bindings is one
+  program's.** Importing a module that declares or imports a binding binds
+  that program's descriptor set, so the bar's `bar_*` modules and the
+  canvas's `canvas_state` can each be imported by their own caustic alone. A
+  module both caustics import declares no binding and reads no tunables
+  module: its knobs are a struct its callers fill from their own tunables,
+  and its data come in through an interface each caller implements over its
+  own state (`water.slang`'s `Water` and `IWaterSources`). It is listed in
+  `SHARED_MODULES` (`bar/abi/src/entries.rs`), so the canvas's build bakes
+  it and `caustics-reload` watches it for both, and a save of it reaches
+  both.
 - **Bindings are named, not numbered, on the host side.** The binding numbers
   are literals in `bar_state.slang` (an attribute cannot take a constant). The bar
   builds its bind groups by reading each binding's name out of Slang's
@@ -159,40 +172,43 @@ clock's words, the springs, the shape watchdog) is read by the caustic alone.
 The directory holds a second caustic: the canvas's (docs/canvas.md), which
 draws the wallpaper on every output, cross-fades between two pictures, draws
 the idle dim on the overlay the host puts over every window while a dim is
-up, and draws the prompt's panel on the pane the host puts up while a prompt
-is. It is four files, all named `canvas*`, and imports nothing above but the
-text engine's modules:
+up, draws the prompt's panel on the pane the host puts up while a prompt
+is and on the lock surfaces, and stirs the pointer's wake over the wallpaper
+on the background and the lock. It is five files, all named `canvas*`, and imports nothing above but the
+text engine's modules and the shared `water.slang`:
 
 | file | what it is |
 |---|---|
-| `canvas.slang` | the three entry points (`canvas_shape`, before a frame when the text changed: one text block a thread; `canvas_apply`, once per frame: the fade's alpha and the dim's from the last show, the last dim and the time, the witnesses, `wants_redraw` for the surface drawn, whether the dim is at its depth, the prompt's layout and the runs to cover; `canvas_draw`, over one surface by `params.target`: on the background the two source pictures at that alpha, opaque; on the overlay the same wallpaper, darkened towards the dim colour by `DIM_DARKEN`, at the dim's alpha, premultiplied, and nothing while a prompt is up; on the prompt's pane the wallpaper darkened by `PROMPT_DARKEN` and the panel) |
-| `canvas_state.slang` | the canvas's bindings (`state`, `params`, `facts`, `dst`, `image_a`, `image_b`, `tex_sampler`, `private`, `runs`, `literals`, `prompt_text`, and in set 2 the shaper's `shapeParams`, `shapeOt`, `shapeUtf8`), the gathered `ShapeTables`, the literal lookup, `CanvasPrivate` with the shaped runs and the prompt's layout, the witness ring, the two-word time arithmetic |
+| `canvas.slang` | the three entry points (`canvas_shape`, before a frame when the text changed: one text block a thread; `canvas_apply`, once per frame: the fade's alpha and the dim's from the last show, the last dim and the time, the witnesses, the wake's step, `wants_redraw` and `wants_pointer` for the surface drawn, whether the dim is at its depth, the prompt's layout and the runs to cover; `canvas_draw`, over one surface by `params.target`: on the background the two source pictures at that alpha, opaque, seen through the wake; on the overlay the same wallpaper, darkened towards the dim colour by `DIM_DARKEN`, at the dim's alpha, premultiplied, and nothing while a prompt is up; on the prompt's pane the wallpaper darkened by `PROMPT_DARKEN` and the panel; on a lock surface the same, seen through the wake, the panel over the water) |
+| `canvas_state.slang` | the canvas's bindings (`state`, `params`, `facts`, `dst`, `image_a`, `image_b`, `tex_sampler`, `private`, `runs`, `literals`, `prompt_text`, and in set 2 the shaper's `shapeParams`, `shapeOt`, `shapeUtf8`), the gathered `ShapeTables`, the literal lookup, `CanvasPrivate` with the shaped runs, the prompt's layout and the wake's ring (`CanvasWake`, one ring for every pane, each source tagged with its own), the witness ring, the two-word time arithmetic |
 | `canvas_text.slang` | the text: five fixed blocks (title, ask, echoed text, line, dot), shaped by the engine at one reference size into the canvas's own small arena, painted one left-aligned line at a position in a colour, a long line wrapped once at a space, an echo-off answer as one dot glyph drawn a count of times, and the runs the font lacks a glyph for |
-| `canvas_tunables.slang` | **the canvas's configuration**: the dim colour, how far a dim and a prompt darken the wallpaper, the fade's curve, how a picture is fitted to an output, the prompt's sizes and inks, the shape pass's watchdog |
+| `canvas_wake.slang` | the pointer's wake over the wallpaper, on the background and the lock surfaces (docs/canvas.md, *The wake*): the canvas's half over `water.slang`'s physics, its sources stamped with the clock and their pane, the box a pane's trains can reach, the picture seen through the water and lit by it |
+| `canvas_tunables.slang` | **the canvas's configuration**: the dim colour, how far a dim and a prompt darken the wallpaper, the fade's curve, how a picture is fitted to an output, the prompt's sizes and inks, the wake (`WAKE_*`), the shape pass's watchdog |
 
 Its contract is `canvas_abi`, rendered from `bar/abi/src/canvas.rs` as the
 bar's two are rendered (docs/abi.md, *The canvas's buffer*). `caustics-reload`
-compiles it when the canvas host asks for its program, and watches only the
-`canvas*` files for it; the bar's caustic is every other file, so a save of one
-never recompiles the other.
+compiles it when the canvas host asks for its program, and watches the
+`canvas*` files and the shared modules for it; the bar's caustic is every
+other file, so a save of one never recompiles the other, and a save of a
+shared module recompiles both.
 
 **The secret never enters it.** An echo-off ask reaches `canvas_draw` as a
 count of characters, and the dots are one shaped glyph drawn that many
 times; the typed bytes stay in the host (docs/canvas.md, *Why a caustic*).
 
-**Why it shares no module with the bar.** Every `bar_*` module, the paint
-rules in `bar_paint` included, imports `bar_state`, which declares the bar's
-bindings; a module that imports it binds the bar's whole descriptor set. So
-the canvas carries its own small paint (one sample and one blend a pixel,
-a rounded rect, in `canvas.slang`) and its own text layout
-(`canvas_text.slang`); what the two caustics share is the text engine's
-`text` and `shape`, which declare no bindings of the caustic's and are
-handed their buffers under the same names in both. A paint module both
-could share would have to be **binding-free** the same way: functions of
-their arguments alone (colours, coverage, a rounded rect's distance, the
-premultiplied rules), with every buffer and texture passed in as a
-parameter, and with its constants either passed in or read from a tunables
-module both import. The bar's `bar_paint` is not that today: its functions
+**What it shares with the bar, and what it cannot.** Every `bar_*` module,
+the paint rules in `bar_paint` included, imports `bar_state`, which declares
+the bar's bindings; a module that imports it binds the bar's whole
+descriptor set. So the canvas carries its own small paint (one sample and
+one blend a pixel, a rounded rect, in `canvas.slang`) and its own text
+layout (`canvas_text.slang`). What the two caustics share is what is
+binding-free (*Conventions*): the text engine's `text` and `shape`, handed
+their buffers under the same names in both, and `water.slang`, the wake's
+physics, which `wake.slang` and `canvas_wake.slang` call with their own
+knobs and sources. A paint module both could share would be binding-free
+the same way: functions of their arguments alone (colours, coverage, a
+rounded rect's distance, the premultiplied rules), with every buffer and
+texture passed in. The bar's `bar_paint` is not that today: its functions
 read `params`, `private` and `images` as globals. Splitting it is a
 refactor of the bar.
 

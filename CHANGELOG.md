@@ -75,7 +75,12 @@ host answers the sidecar with a new wire kind, `CanvasEvent`, and a dim now
 carries an id in what was a reserved word; both moved the ABI hash, so the
 bar, its sidecars and the canvas are rebuilt and installed together. The
 canvas's surfaces no longer allocate the visibility buffer only the bar's
-caustic binds.
+caustic binds. The bar's wake reaches the canvas: the pointer moving over the
+bare desktop or the lock screen stirs a pool over the wallpaper, the picture
+bent by the waves and lit by the caustic they cast, from one module of the
+water's physics both caustics import (`caustics/water.slang`), its knobs the
+canvas's own `WAKE_*` tunables; the pointer's pane and place and a lock
+surface's own target moved the ABI hash.
 
 **The canvas's polkit sink** (`caustics-polkit`, polkit/README.md). The
 session's polkit authentication agent as a sidecar: it registers with

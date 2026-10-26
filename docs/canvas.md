@@ -152,7 +152,9 @@ neither can be added later.
   mode, is configured as it is made, and is never committed without a
   buffer, so its first commit is its first frame. It is opaque and draws
   what the top pane draws: the wallpaper darkened by `PROMPT_DARKEN`, and
-  the panel while a conversation is up. `locked` is told to the lock sidecar;
+  the panel while a conversation is up; its own target (`TARGET_LOCK`), so
+  that the wake (*The wake*) is drawn under the panel there and not on the
+  top pane. `locked` is told to the lock sidecar;
   `unlock_and_destroy` comes only on that sidecar's say-so, the lock
   surfaces go with it, and `unlocked` is told once a `wl_display.sync` says
   the compositor has read it. `finished` (another locker holds the lock,
@@ -170,6 +172,39 @@ core is reserved for the lock's sidecar: another sink's conversation up at
 the lock is dismissed, and another sink's ask while locked is cancelled at
 once, so the lock screen's panel is only ever the lock's. So there is one
 dim and one owner of it.
+
+### The wake
+
+The bar's wake (`caustics/wake.slang`), over the wallpaper: the pointer's
+motion drops expanding wave trains on a shallow pool whose floor is the
+picture, a press drops a taller one, and the surface bends the picture
+seen through it, each colour by its own index, and lights it with the
+caustic it casts, darker where the waves spread the light and a warm net
+where they focus it. The physics is one module both caustics import,
+`caustics/water.slang`; the canvas's half is `canvas_wake.slang`, and its
+knobs are the `WAKE_*` block of `canvas_tunables.slang` (`WAKE_ALPHA` 0
+turns it off, and then a motion costs no frame).
+
+It is drawn on the **background**, wherever the compositor gives the
+background layer the pointer, and on the **lock** surfaces, where the
+pointer is the lock's for the whole time and the net reads as light on the
+darkened picture, under the panel. Not on the overlay, where motion is a
+cancel, nor on the top pane, which is a panel. The host writes the pointer's
+pane, its place in that pane's buffer px and a count of its presses into
+`facts`, and draws the pane again on that news only when the caustic said
+it wants the pointer there; what a motion does to the water is the
+caustic's. Each source is stamped with `CLOCK_BOOTTIME` and its pane, so it
+ages by the clock like a fade and shows on its own pane only. A resting
+pointer drops nothing, the last source dies `WAKE_SETTLE_S` after the last
+motion, and then the pane's `wants_redraw` is 0 and it asks for no frames.
+
+**niri gives the background layer the pointer** where no window, panel or
+popup is over it: on an empty workspace and in the gaps between windows,
+not in the overview, where its background and bottom layers take no input
+(measured with `WAYLAND_DEBUG=1` in a nested niri 26.04: enter and motion
+events on the background's `wl_surface` once it has a buffer). A surface
+with no buffer yet is not mapped and gets nothing. While the session is
+locked, every pointer event goes to the lock surface.
 
 ### Time
 
