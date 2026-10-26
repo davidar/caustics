@@ -239,6 +239,20 @@ inside each run's box and bare panel around it), are tested on a device
 beside the bar's oracle:
 `CAUSTICS_CANVAS_ORACLE=1 cargo test -p caustics-canvas -- --test-threads=1`.
 
+**The canvas's wake step** (35a) starts the canvas again, with its lock
+sidecar in the dry run the lock steps use, and sweeps the pointer across an
+empty workspace: the caustic says the background's water stirred and went
+still within `WAKE_SETTLE_S` of the last move, the host says the background
+stopped asking for frames, a screenshot mid-sweep differs from the resting
+picture along the pointer's path, and one after it matches the resting
+picture. Then it locks and sweeps the lock surface, with the same lines for
+the lock; niri writes no screenshot while locked, so the lock's pixels are
+the device test's (`the_wake_stirs_the_lock_…`: the water around the path
+and nowhere far from it, on its own pane only, a press's wave, and the
+resting picture pixel for pixel once settled). With
+`CAUSTICS_CANVAS_WAKE_DUMP=<dir>` the device tests also draw a sweep at
+1920x1080 for looking at, and time its frames.
+
 **The polkit sink's step** (35b) runs `caustics-polkit` in its dry run, with
 no system bus at all: the agent object on the run's private session bus,
 `polkit/tests/fake-helper.sh` as its helper, and `bar/abi/examples/fake_host.rs`

@@ -4710,6 +4710,171 @@ if [[ "$CANVAS_RUN" -eq 1 ]]; then
     niri_msg action focus-workspace-up >/dev/null 2>&1
 fi
 
+say "35a. the pointer stirs the canvas's water on the desktop and the lock, and at rest the canvas draws no frames"
+# The wake (docs/canvas.md, *The wake*) on its own fixture, the canvas with
+# its lock sidecar in the dry run 35h and 35i use. First the background, on
+# an empty workspace, where niri gives the background layer the pointer:
+# a sweep in the background, one screenshot during it and one after
+# WAKE_SETTLE_S, and the caustic's and the host's lines that say the water
+# went still and the pane stopped asking for frames. Then the same sweep on
+# the lock surface. niri writes no screenshot while locked (35i), so the
+# lock's evidence is those lines; its pixels are the device test's
+# (`the_wake_stirs_the_lock_…`, canvas/src/gpu/tests.rs).
+if [[ "$CANVAS_RUN" -ne 1 ]]; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the canvas fixture runs on the nested target only"
+    SKIPS=$((SKIPS + 1))
+else
+    wake_secret="gate-wake-$RANDOM$RANDOM-$RANDOM"
+    wake_settle=$(sed -n 's/^public static const float WAKE_SETTLE_S = \([0-9.]*\);.*/\1/p' \
+        "$REPO/caustics/canvas_tunables.slang")
+    # The seconds from <us> (now_us) to the canvas's newest line with <pattern>.
+    canvas_line_after() { # canvas_line_after <pattern> <us>
+        canvas_last "$1" | cut -d' ' -f1 | python3 -c "
+import sys, datetime
+t = datetime.datetime.fromisoformat(sys.stdin.read().strip().replace('Z', '+00:00')).timestamp()
+print(f'{t - $2 / 1e6:.2f}')" 2>/dev/null
+    }
+    # wake_sweep <y>: a pointer sweep across the output at screen row <y>,
+    # in the background, that writes its end time to `$SHOTS/.wake-end`.
+    wake_sweep() {
+        rm -f "$SHOTS/.wake-end"
+        (
+            for x in $(seq 240 40 1040) $(seq 1040 -40 240); do
+                pointer_to "$x" "$1"
+            done
+            now_us >"$SHOTS/.wake-end.tmp" && mv -f "$SHOTS/.wake-end.tmp" "$SHOTS/.wake-end"
+        ) &
+        WAKE_SWEEP_PID=$!
+    }
+    for _ in 1 2 3 4 5; do
+        [[ "$(niri_msg --json focused-window 2>/dev/null)" == null ]] && break
+        niri_msg action focus-workspace-down >/dev/null 2>&1
+    done
+    on_target 10 'rm -f "$T_HOME/canvas.log"' >/dev/null
+    fixture_start wake 'bash -c '"'"'cd "$1" && exec env \
+        CAUSTICS_SIDECARS="caustics-wallpaper caustics-glyphs caustics-lock" \
+        CAUSTICS_LOCK_DRY_RUN_SECRET="$3" \
+        DBUS_SYSTEM_BUS_ADDRESS="unix:path=$1/no-system-bus" \
+        RUST_LOG=info "$2/caustics-canvas" 2>>"$1/canvas.log"'"'"' wake "$T_HOME" "$T_BIN" '"$wake_secret"
+    WAKE_RUN=1
+    if wait_until "the wake's canvas" 60 'canvas_more "canvas: no picture yet" 0' &&
+        wait_until "the wake's lock sidecar" 30 'canvas_log | jgrep -F "caustics-lock: listening on"'; then
+        pass "the canvas is up, its lock sidecar in its dry run"
+    else
+        fail "the wake's canvas never came up: $(canvas_log | tail -4 | tr '\n' '|' | cut -c1-400)"
+        WAKE_RUN=0
+    fi
+    shows_before=$(canvas_count "canvas: show ")
+    canvasctl show '"$T_HOME/canvas-blue.png"' >/dev/null 2>&1 || fail "caustics-canvasctl show failed"
+    wait_until "the wake's picture" 30 "canvas_more 'canvas: show ' $shows_before" ||
+        fail "the canvas never showed the picture"
+fi
+if [[ "${WAKE_RUN:-0}" -eq 1 ]]; then
+    if [[ "$(niri_msg --json focused-window 2>/dev/null)" == null ]]; then
+        pass "an empty workspace: the pointer is the background's below the bar"
+    else
+        fail "no empty workspace for the background to take the pointer on"
+    fi
+    pointer_to 240 420
+    shot wake-rest.png
+    stirred_before=$(canvas_count "wake: stirred on pane")
+    still_before=$(canvas_count "wake: still")
+    settled_before=$(canvas_count "the background is settled; no more frames")
+    wake_sweep 420
+    sleep 0.3
+    shot_capture wake-moving.png
+    wait "$WAKE_SWEEP_PID"
+    sweep_end=$(cat "$SHOTS/.wake-end" 2>/dev/null || now_us)
+    shot_develop wake-moving.png
+    if wait_until "the background's wake stirred" 10 "canvas_more 'wake: stirred on pane' $stirred_before"; then
+        pass "$(canvas_last 'wake: stirred on pane' | sed -n 's/.*INFO [a-z_:]*: //p') (target 0 is the background)"
+    else
+        fail "the sweep never stirred the background's wake: $(canvas_log | grep -E 'wake|background' | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    if wait_until "the background's wake still" 15 "canvas_more 'wake: still' $still_before" &&
+        wait_until "the background settled" 5 "canvas_more 'the background is settled; no more frames' $settled_before"; then
+        after=$(canvas_line_after "wake: still" "$sweep_end")
+        if [[ -n "$after" ]] && python3 -c "import sys; sys.exit(0 if $after <= $wake_settle + 1.0 else 1)"; then
+            pass "the water was still ${after} s after the last move (WAKE_SETTLE_S = $wake_settle)"
+        else
+            fail "the water was still only ${after:-?} s after the last move (WAKE_SETTLE_S = $wake_settle)"
+        fi
+        pass "and the host stopped drawing it: $(canvas_last 'the background is settled; no more frames' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the background's wake never went still, or its pane never settled: $(canvas_log | grep -E 'wake:|background' | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    shot wake-settled.png
+    # The sweep's band, rows 340..500, inside the canvas's rectangle.
+    lit=$(png_pixel_diff "$SHOTS/wake-rest.png" "$SHOTS/wake-moving.png" 200 340 880 160)
+    if [[ "$lit" -gt 2000 ]]; then
+        pass "mid-sweep the picture moved around the pointer's path: $lit px of the band differ from the resting one"
+    else
+        fail "only $lit px of the band differ mid-sweep: the water was not drawn"
+    fi
+    left=$(png_pixel_diff "$SHOTS/wake-rest.png" "$SHOTS/wake-settled.png" "${CANVAS_RECT[@]}")
+    got=($(canvas_mean wake-settled.png))
+    if [[ "$left" -ge 0 && "$left" -lt 50 ]] && ((got[2] >= 240 && got[0] <= 15 && got[1] <= 15)); then
+        pass "settled, the picture is the resting one again: $left px differ, mean ${got[*]}"
+    else
+        fail "settled, $left px differ from the resting picture, mean ${got[*]}"
+    fi
+
+    # The lock: the same sweep, below the lock's panel.
+    on_target 10 'rm -f "$T_HOME/wake-lock.out"' >/dev/null
+    on_target 40 '"$T_BIN/caustics-canvasctl" lock --wait >"$T_HOME/wake-lock.out" 2>&1
+        echo "exit=$?" >>"$T_HOME/wake-lock.out"' >/dev/null 2>&1 &
+    waiter=$!
+    if wait_until "the wake's lock" 30 'on_target 5 "grep -q ^exit= \"\$T_HOME/wake-lock.out\""' &&
+        [[ "$(on_target 5 'cat "$T_HOME/wake-lock.out"')" == *"locked"*"exit=0"* ]] &&
+        wait_until "the lock surface" 10 'canvas_more "lock surface configured" 0'; then
+        pass "locked on the canvas's lock surface"
+    else
+        fail "the wake's lock: $(on_target 5 'cat "$T_HOME/wake-lock.out"' | tr '\n' '|' | cut -c1-200)"
+    fi
+    wait "$waiter" 2>/dev/null
+    stirred_before=$(canvas_count "(target 3)")
+    still_before=$(canvas_count "wake: still")
+    settled_before=$(canvas_count "the lock is settled; no more frames")
+    wake_sweep 700
+    wait "$WAKE_SWEEP_PID"
+    sweep_end=$(cat "$SHOTS/.wake-end" 2>/dev/null || now_us)
+    if wait_until "the lock's wake stirred" 10 "canvas_more '(target 3)' $stirred_before"; then
+        pass "$(canvas_last '(target 3)' | sed -n 's/.*INFO [a-z_:]*: //p') (target 3 is a lock surface)"
+    else
+        fail "the sweep never stirred the lock's wake: $(canvas_log | grep -E 'wake|lock' | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    if wait_until "the lock's wake still" 15 "canvas_more 'wake: still' $still_before" &&
+        wait_until "the lock settled" 5 "canvas_more 'the lock is settled; no more frames' $settled_before"; then
+        after=$(canvas_line_after "wake: still" "$sweep_end")
+        if [[ -n "$after" ]] && python3 -c "import sys; sys.exit(0 if $after <= $wake_settle + 1.0 else 1)"; then
+            pass "the lock's water was still ${after} s after the last move (WAKE_SETTLE_S = $wake_settle)"
+        else
+            fail "the lock's water was still only ${after:-?} s after the last move (WAKE_SETTLE_S = $wake_settle)"
+        fi
+        pass "and the host stopped drawing the lock: $(canvas_last 'the lock is settled; no more frames' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the lock's wake never went still, or its pane never settled: $(canvas_log | grep -E 'wake:|lock' | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    if [[ "$(canvas_log | grep -E 'the lock (draws frame by frame|is settled)' | tail -1)" == *"is settled"* ]]; then
+        pass "and nothing has asked for the lock's frames since"
+    else
+        fail "the lock asks for frames again at rest: $(canvas_log | grep -E 'the lock (draws|is settled)' | tail -1)"
+    fi
+    keys "$wake_secret"
+    key Return
+    if wait_until "the wake's unlock" 20 'canvas_log | jgrep -F "caustics-lock: unlocked"'; then
+        pass "unlocked again"
+    else
+        fail "the wake's lock never unlocked: $(canvas_log | grep -E 'lock|prompt' | tail -4 | tr '\n' '|' | cut -c1-300)"
+    fi
+fi
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    fixture_stop wake
+    wait_until "the wake's canvas gone" 20 "! on_target 5 '[ -S \"\$XDG_RUNTIME_DIR/caustics-canvas.sock\" ]'" ||
+        fail "the wake's canvas outlived its fixture"
+    niri_msg action focus-workspace-up >/dev/null 2>&1
+fi
+
 say "35b. the polkit sink asks through the wire, and the answer reaches its helper alone"
 # `caustics-polkit` in its dry run (polkit/README.md): the agent object on the
 # run's private session bus, no system bus at all (its address names a
