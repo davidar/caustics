@@ -21,9 +21,10 @@
 //! - after a no-match stops the verify, pauses ([`Timings::retry_pause`]) and
 //!   starts another;
 //! - on a reader that goes away (a resume from suspend is the usual cause:
-//!   the device re-enumerates under fprintd), releases what it held and
-//!   claims again with a doubling backoff, for as long as the session stays
-//!   locked;
+//!   the device re-enumerates under fprintd; or fprintd itself leaves the
+//!   bus, taking the claim with it), releases what it held and claims again
+//!   with a doubling backoff, for as long as the session stays locked; no
+//!   reader, or no fprintd, after one that went is one on its way back;
 //! - on a reader that cannot ever verify for this lock (no reader, no
 //!   enrolled prints, no permission, no system bus) says so once and does
 //!   nothing more until the next lock;
@@ -417,11 +418,22 @@ async fn claim(
     let path = match stop.or(manager.get_default_device()).await {
         None => return End::Stopped,
         Some(Ok(path)) => path,
+        // After a reader that went, none for now is a reader on its way back
+        // (a resume re-enumerates it, a restarted fprintd is being started):
+        // claimed again after the backoff, not given up on.
         Some(Err(e)) if fprint_error(&e) == Some("NoSuchDevice") => {
-            return End::Unavailable("no reader".to_owned());
+            return if first {
+                End::Unavailable("no reader".to_owned())
+            } else {
+                gone("no reader yet".to_owned())
+            };
         }
         Some(Err(e)) if no_service(&e) => {
-            return End::Unavailable("no fprintd on the system bus".to_owned());
+            return if first {
+                End::Unavailable("no fprintd on the system bus".to_owned())
+            } else {
+                gone("no fprintd yet".to_owned())
+            };
         }
         Some(Err(e)) => return gone(e.to_string()),
     };
@@ -442,12 +454,23 @@ async fn claim(
     let (statuses, mut status) = unbounded_channel();
     let _drain: Drain = match stop.or(device.receive_verify_status()).await {
         None => return End::Stopped,
-        Some(Ok(stream)) => caustics_sidecar::forward(stream, statuses, |signal: VerifyStatus| {
-            signal
-                .args()
-                .ok()
-                .map(|args| (args.result().to_string(), *args.done()))
-        }),
+        Some(Ok(stream)) => {
+            caustics_sidecar::forward(stream, statuses.clone(), |signal: VerifyStatus| {
+                signal
+                    .args()
+                    .ok()
+                    .map(|args| (args.result().to_string(), *args.done()))
+            })
+        }
+        Some(Err(e)) => return gone(e.to_string()),
+    };
+    // fprintd leaving the bus (a crash, a restart) takes the claim and the
+    // verify with it, and no status will ever come: that is the reader gone.
+    let _owner: Drain = match stop.or(device.inner().receive_owner_changed()).await {
+        None => return End::Stopped,
+        Some(Ok(stream)) => {
+            caustics_sidecar::forward(stream, statuses, |_| Some((FPRINTD_LEFT.to_owned(), true)))
+        }
         Some(Err(e)) => return gone(e.to_string()),
     };
     held.device = Some(device.clone());
@@ -484,6 +507,9 @@ async fn claim(
     )
     .await
 }
+
+/// Not a result fprintd sends: fprintd's name changed owner.
+const FPRINTD_LEFT: &str = "caustics-lock: fprintd left";
 
 fn no_prints(user: &str) -> String {
     format!("no enrolled prints for {}", shown_user(user))
@@ -547,6 +573,14 @@ async fn verify(
                 };
             };
             match result.as_str() {
+                FPRINTD_LEFT => {
+                    // Nothing is held any more to release.
+                    *held = Held::default();
+                    return End::Gone {
+                        why: "fprintd left the bus".to_owned(),
+                        verified,
+                    };
+                }
                 "verify-match" => {
                     report.send(Finger::Match);
                     stop.wait().await;

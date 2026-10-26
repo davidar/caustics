@@ -248,3 +248,53 @@ async fn a_stop_mid_verify_releases_the_reader() {
     let lines = rig.log.lines();
     assert_eq!(lines[lines.len() - 2..], ["VerifyStop", "Release"]);
 }
+
+/// fprintd leaving the bus mid-verify is the reader gone, and an fprintd
+/// that is not back yet is claimed again rather than given up on; once it
+/// is back, the run verifies again.
+#[tokio::test]
+async fn fprintd_leaving_mid_verify_is_gone_and_its_return_is_claimed() {
+    let Some(mut rig) = Rig::start("", "press", fake::Mode::Normal).await else {
+        return;
+    };
+    assert_eq!(rig.finger().await, ready_press());
+    rig.logged("VerifyStart any", 1).await;
+    drop(rig._fake.take());
+    assert_eq!(
+        rig.finger().await,
+        Finger::Gone("fprintd left the bus".to_owned())
+    );
+    assert_eq!(
+        rig.finger().await,
+        Finger::Gone("no fprintd yet".to_owned())
+    );
+    let conn = zbus::connection::Builder::address(rig._bus.address.as_str())
+        .expect("the bus address parses")
+        .build()
+        .await
+        .expect("the fake's second connection");
+    let log = fake::serve(
+        &conn,
+        fake::Script::parse(
+            "match",
+            Duration::from_millis(50),
+            "press",
+            fake::Mode::Normal,
+        ),
+    )
+    .await
+    .expect("the fake serves again");
+    rig._fake = Some(conn);
+    loop {
+        match rig.finger().await {
+            Finger::Gone(_) => continue,
+            other => {
+                assert_eq!(other, ready_press());
+                break;
+            }
+        }
+    }
+    assert_eq!(rig.finger().await, Finger::Match);
+    rig.stop().await;
+    assert_eq!(log.lines().last().map(String::as_str), Some("Release"));
+}
