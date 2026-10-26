@@ -372,3 +372,24 @@ fn the_lock_reserves_the_prompt_for_its_own() {
     let effects = prompts.frame(POLKIT, &prompt(3, PROMPT_SECRET, 0, "Password: "));
     assert!(effects.contains(&Effect::Raise), "{effects:?}");
 }
+
+/// A line while asking (the lock's fingerprint reader: live, or a finger
+/// that did not match) is shown and journaled without its words, and an
+/// error line then is not an attempt: no answer was pending.
+#[test]
+fn a_line_while_asking_is_shown_and_not_counted() {
+    let mut prompts = Prompts::new();
+    prompts.frame(POLKIT, &prompt(3, PROMPT_INFO, PROMPT_INFO_TITLE, "user"));
+    prompts.frame(POLKIT, &prompt(3, PROMPT_SECRET, 0, "Password: "));
+    let effects = prompts.frame(POLKIT, &prompt(3, PROMPT_INFO, 0, "Touch the reader"));
+    assert!(effects.contains(&Effect::Note(
+        "prompt: conversation 3: an info line".to_owned()
+    )));
+    let effects = prompts.frame(POLKIT, &prompt(3, PROMPT_ERROR, 0, "Not recognised"));
+    assert!(effects.contains(&Effect::Note(
+        "prompt: conversation 3: an error line, no answer pending".to_owned()
+    )));
+    let facts = prompts.facts().0;
+    assert_eq!((facts.state, facts.attempts), (PROMPT_ASKING, 0));
+    assert_eq!(facts.line_error, 1);
+}

@@ -292,6 +292,9 @@ impl Prompts {
             PROMPT_INFO => {
                 c.line = prompt.message.clone();
                 c.line_error = false;
+                effects.push(Effect::Note(format!(
+                    "prompt: conversation {id}: an info line"
+                )));
             }
             PROMPT_ERROR => {
                 c.line = prompt.message.clone();
@@ -303,6 +306,13 @@ impl Prompts {
                         "prompt: conversation {id}: an error line after the answer \
                          (attempts {})",
                         c.attempts
+                    )));
+                } else {
+                    // A line beside the ask, not an answer's verdict (the
+                    // lock's fingerprint reader saying a finger did not
+                    // match): shown, and not counted.
+                    effects.push(Effect::Note(format!(
+                        "prompt: conversation {id}: an error line, no answer pending"
                     )));
                 }
             }
