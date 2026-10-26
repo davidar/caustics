@@ -16,7 +16,9 @@
 //! ([`Caustic`]): the bar's (`bar.slang`, `BAR_ENTRIES`), which is what a
 //! request whose program word is zero has always meant, or the canvas's
 //! (`canvas.slang`, `CANVAS_ENTRIES`). Each caustic owns its own modules in
-//! the one directory, and an edit to one never recompiles the other.
+//! the one directory, and an edit to one never recompiles the other; a
+//! module both import (`SHARED_MODULES`, binding-free) is each one's, and an
+//! edit to it recompiles both.
 //!
 //! The reload loop lives outside the bar's address space on purpose: the poll,
 //! the compiler and its memory, and the invariant that a failed compile sends
@@ -80,7 +82,7 @@ use std::time::SystemTime;
 use caustics_bar_abi::wire::{
     self, Frame, MAX_MODULES, Module, PROGRAM_BAR, PROGRAM_CANVAS, REQ_PROGRAM, format_code,
 };
-use caustics_bar_abi::{BAR_ENTRIES, CANVAS_ENTRIES, DstFormat};
+use caustics_bar_abi::{BAR_ENTRIES, CANVAS_ENTRIES, DstFormat, SHARED_MODULES};
 use punchcutter_slang::{Options, SlangError};
 
 use crate::watch::{MtimeWatch, POLL_INTERVAL};
@@ -111,8 +113,9 @@ pub const BAR: Caustic = Caustic {
     entries: &BAR_ENTRIES,
 };
 
-/// The canvas's caustic ([`PROGRAM_CANVAS`]): `canvas.slang` and the
-/// `canvas_*.slang` modules beside it.
+/// The canvas's caustic ([`PROGRAM_CANVAS`]): `canvas.slang`, the
+/// `canvas_*.slang` modules beside it, and the modules it shares with the
+/// bar.
 pub const CANVAS: Caustic = Caustic {
     name: "canvas",
     entry: "canvas.slang",
@@ -136,11 +139,15 @@ impl Caustic {
     }
 
     /// Whether `name`, a `.slang` file in the directory, is one of this
-    /// caustic's own modules: the canvas's are `canvas*.slang`, and the bar's
-    /// are every other.
+    /// caustic's own modules: the canvas's are `canvas*.slang` and the
+    /// shared ones ([`SHARED_MODULES`]), and the bar's are every other.
     fn owns(&self, name: &str) -> bool {
         let canvas = name.starts_with(CANVAS_PREFIX);
-        if *self == CANVAS { canvas } else { !canvas }
+        if *self == CANVAS {
+            canvas || SHARED_MODULES.contains(&name)
+        } else {
+            !canvas
+        }
     }
 }
 

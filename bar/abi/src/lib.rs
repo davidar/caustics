@@ -25,7 +25,9 @@
 //! after one (docs/abi.md, *Module*), so it is a thing two separately built processes must
 //! agree on — which is what this crate is for. The buffer's layout tests stay
 //! in `bar/src/abi.rs` because the reflection test needs the compiler; the wire's
-//! tests are here, because the wire needs nothing but this crate.
+//! tests are here, because the wire needs nothing but this crate. So does
+//! [`SHARED_MODULES`], the modules both caustics import, which the canvas's
+//! build and the compiler sidecar must agree belong to both.
 
 //! # Three channels out, and one buffer this crate does not describe
 //!
@@ -218,7 +220,7 @@ fn materialise(dir: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests;
 
-// `pub const BAR_ENTRIES` and `CANVAS_ENTRIES`, in their own file so `build.rs`
+// `pub const BAR_ENTRIES`, `CANVAS_ENTRIES` and `SHARED_MODULES`, in their own file so `build.rs`
 // can hash it as source, one of the five inputs the ABI hash covers.
 include!("entries.rs");
 

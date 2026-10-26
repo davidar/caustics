@@ -11,15 +11,16 @@
 
 use std::path::{Path, PathBuf};
 
-use caustics_bar_abi::{CANVAS_ENTRIES, DstFormat};
+use caustics_bar_abi::{CANVAS_ENTRIES, DstFormat, SHARED_MODULES};
 use punchcutter_slang::Options;
 
 fn main() {
     let caustics = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../caustics");
     let source = caustics.join("canvas.slang");
-    // The canvas's own modules, the `canvas*.slang` files: the same set
-    // `caustics-reload` watches for this caustic. A module missing from this
-    // list would leave an edit to it out of the baked SPIR-V.
+    // The canvas's own modules, the `canvas*.slang` files and the modules it
+    // shares with the bar (`SHARED_MODULES`): the same set `caustics-reload`
+    // watches for this caustic. A module missing from this list would leave
+    // an edit to it out of the baked SPIR-V.
     let mut modules: Vec<PathBuf> = std::fs::read_dir(&caustics)
         .unwrap_or_else(|err| panic!("could not list {}: {err}", caustics.display()))
         .flatten()
@@ -29,7 +30,9 @@ fn main() {
                 && path
                     .file_name()
                     .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.starts_with("canvas"))
+                    .is_some_and(|name| {
+                        name.starts_with("canvas") || SHARED_MODULES.contains(&name)
+                    })
         })
         .collect();
     modules.sort();

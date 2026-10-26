@@ -627,6 +627,43 @@ fn each_caustic_watches_its_own_modules_and_no_other() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+/// A shared module (`SHARED_MODULES`) is both caustics' own: each watches
+/// it, and an edit to it moves both cache keys, so a save of the water's
+/// physics reaches the bar and the canvas alike.
+#[test]
+fn a_shared_module_is_watched_by_both_and_moves_both_keys() {
+    let dir = temp_dir("shared-module");
+    let shared = SHARED_MODULES[0];
+    for name in [
+        "bar.slang",
+        "bar_tunables.slang",
+        "canvas.slang",
+        "canvas_tunables.slang",
+        shared,
+    ] {
+        std::fs::write(dir.join(name), format!("// {name}\n")).expect("writable");
+    }
+    assert!(watched(&dir, &BAR).iter().any(|name| name == shared));
+    assert!(watched(&dir, &CANVAS).iter().any(|name| name == shared));
+
+    let tools = offline(&dir.join("cache"));
+    let define = DstFormat::Rgba8.define();
+    let bar = cache_key(&tools, &dir, &BAR, define, &BAR_ENTRIES).expect("reads");
+    let canvas = cache_key(&tools, &dir, &CANVAS, define, &CANVAS_ENTRIES).expect("reads");
+    std::fs::write(dir.join(shared), "// edited\n").expect("writable");
+    assert_ne!(
+        cache_key(&tools, &dir, &BAR, define, &BAR_ENTRIES),
+        Some(bar),
+        "a shared module's edit left the bar's key where it was"
+    );
+    assert_ne!(
+        cache_key(&tools, &dir, &CANVAS, define, &CANVAS_ENTRIES),
+        Some(canvas),
+        "a shared module's edit left the canvas's key where it was"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// The shipped tree has both caustics in it, and the canvas's entry file is
 /// one of its own modules' list like the bar's is of its.
 #[test]
@@ -641,6 +678,11 @@ fn the_shipped_tree_has_both_caustics() {
             .iter()
             .any(|name| name.starts_with("canvas"))
     );
+    for shared in SHARED_MODULES {
+        assert!(dir.join(shared).is_file(), "{shared} is not in the tree");
+        assert!(canvas.iter().any(|name| name == shared));
+        assert!(watched(&dir, &BAR).iter().any(|name| name == shared));
+    }
 }
 
 /// The canvas's caustic compiles where it stands, both entry points at once,

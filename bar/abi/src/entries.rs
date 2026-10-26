@@ -37,3 +37,11 @@ pub const BAR_ENTRIES: [&str; 7] = [
 /// `caustics-reload` compiles it when the canvas host asks for its program
 /// (`PROGRAM_CANVAS`), and the canvas names its pipelines from it.
 pub const CANVAS_ENTRIES: [&str; 3] = ["canvas_shape", "canvas_apply", "canvas_draw"];
+
+/// The modules both caustics import (`caustics/README.md`, *Conventions*):
+/// binding-free, so importing one binds nothing of either program's. Every
+/// other module in `caustics/` is one caustic's own, the `canvas*` files the
+/// canvas's and the rest the bar's; a module here is each one's as well, so
+/// `canvas/build.rs` bakes it into the canvas and `caustics-reload` watches it
+/// for both, and a save of it recompiles both.
+pub const SHARED_MODULES: [&str; 1] = ["water.slang"];
