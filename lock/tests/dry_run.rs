@@ -28,6 +28,11 @@ struct Sidecar {
 
 impl Sidecar {
     fn start(name: &str) -> Sidecar {
+        Sidecar::start_with(name, &[])
+    }
+
+    /// With `env` set besides the dry run's own.
+    fn start_with(name: &str, env: &[(&str, &str)]) -> Sidecar {
         // A socket path must fit `sun_path`, which the target directory's
         // may not: the system's temporary directory, a socket file in it.
         let runtime =
@@ -44,6 +49,7 @@ impl Sidecar {
                 format!("unix:path={}", runtime.join("no-system-bus").display()),
             )
             .env("CAUSTICS_LOCK_DRY_RUN_SECRET", RIGHT)
+            .envs(env.iter().copied())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(stderr)
@@ -206,6 +212,8 @@ fn without_a_system_bus_the_socket_locks_and_only_the_right_answer_unlocks() {
 
     let witness = lock.stderr();
     assert!(witness.contains("no logind"), "{witness}");
+    // The reader is on, and finds no bus to speak to fprintd on.
+    assert!(witness.contains("fingerprint: no system bus"), "{witness}");
     assert!(!witness.contains("LockedHint of session"), "{witness}");
     assert!(
         !witness.contains(RIGHT),
@@ -215,4 +223,30 @@ fn without_a_system_bus_the_socket_locks_and_only_the_right_answer_unlocks() {
         !witness.contains(WRONG),
         "the wrong secret is in the witness"
     );
+}
+
+/// `CAUSTICS_LOCK_FINGERPRINT=0`: the reader is off, said once at start, and
+/// a lock tries no bus for it.
+#[test]
+fn the_fingerprint_off_is_one_witness_and_no_run() {
+    let mut lock = Sidecar::start_with("off", &[("CAUSTICS_LOCK_FINGERPRINT", "0")]);
+    match lock.frame() {
+        Frame::Hello(hello) => assert_eq!(hello.name, "caustics-lock"),
+        other => panic!("not a hello: {other:?}"),
+    }
+    let waiting = ask(&lock.socket(), "lock wait");
+    assert_eq!(lock.lock(), LOCK_LOCK);
+    lock.event(CANVAS_EVENT_LOCKED);
+    assert_eq!(reply(waiting), "locked");
+    let title = lock.prompt();
+    assert_eq!((title.kind, title.arg), (PROMPT_INFO, PROMPT_INFO_TITLE));
+    assert_eq!(lock.prompt().kind, PROMPT_SECRET);
+    drop(lock.to.take());
+    assert_eq!(lock.child.wait().unwrap().code(), Some(0));
+    let witness = lock.stderr();
+    assert!(
+        witness.contains("fingerprint: off (CAUSTICS_LOCK_FINGERPRINT=0)"),
+        "{witness}"
+    );
+    assert!(!witness.contains("fingerprint: no system bus"), "{witness}");
 }

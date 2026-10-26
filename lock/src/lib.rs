@@ -28,6 +28,11 @@
 //!   PAM's message, and followed at once by a fresh conversation; so is a
 //!   dismissal (Escape). **Nothing unlocks but a success**: logind's
 //!   `Unlock` signal is witnessed and ignored.
+//! - **The fingerprint reader** is spoken to directly, on fprintd's D-Bus
+//!   interface ([`fingerprint`]), while the conversation runs: PAM asks one
+//!   thing at a time, so the reader is not in the PAM stack. A match is a
+//!   success; the password keeps working throughout; the reader is released
+//!   when the lock is over.
 //! - **Nothing typed is ever written anywhere but to PAM**, and no witness
 //!   carries an answer. The host's stdin is read unbuffered, so no read
 //!   buffer keeps a copy of one.
@@ -38,13 +43,17 @@
 //! *Configuration is the caustic*):
 //!
 //! - `CAUSTICS_LOCK_PAM_SERVICE`: the PAM service, default `swaylock` (the
-//!   service a session built on the sway tools has). Whether the fingerprint
-//!   module is on the unlock path is that service file's business.
+//!   service a session built on the sway tools has). The reader is spoken to
+//!   directly, so the service should keep the fingerprint module off the
+//!   unlock path, or PAM waits on the reader too.
+//! - `CAUSTICS_LOCK_FINGERPRINT`: `0` is no reader; unset or anything else
+//!   is the reader verifying while locked.
 //! - `CAUSTICS_LOCK_DRY_RUN_SECRET`: the **dry run**. PAM is not touched: a
 //!   conversation is one echo-off ask, `Password: `, compared with these
 //!   bytes. logind is still spoken to if a system bus answers, so a test
 //!   points `DBUS_SYSTEM_BUS_ADDRESS` at nothing and the lock runs with the
-//!   socket as its only trigger.
+//!   socket as its only trigger. The reader is spoken to on the same bus, so
+//!   a test that runs a fake fprintd there runs it beside the dry run.
 //!
 //! # Exit codes
 //!
@@ -55,6 +64,7 @@
 //! - **1**: it could not run at all: no runtime, no stdin to read.
 
 pub mod conductor;
+pub mod fingerprint;
 pub mod logind;
 pub mod pam;
 pub mod socket;
@@ -68,6 +78,7 @@ use caustics_bar_abi::wire::{self, Frame, Secret};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use crate::conductor::{Conductor, Event, Sink};
+use crate::fingerprint::{Fprintd, Reader};
 use crate::pam::{DryRun, LinuxPam, Pam};
 
 /// What this sidecar calls itself.
@@ -93,6 +104,8 @@ pub struct Settings {
     pub service: String,
     /// `CAUSTICS_LOCK_DRY_RUN_SECRET`, when set and not empty.
     pub dry_run: Option<Secret>,
+    /// `CAUSTICS_LOCK_FINGERPRINT` is not `0`.
+    pub fingerprint: bool,
 }
 
 impl Settings {
@@ -100,13 +113,18 @@ impl Settings {
         Settings::from_vars(
             std::env::var_os("CAUSTICS_LOCK_PAM_SERVICE"),
             std::env::var_os("CAUSTICS_LOCK_DRY_RUN_SECRET"),
+            std::env::var_os("CAUSTICS_LOCK_FINGERPRINT"),
         )
     }
 
     /// The rule, apart from the environment: an empty service is the
-    /// default, and an empty secret is no dry run (it would unlock on an
-    /// empty answer).
-    pub fn from_vars(service: Option<OsString>, secret: Option<OsString>) -> Settings {
+    /// default, an empty secret is no dry run (it would unlock on an empty
+    /// answer), and the reader is on unless its variable is `0`.
+    pub fn from_vars(
+        service: Option<OsString>,
+        secret: Option<OsString>,
+        fingerprint: Option<OsString>,
+    ) -> Settings {
         Settings {
             service: service
                 .and_then(|s| s.into_string().ok())
@@ -115,6 +133,7 @@ impl Settings {
             dry_run: secret
                 .filter(|s| !s.is_empty())
                 .map(|s| Secret::new(s.into_encoded_bytes())),
+            fingerprint: fingerprint.is_none_or(|f| f != "0"),
         }
     }
 }
@@ -261,7 +280,13 @@ pub async fn serve(
         Some(logind) => (Some(logind.hint.clone()), logind.locked),
         None => (None, false),
     };
-    let code = Conductor::new(pam, user, title, sink, events, hint)
+    let reader: Option<Box<dyn Reader>> = if settings.fingerprint {
+        Some(Box::new(Fprintd::system()))
+    } else {
+        witness("fingerprint: off (CAUSTICS_LOCK_FINGERPRINT=0)");
+        None
+    };
+    let code = Conductor::new(pam, user, title, sink, events, hint, reader)
         .run(inbox, locked)
         .await;
     if let Some(path) = socket {

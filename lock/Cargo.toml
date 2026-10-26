@@ -42,3 +42,8 @@ zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 # A response handed back to PAM's conversation and then refused is zeroed
 # before it is freed.
 zeroize = "1.9.1"
+
+[dev-dependencies]
+# The private `dbus-daemon` the fingerprint reader's tests serve the fake
+# fprintd on (`examples/fake_fprintd.rs`).
+caustics-sidecar = { path = "../sidecar", features = ["drain", "session", "test-bus"] }

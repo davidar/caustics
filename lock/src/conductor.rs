@@ -25,6 +25,17 @@
 //! makes them, then one `PROMPT_DONE`: `arg` 1 for a success (followed by the
 //! `LOCK_UNLOCK`), 0 for anything else, with PAM's message as a
 //! `PROMPT_ERROR` before it when PAM said no.
+//!
+//! **The fingerprint reader** is a second way in, beside the conversation
+//! ([`crate::fingerprint`]). A run starts when the session is locked and
+//! stops when it is not. Its lines go to the host under the conversation on
+//! screen: the reader's ready line after every conversation's title, so the
+//! panel always says the reader is live, and a no-match or a scan to retry
+//! as it comes. A line with no conversation to carry it (a pause between
+//! two) or while an answer is with PAM (an error line then would read as a
+//! failed answer) waits for the next frame it can follow. A match is a
+//! verdict as PAM's success is: the conversation on screen ends with
+//! `PROMPT_DONE` 1, its pending ask is cancelled, and `LOCK_UNLOCK` follows.
 
 use std::sync::Arc;
 use std::sync::mpsc;
@@ -37,6 +48,7 @@ use caustics_bar_abi::wire::{
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
+use crate::fingerprint::{Finger, NOT_RECOGNISED, Reader, Run};
 use crate::pam::{Conversation, Pam, Reply, Step, Verdict};
 use crate::socket::{Command, LOCKED};
 use crate::witness;
@@ -68,6 +80,8 @@ pub enum Event {
     Attempt { id: u32, step: Step },
     /// The pause after a conversation that asked nothing is over.
     Retry,
+    /// What the fingerprint reader's run `run` found.
+    Finger { run: u32, finger: Finger },
     /// The host closed stdin.
     Closed,
 }
@@ -93,6 +107,41 @@ struct Active {
     asked: bool,
 }
 
+impl Active {
+    /// An answer is with PAM: it asked, and is not asking now.
+    fn verifying(&self) -> bool {
+        self.asked && self.asking.is_none()
+    }
+}
+
+/// A line for the host: `PROMPT_INFO` or `PROMPT_ERROR`, and its words.
+#[derive(Clone)]
+struct Line {
+    kind: u32,
+    text: String,
+}
+
+/// The release a run gets at the end of the process, at most: the run's own
+/// bound and a little over.
+const RELEASE_WAIT: Duration = Duration::from_millis(2500);
+
+/// The fingerprint reader, when it is on.
+struct Fingerprint {
+    reader: Box<dyn Reader>,
+    /// The run of the lock now held.
+    run: Option<Run>,
+    /// The id the next run is given.
+    run_id: u32,
+    /// The id of the run now held; a finding under any other is stale.
+    current: u32,
+    /// The reader's ready line, while its verify is live.
+    ready: Option<Line>,
+    /// A line that has not yet found a conversation to carry it.
+    pending: Option<Line>,
+    /// Runs told to stop, releasing.
+    releasing: Vec<tokio::task::JoinHandle<()>>,
+}
+
 /// What the conductor knows.
 pub struct Conductor {
     pam: Arc<dyn Pam>,
@@ -116,11 +165,15 @@ pub struct Conductor {
     pause: Duration,
     /// A retry is scheduled.
     retrying: bool,
+    /// The fingerprint reader; `None` when it is off.
+    finger: Option<Fingerprint>,
 }
 
 impl Conductor {
-    /// A conductor whose PAM threads report back on `events`. `user` is who
-    /// PAM authenticates; `title` heads every conversation.
+    /// A conductor whose PAM threads and fingerprint runs report back on
+    /// `events`. `user` is who PAM authenticates and whose finger the reader
+    /// verifies; `title` heads every conversation. `reader` is `None` when
+    /// the fingerprint is off.
     pub fn new(
         pam: Arc<dyn Pam>,
         user: String,
@@ -128,6 +181,7 @@ impl Conductor {
         sink: Sink,
         events: UnboundedSender<Event>,
         hint: Option<UnboundedSender<bool>>,
+        reader: Option<Box<dyn Reader>>,
     ) -> Self {
         Conductor {
             pam,
@@ -143,6 +197,15 @@ impl Conductor {
             waiters: Vec::new(),
             pause: FIRST_PAUSE,
             retrying: false,
+            finger: reader.map(|reader| Fingerprint {
+                reader,
+                run: None,
+                run_id: 1,
+                current: 0,
+                ready: None,
+                pending: None,
+                releasing: Vec::new(),
+            }),
         }
     }
 
@@ -153,7 +216,7 @@ impl Conductor {
     /// paints (docs/canvas.md, *Failure model*). Returns the exit status.
     pub async fn run(mut self, mut inbox: UnboundedReceiver<Event>, locked_at_start: bool) -> i32 {
         if locked_at_start && !self.lock("logind's LockedHint was set at start") {
-            return self.leave();
+            return self.leave().await;
         }
         while let Some(event) = inbox.recv().await {
             let alive = match event {
@@ -173,6 +236,7 @@ impl Conductor {
                     self.retrying = false;
                     self.begin()
                 }
+                Event::Finger { run, finger } => self.finger(run, finger),
                 Event::Closed => {
                     witness("stdin closed; exiting");
                     false
@@ -182,17 +246,67 @@ impl Conductor {
                 break;
             }
         }
-        self.leave()
+        self.leave().await
     }
 
-    /// The host is gone, or stdout is: nobody waits on anything any more.
-    fn leave(&mut self) -> i32 {
+    /// The host is gone, or stdout is: nobody waits on anything any more,
+    /// and the reader is let go before the process is.
+    async fn leave(&mut self) -> i32 {
         for waiter in self.waiters.drain(..) {
             let _ = waiter.send("error the canvas went away before it locked".to_owned());
         }
         // The PAM thread's ask, if any, reads `Gone` when this drops.
         self.active = None;
+        self.stop_reader();
+        if let Some(finger) = self.finger.as_mut() {
+            let releasing = std::mem::take(&mut finger.releasing);
+            let _ = tokio::time::timeout(RELEASE_WAIT, async {
+                for run in releasing {
+                    let _ = run.await;
+                }
+            })
+            .await;
+        }
         0
+    }
+
+    /// Enter `phase`: a run begins as the session becomes locked, and ends
+    /// as it stops being so.
+    fn set_phase(&mut self, phase: Phase) {
+        let was = self.phase;
+        self.phase = phase;
+        if was != Phase::Locked && phase == Phase::Locked {
+            self.start_reader();
+        } else if was == Phase::Locked && phase != Phase::Locked {
+            self.stop_reader();
+        }
+    }
+
+    fn start_reader(&mut self) {
+        let user = self.user.clone();
+        let events = self.events.clone();
+        let Some(finger) = self.finger.as_mut() else {
+            return;
+        };
+        if finger.run.is_some() {
+            return;
+        }
+        let id = finger.run_id;
+        finger.run_id = finger.run_id.checked_add(1).unwrap_or(1);
+        finger.current = id;
+        finger.run = Some(finger.reader.start(&user, id, events));
+    }
+
+    fn stop_reader(&mut self) {
+        let Some(finger) = self.finger.as_mut() else {
+            return;
+        };
+        finger.ready = None;
+        finger.pending = None;
+        finger.releasing.retain(|run| !run.is_finished());
+        if let Some(run) = finger.run.take() {
+            finger.releasing.push(run.stop());
+        }
     }
 
     fn write(&mut self, frame: Frame) -> bool {
@@ -228,7 +342,7 @@ impl Conductor {
                 true
             }
             Phase::Unlocked | Phase::Unlocking => {
-                self.phase = Phase::Locking;
+                self.set_phase(Phase::Locking);
                 self.failures = 0;
                 witness(&format!("{why}: locking"));
                 self.write(Frame::Lock(LockBody {
@@ -271,7 +385,7 @@ impl Conductor {
                         self.phase
                     ));
                 }
-                self.phase = Phase::Locked;
+                self.set_phase(Phase::Locked);
                 self.hint(true);
                 witness("locked");
                 for waiter in self.waiters.drain(..) {
@@ -286,7 +400,7 @@ impl Conductor {
                         self.phase
                     ));
                 }
-                self.phase = Phase::Unlocked;
+                self.set_phase(Phase::Unlocked);
                 self.hint(false);
                 witness("unlocked");
                 for waiter in self.waiters.drain(..) {
@@ -313,6 +427,17 @@ impl Conductor {
         self.next_id = self.next_id.checked_add(1).unwrap_or(1);
         let title = self.title.clone();
         if !self.prompt(id, PROMPT_INFO, PROMPT_INFO_TITLE, &title) {
+            return false;
+        }
+        // The reader's word under the title: what is waiting to be said, or
+        // that it is live.
+        let line = self
+            .finger
+            .as_mut()
+            .and_then(|f| f.pending.take().or_else(|| f.ready.clone()));
+        if let Some(line) = line
+            && !self.prompt(id, line.kind, 0, &line.text)
+        {
             return false;
         }
         let pam = Arc::clone(&self.pam);
@@ -355,7 +480,14 @@ impl Conductor {
                 active.asking = Some(reply);
                 active.asked = true;
                 let kind = if echo { PROMPT_ECHO } else { PROMPT_SECRET };
-                self.prompt(id, kind, 0, &message)
+                if !self.prompt(id, kind, 0, &message) {
+                    return false;
+                }
+                // A reader's line held while the answer was with PAM.
+                match self.finger.as_mut().and_then(|f| f.pending.take()) {
+                    Some(line) => self.prompt(id, line.kind, 0, &line.text),
+                    None => true,
+                }
             }
             Step::Show { error, message } => {
                 let kind = if error { PROMPT_ERROR } else { PROMPT_INFO };
@@ -381,11 +513,7 @@ impl Conductor {
                 if self.phase != Phase::Locked {
                     return true;
                 }
-                self.phase = Phase::Unlocking;
-                self.write(Frame::Lock(LockBody {
-                    command: LOCK_UNLOCK,
-                    ..LockBody::default()
-                }))
+                self.unlock()
             }
             Verdict::Failed(why) => {
                 if !self.prompt(id, PROMPT_ERROR, 0, &why) || !self.prompt(id, PROMPT_DONE, 0, "") {
@@ -419,6 +547,89 @@ impl Conductor {
                 self.begin()
             }
         }
+    }
+
+    /// Ask the host to unlock: the end of a success, PAM's or the reader's.
+    fn unlock(&mut self) -> bool {
+        self.set_phase(Phase::Unlocking);
+        self.write(Frame::Lock(LockBody {
+            command: LOCK_UNLOCK,
+            ..LockBody::default()
+        }))
+    }
+
+    /// What the reader found.
+    fn finger(&mut self, run: u32, finger: Finger) -> bool {
+        let Some(state) = self.finger.as_mut() else {
+            return true;
+        };
+        // A run that has been stopped may still have said something.
+        if state.run.is_none() || state.current != run {
+            return true;
+        }
+        match finger {
+            Finger::Ready { how } => {
+                let line = Line {
+                    kind: PROMPT_INFO,
+                    text: how,
+                };
+                state.ready = Some(line.clone());
+                self.line(line)
+            }
+            Finger::NoMatch => self.line(Line {
+                kind: PROMPT_ERROR,
+                text: NOT_RECOGNISED.to_owned(),
+            }),
+            Finger::Retry(text) => self.line(Line {
+                kind: PROMPT_INFO,
+                text,
+            }),
+            Finger::Gone(_) | Finger::Unavailable(_) => {
+                // The run said why on its own witness; the panel no longer
+                // says the reader is live.
+                state.ready = None;
+                state.pending = None;
+                true
+            }
+            Finger::Match => self.matched(),
+        }
+    }
+
+    /// A reader's line: under the conversation on screen, or held for the
+    /// next frame that can carry it.
+    fn line(&mut self, line: Line) -> bool {
+        match self.active.as_ref().filter(|a| !a.verifying()) {
+            Some(active) => {
+                let id = active.id;
+                self.prompt(id, line.kind, 0, &line.text)
+            }
+            None => {
+                if let Some(finger) = self.finger.as_mut() {
+                    finger.pending = Some(line);
+                }
+                true
+            }
+        }
+    }
+
+    /// The reader matched: a success, whatever the conversation was doing.
+    fn matched(&mut self) -> bool {
+        if self.phase != Phase::Locked {
+            return true;
+        }
+        witness("fingerprint matched; unlocking");
+        self.pause = FIRST_PAUSE;
+        if let Some(active) = self.active.take() {
+            // PAM's ask reads a dismissal; the thread's end that follows is
+            // for a conversation no longer on, and `step` drops it.
+            if let Some(reply) = active.asking {
+                let _ = reply.send(Reply::Cancelled);
+            }
+            if !self.prompt(active.id, PROMPT_DONE, 1, "") {
+                return false;
+            }
+        }
+        self.unlock()
     }
 
     fn retry_after(&mut self, pause: Duration) {

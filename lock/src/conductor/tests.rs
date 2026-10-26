@@ -10,6 +10,7 @@ use tokio::sync::mpsc::unbounded_channel;
 use tokio::task::JoinHandle;
 
 use super::*;
+use crate::fingerprint::Run;
 use crate::pam::{DRY_RUN_ASK, DRY_RUN_FAILURE, DryRun};
 
 const RIGHT: &[u8] = b"correct horse battery";
@@ -37,6 +38,14 @@ struct Lock {
 
 impl Lock {
     fn start(pam: Arc<dyn Pam>, locked_at_start: bool) -> Lock {
+        Lock::with_reader(pam, locked_at_start, None)
+    }
+
+    fn with_reader(
+        pam: Arc<dyn Pam>,
+        locked_at_start: bool,
+        reader: Option<Box<dyn Reader>>,
+    ) -> Lock {
         let (events, inbox) = unbounded_channel();
         let (frames_tx, frames) = unbounded_channel();
         let (hint, hints) = unbounded_channel();
@@ -51,6 +60,7 @@ impl Lock {
             sink,
             events.clone(),
             Some(hint),
+            reader,
         );
         let task = tokio::spawn(conductor.run(inbox, locked_at_start));
         Lock {
@@ -394,4 +404,236 @@ fn a_long_message_is_cut_at_a_character_boundary() {
     assert_eq!(cut_to.len(), MAX_NAME_LEN);
     assert!(cut(&format!("a{long}"), MAX_NAME_LEN).len() < MAX_NAME_LEN);
     assert_eq!(cut("short", MAX_NAME_LEN), "short");
+}
+
+/// A reader that does nothing on its own: each run is announced on a
+/// channel, the test sends its findings, and its stop is reported.
+struct FakeReader {
+    runs: UnboundedSender<FakeRun>,
+}
+
+/// One run of the [`FakeReader`]: its id, and a channel that closes when it
+/// was stopped.
+struct FakeRun {
+    id: u32,
+    user: String,
+    stopped: tokio::sync::oneshot::Receiver<()>,
+}
+
+impl Reader for FakeReader {
+    fn start(&mut self, user: &str, run: u32, _events: UnboundedSender<Event>) -> Run {
+        let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let (stopped_tx, stopped) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _ = stop_rx.await;
+            let _ = stopped_tx.send(());
+        });
+        let _ = self.runs.send(FakeRun {
+            id: run,
+            user: user.to_owned(),
+            stopped,
+        });
+        Run::new(stop, task)
+    }
+}
+
+const READY: &str = "Touch the fingerprint reader";
+
+/// A conductor with a fake reader, and where its runs are announced.
+fn with_fake_reader(pam: Arc<dyn Pam>) -> (Lock, UnboundedReceiver<FakeRun>) {
+    let (runs, announced) = unbounded_channel();
+    let lock = Lock::with_reader(pam, false, Some(Box::new(FakeReader { runs })));
+    (lock, announced)
+}
+
+async fn next_run(runs: &mut UnboundedReceiver<FakeRun>) -> FakeRun {
+    tokio::time::timeout(WAIT, runs.recv())
+        .await
+        .expect("a run in time")
+        .expect("the reader's channel")
+}
+
+async fn stopped(run: FakeRun) {
+    tokio::time::timeout(WAIT, run.stopped)
+        .await
+        .expect("the run is stopped in time")
+        .expect("the run's task said so");
+}
+
+impl Lock {
+    fn finger(&self, run: u32, finger: Finger) {
+        self.send(Event::Finger { run, finger });
+    }
+}
+
+/// A match while the password is being asked for ends the conversation as
+/// a success and unlocks; the ask PAM is blocked on reads a dismissal, and
+/// the end the thread sends for it changes nothing. The run stops with the
+/// lock.
+#[tokio::test]
+async fn a_match_ends_the_conversation_unlocks_and_cancels_the_ask() {
+    let (seen_tx, seen) = std::sync::mpsc::channel();
+    let seen_tx = Mutex::new(seen_tx);
+    let pam = Scripted(move |conv: &mut Conversation| {
+        let cancelled = matches!(conv.ask(false, DRY_RUN_ASK), Reply::Cancelled);
+        let _ = seen_tx.lock().unwrap().send(cancelled);
+        Verdict::Dismissed
+    });
+    let (mut lock, mut runs) = with_fake_reader(Arc::new(pam));
+    lock.locked().await;
+    let run = next_run(&mut runs).await;
+    assert_eq!(run.user, "tester");
+    let id = lock.expect_ask().await;
+    lock.finger(
+        run.id,
+        Finger::Ready {
+            how: READY.to_owned(),
+        },
+    );
+    assert_eq!(lock.expect(PROMPT_INFO, 0, READY).await, id);
+    lock.finger(run.id, Finger::Match);
+    assert_eq!(lock.expect(PROMPT_DONE, 1, "").await, id);
+    lock.expect_lock(LOCK_UNLOCK).await;
+    let cancelled = tokio::task::spawn_blocking(move || seen.recv_timeout(WAIT))
+        .await
+        .unwrap()
+        .expect("the PAM thread saw its reply");
+    assert!(cancelled, "the pending ask was not cancelled");
+    // The thread's Dismissed is for a conversation no longer on: no failed
+    // end, no fresh conversation.
+    lock.silent(Duration::from_millis(300)).await;
+    stopped(run).await;
+    assert_eq!(lock.status().await, "ok locked=yes attempts=0");
+    lock.canvas(CANVAS_EVENT_UNLOCKED);
+    assert!(!lock.hint().await);
+    assert_eq!(lock.close().await, 0);
+}
+
+/// A fresh conversation after a wrong password says again, under its
+/// title, that the reader is live; a no-match is an error line under the
+/// conversation on screen and is not a failed attempt.
+#[tokio::test]
+async fn a_fresh_conversation_gets_the_ready_line_again() {
+    let (mut lock, mut runs) = with_fake_reader(Arc::new(DryRun::new(Secret::new(RIGHT.to_vec()))));
+    lock.locked().await;
+    let run = next_run(&mut runs).await;
+    let first = lock.expect_ask().await;
+    lock.finger(
+        run.id,
+        Finger::Ready {
+            how: READY.to_owned(),
+        },
+    );
+    lock.expect(PROMPT_INFO, 0, READY).await;
+    lock.finger(run.id, Finger::NoMatch);
+    assert_eq!(lock.expect(PROMPT_ERROR, 0, NOT_RECOGNISED).await, first);
+    assert_eq!(lock.status().await, "ok locked=yes attempts=0");
+    lock.type_in(first, b"wrong");
+    lock.expect(PROMPT_ERROR, 0, DRY_RUN_FAILURE).await;
+    lock.expect(PROMPT_DONE, 0, "").await;
+    let second = lock.expect(PROMPT_INFO, PROMPT_INFO_TITLE, "tester").await;
+    assert_eq!(lock.expect(PROMPT_INFO, 0, READY).await, second);
+    assert_eq!(lock.expect(PROMPT_SECRET, 0, DRY_RUN_ASK).await, second);
+    assert_eq!(lock.status().await, "ok locked=yes attempts=1");
+    // The password still unlocks, and the run stops with the lock.
+    lock.type_in(second, RIGHT);
+    lock.expect(PROMPT_DONE, 1, "").await;
+    lock.expect_lock(LOCK_UNLOCK).await;
+    stopped(run).await;
+    assert_eq!(lock.close().await, 0);
+}
+
+/// A line while the answer is with PAM is held until PAM speaks again: an
+/// error line then would read to the host as the answer's failure.
+#[tokio::test]
+async fn a_line_while_pam_verifies_waits_for_pam() {
+    let (go_tx, go) = std::sync::mpsc::channel::<()>();
+    let go = Mutex::new(go);
+    let pam = Scripted(move |conv: &mut Conversation| {
+        let Reply::Text(_) = conv.ask(false, DRY_RUN_ASK) else {
+            return Verdict::Dismissed;
+        };
+        let _ = go.lock().unwrap().recv_timeout(WAIT);
+        Verdict::Failed(DRY_RUN_FAILURE.to_owned())
+    });
+    let (mut lock, mut runs) = with_fake_reader(Arc::new(pam));
+    lock.locked().await;
+    let run = next_run(&mut runs).await;
+    let first = lock.expect_ask().await;
+    // One channel, read in order: the answer is with PAM when the line
+    // comes.
+    lock.type_in(first, b"anything");
+    lock.finger(run.id, Finger::NoMatch);
+    lock.silent(Duration::from_millis(200)).await;
+    go_tx.send(()).unwrap();
+    lock.expect(PROMPT_ERROR, 0, DRY_RUN_FAILURE).await;
+    lock.expect(PROMPT_DONE, 0, "").await;
+    let second = lock.expect(PROMPT_INFO, PROMPT_INFO_TITLE, "tester").await;
+    assert_eq!(lock.expect(PROMPT_ERROR, 0, NOT_RECOGNISED).await, second);
+    assert_eq!(lock.close().await, 0);
+}
+
+/// A match in the pause after a PAM that asked nothing unlocks all the
+/// same; a line in that pause waits for the next conversation; and the
+/// pause's end starts nothing once unlocking.
+#[tokio::test]
+async fn a_match_during_a_retry_pause_unlocks() {
+    let pam = Scripted(|_conv: &mut Conversation| Verdict::Failed("Permission denied".to_owned()));
+    let (mut lock, mut runs) = with_fake_reader(Arc::new(pam));
+    lock.locked().await;
+    let run = next_run(&mut runs).await;
+    lock.expect(PROMPT_INFO, PROMPT_INFO_TITLE, "tester").await;
+    lock.expect(PROMPT_ERROR, 0, "Permission denied").await;
+    lock.expect(PROMPT_DONE, 0, "").await;
+    lock.finger(run.id, Finger::NoMatch);
+    lock.silent(Duration::from_millis(100)).await;
+    lock.expect(PROMPT_INFO, PROMPT_INFO_TITLE, "tester").await;
+    lock.expect(PROMPT_ERROR, 0, NOT_RECOGNISED).await;
+    lock.expect(PROMPT_ERROR, 0, "Permission denied").await;
+    lock.expect(PROMPT_DONE, 0, "").await;
+    // The second pause: a match in it.
+    lock.finger(run.id, Finger::Match);
+    lock.expect_lock(LOCK_UNLOCK).await;
+    stopped(run).await;
+    lock.silent(FIRST_PAUSE * 2 + Duration::from_millis(300))
+        .await;
+    assert_eq!(lock.close().await, 0);
+}
+
+/// The run lasts as long as the lock: the unlock stops it, the next lock
+/// starts a fresh one, and a finding of the old run is dropped.
+#[tokio::test]
+async fn leaving_locked_stops_the_run_and_a_stale_finding_is_dropped() {
+    let (mut lock, mut runs) = with_fake_reader(Arc::new(DryRun::new(Secret::new(RIGHT.to_vec()))));
+    lock.locked().await;
+    let old = next_run(&mut runs).await;
+    let id = lock.expect_ask().await;
+    lock.type_in(id, RIGHT);
+    lock.expect(PROMPT_DONE, 1, "").await;
+    lock.expect_lock(LOCK_UNLOCK).await;
+    let old_id = old.id;
+    stopped(old).await;
+    lock.canvas(CANVAS_EVENT_UNLOCKED);
+    assert!(!lock.hint().await);
+    lock.locked().await;
+    let new = next_run(&mut runs).await;
+    assert_ne!(new.id, old_id);
+    lock.expect_ask().await;
+    lock.finger(old_id, Finger::Match);
+    lock.silent(Duration::from_millis(200)).await;
+    assert_eq!(lock.status().await, "ok locked=yes attempts=0");
+    // Closing stdin stops the live run too.
+    assert_eq!(lock.close().await, 0);
+    stopped(new).await;
+}
+
+/// The reader off: no run, ever.
+#[tokio::test]
+async fn no_reader_starts_no_run() {
+    let mut lock = Lock::dry_run();
+    lock.locked().await;
+    lock.expect_ask().await;
+    lock.finger(1, Finger::Match);
+    lock.silent(Duration::from_millis(200)).await;
+    assert_eq!(lock.close().await, 0);
 }
