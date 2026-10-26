@@ -146,7 +146,7 @@ when the lock comes is ended.
 ```sh
 caustics-canvasctl lock                 # lock now
 caustics-canvasctl lock --wait && systemctl suspend   # the before-sleep hold
-caustics-canvasctl status               # the lock's line: ok locked=yes attempts=0
+caustics-canvasctl status               # a second line, the lock's: locked=yes attempts=0
 ```
 
 If the compositor ends the lock or will not give it (another locker holds
