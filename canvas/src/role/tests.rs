@@ -62,7 +62,8 @@ fn each_role_is_its_layer_its_keyboard_and_its_target() {
 fn the_lock_is_a_lock_surface_with_the_prompts_look() {
     assert_eq!(Role::Lock.layer(), None);
     assert!(!Role::Lock.commits_before_configure());
-    assert_eq!(Role::Lock.target(), TARGET_PROMPT);
+    assert_eq!(Role::Lock.target(), TARGET_LOCK);
+    assert_ne!(Role::Lock.target(), Role::Top.target());
     assert!(Role::Lock.carries_prompt());
     assert!(!Role::Lock.input_cancels());
     assert!(!Role::Lock.sizes_the_picture());
@@ -73,4 +74,21 @@ fn the_lock_is_a_lock_surface_with_the_prompts_look() {
             .map(|role| role.name())
             .collect();
     assert_eq!(names.len(), 4, "the journal tells every role apart");
+}
+
+/// The pointer is told to the caustic on the background and the lock, where
+/// it stirs the wake, and nowhere else: on the overlay it is a cancel, and on
+/// the prompt's pane the panel's.
+#[test]
+fn only_the_background_and_the_lock_are_stirred() {
+    assert!(Role::Background.stirs());
+    assert!(Role::Lock.stirs());
+    assert!(!Role::Overlay.stirs());
+    assert!(!Role::Top.stirs());
+    for role in [Role::Background, Role::Overlay, Role::Top, Role::Lock] {
+        assert!(
+            !(role.stirs() && role.input_cancels()),
+            "{role:?}: a surface whose pointer is a cancel stirs nothing"
+        );
+    }
 }

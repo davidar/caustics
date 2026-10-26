@@ -14,11 +14,13 @@
 //                          frame.
 //   canvas_draw   8x8    — onto one surface's swapchain image, by
 //                          `params.target`: on the background, the two source
-//                          pictures at that alpha, opaque; on the overlay,
-//                          the same wallpaper, darkened by `DIM_DARKEN`, at
-//                          the dim's alpha, premultiplied; on the prompt's
-//                          pane, the wallpaper darkened by `PROMPT_DARKEN` and
-//                          the panel on it.
+//                          pictures at that alpha, opaque, seen through the
+//                          pointer's wake; on the overlay, the same
+//                          wallpaper, darkened by `DIM_DARKEN`, at the dim's
+//                          alpha, premultiplied; on the prompt's pane, the
+//                          wallpaper darkened by `PROMPT_DARKEN` and the
+//                          panel on it; on a lock surface, the prompt's
+//                          look, seen through the wake.
 //
 // **The secret never enters the caustic** (docs/canvas.md, *Why a caustic*).
 // What an echo-off ask has typed reaches here as a count, and the panel draws
@@ -31,6 +33,10 @@
 // cross-fade, so as its alpha rises the windows dissolve and the desktop's
 // picture is what remains; at `DIM_DARKEN` 0 an overlay at full alpha is
 // pixel for pixel the background with no windows.
+//
+// **The wake** is `canvas_wake.slang`'s, over `water.slang`'s physics, on
+// the background and the lock surfaces only: on the overlay the pointer is a
+// cancel, and on the prompt's pane the panel's.
 //
 // **A fade is between the sources, never a compound of the last frame**
 // (docs/canvas.md, *Time*): alpha is a function of the time alone, so a
@@ -47,6 +53,7 @@ import canvas_abi;
 import canvas_tunables;
 import canvas_state;
 import canvas_text;
+import canvas_wake;
 
 /// One text block a group: the prompt's few runs, each walked by one thread,
 /// as the bar's `bar_shape` walks its blocks.
@@ -166,6 +173,8 @@ void canvas_apply()
     // background while its fade runs, the overlay while its alpha moves. A
     // settled surface draws nothing until something changes; the prompt's
     // pane changes only when the host writes something new.
+    // The background and a lock surface while a wake lives on them, too.
+    bool stirred = step_wake(f);
     bool more = false;
     if (params.target == TARGET_OVERLAY)
     {
@@ -173,9 +182,14 @@ void canvas_apply()
     }
     else if (params.target == TARGET_BACKGROUND)
     {
-        more = fading && t < 1.0;
+        more = (fading && t < 1.0) || stirred;
+    }
+    else if (params.target == TARGET_LOCK)
+    {
+        more = stirred;
     }
     state[0].wants_redraw = more ? 1u : 0u;
+    state[0].wants_pointer = wake_alpha() > 0.0 ? 1u : 0u;
 
     apply_prompt(f.prompt);
     apply_text();
@@ -219,10 +233,17 @@ void apply_prompt(CanvasPrompt pr)
             witness0(WITNESS_INFO, getStringHash("prompt: closed"));
         }
     }
-    if (params.target == TARGET_PROMPT)
+    if (carries_prompt())
     {
         layout_prompt(pr);
     }
+}
+
+/// Whether the surface being drawn carries the prompt's panel: the prompt's
+/// pane, and a lock surface.
+bool carries_prompt()
+{
+    return params.target == TARGET_PROMPT || params.target == TARGET_LOCK;
 }
 
 /// The text's witnesses and the runs to cover, and the shape pass's
@@ -375,13 +396,38 @@ float rounded(float4 r, float radius, float2 p)
     return saturate(0.5 - d);
 }
 
-/// The prompt's pane at `p`, over the wallpaper's `colour` there: the
-/// wallpaper darkened by `PROMPT_DARKEN`, the panel, its four rows. Held
-/// (no ask yet) the panel has its title and line and no field: the same
-/// size, so nothing moves when the ask comes.
-float3 draw_prompt(CanvasPrompt pr, float3 colour, float2 p)
+/// The wallpaper's `colour` as the prompt's pane and the lock show it:
+/// darkened towards `DIM_COLOUR` by `PROMPT_DARKEN`.
+float3 prompt_floor(float3 colour)
 {
-    float4 col = float4(lerp(colour, DIM_COLOUR, saturate(PROMPT_DARKEN)), 1.0);
+    return lerp(colour, DIM_COLOUR, saturate(PROMPT_DARKEN));
+}
+
+/// The wallpaper at `p` seen through the wake, each channel at its own
+/// shift along the surface's slope, as `prompt_floor` darkens it when
+/// `darkened`, and lit by the water; the plain one where the water is flat.
+float3 through_water(float2 p, bool darkened)
+{
+    float2 slope;
+    float3 shift;
+    float3 light;
+    if (!wake_at(p, slope, shift, light))
+    {
+        float3 plain = wallpaper(p);
+        return darkened ? prompt_floor(plain) : plain;
+    }
+    float3 bent = float3(wallpaper(p + shift.r * slope).r, wallpaper(p + shift.g * slope).g,
+                         wallpaper(p + shift.b * slope).b);
+    return wake_lit(darkened ? prompt_floor(bent) : bent, light);
+}
+
+/// The prompt's pane at `p`, over `floor`, the darkened wallpaper there
+/// (`prompt_floor`): the panel, its four rows. Held (no ask yet) the panel
+/// has its title and line and no field: the same size, so nothing moves when
+/// the ask comes.
+float3 draw_prompt(CanvasPrompt pr, float3 floor, float2 p)
+{
+    float4 col = float4(floor, 1.0);
     PromptLayout l = private[0].prompt;
     if (pr.state == PROMPT_IDLE || any(p < l.panel.xy) || any(p >= l.panel.zw))
     {
@@ -454,11 +500,24 @@ void canvas_draw(uint3 gid: SV_DispatchThreadID)
         return;
     }
     float2 p = float2(gid.xy) + 0.5;
-    float3 colour = wallpaper(p);
     CanvasPrompt pr = facts[0].prompt;
+    if (params.target == TARGET_LOCK)
+    {
+        // The prompt's look, the water over its floor and the panel over
+        // the water.
+        dst.Store(gid.xy, float4(draw_prompt(pr, through_water(p, true), p), 1.0));
+        return;
+    }
+    if (params.target == TARGET_BACKGROUND)
+    {
+        // Opaque: the background layer is the bottom of the output.
+        dst.Store(gid.xy, float4(through_water(p, false), 1.0));
+        return;
+    }
+    float3 colour = wallpaper(p);
     if (params.target == TARGET_PROMPT)
     {
-        dst.Store(gid.xy, float4(draw_prompt(pr, colour, p), 1.0));
+        dst.Store(gid.xy, float4(draw_prompt(pr, prompt_floor(colour), p), 1.0));
         return;
     }
     if (params.target == TARGET_OVERLAY && pr.state != PROMPT_IDLE)
@@ -479,6 +538,5 @@ void canvas_draw(uint3 gid: SV_DispatchThreadID)
         dst.Store(gid.xy, float4(dimmed * d, d));
         return;
     }
-    // Opaque: the background layer is the bottom of the output.
-    dst.Store(gid.xy, float4(colour, 1.0));
+    dst.Store(gid.xy, float4(0.0, 0.0, 0.0, 0.0));
 }

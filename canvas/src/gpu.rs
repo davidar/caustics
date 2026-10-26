@@ -691,14 +691,16 @@ impl Gpu {
     }
 
     /// Draw one frame on one surface into the image [`Gpu::acquire`] gave,
-    /// as `role` (`TARGET_*`: the background or the overlay), present it and
-    /// read the state back. Returns the frame stamp the witness ring carries.
+    /// as `role` (`TARGET_*`) on pane `pane` (`CanvasParams::pane`), present
+    /// it and read the state back. Returns the frame stamp the witness ring
+    /// carries.
     pub fn draw(
         &mut self,
         target: &mut Surface,
         frame: surface::Frame,
         scale: u32,
         role: u32,
+        pane: u32,
     ) -> Result<u32> {
         let view = frame
             .texture
@@ -706,7 +708,7 @@ impl Gpu {
             .create_view(&wgpu::TextureViewDescriptor::default());
         let (width, height) = target.size();
         self.shape_if_pending();
-        self.dispatch(&target.params, &view, width, height, scale, role);
+        self.dispatch(&target.params, &view, width, height, scale, role, pane);
         self.queue.present(frame.texture);
         if frame.suboptimal {
             target.refit_once(&self.device);
@@ -715,6 +717,7 @@ impl Gpu {
     }
 
     /// One frame's work: the uniform, both entry points, the copy back.
+    #[allow(clippy::too_many_arguments)]
     fn dispatch(
         &self,
         params: &wgpu::Buffer,
@@ -723,9 +726,10 @@ impl Gpu {
         height: u32,
         scale: u32,
         role: u32,
+        pane: u32,
     ) {
         let (now_lo, now_hi) = clock::words(clock::boottime_ms());
-        self.write_params(params, width, height, scale, now_lo, now_hi, role);
+        self.write_params(params, width, height, scale, now_lo, now_hi, role, pane);
         self.encode(params, dst, width, height);
     }
 
@@ -739,6 +743,7 @@ impl Gpu {
         now_lo: u32,
         now_hi: u32,
         role: u32,
+        pane: u32,
     ) {
         let words = CanvasParams {
             width,
@@ -748,7 +753,7 @@ impl Gpu {
             now_lo,
             now_hi,
             target: role,
-            ..CanvasParams::default()
+            pane,
         };
         self.queue.write_buffer(params, 0, as_bytes(&words));
     }

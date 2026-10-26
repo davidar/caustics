@@ -89,6 +89,53 @@ public static const float3 PROMPT_INK = float3(0.92, 0.93, 0.95);
 public static const float3 PROMPT_MUTED_INK = float3(0.62, 0.64, 0.69);
 public static const float3 PROMPT_ERROR_INK = float3(0.95, 0.45, 0.42);
 
+// ---------------------------------------------------------------------------
+// The wake (docs/canvas.md, *The wake*). The wallpaper is the floor of a
+// shallow pool. Moving the pointer over the bare desktop, or over a lock
+// screen, stirs the water above it: the picture is seen through the waves,
+// bent by them, and the light they refract onto the floor is drawn on it, a
+// bright net where the waves focus it, faintly coloured on its flanks. A
+// click drops a wave of its own. Only motion stirs the water: a pointer at
+// rest excites nothing, and WAKE_SETTLE_S after the last motion the water is
+// flat and the surface draws no more frames. The names are the bar's
+// (bar_tunables.slang, *the wake*); the values are the canvas's own. Sizes
+// are logical px.
+// ---------------------------------------------------------------------------
+
+/// How bright the refracted light gets on the desktop, as an alpha; also how
+/// far the floor darkens where the waves spread the light thin. 0 turns the
+/// wake off everywhere, and then the pointer costs no frame at all.
+public static const float WAKE_ALPHA = 0.26;
+/// The lock screen's light, as a multiple of WAKE_ALPHA: its floor is the
+/// darkened wallpaper, where the same net reads brighter. 0 keeps the lock's
+/// water still.
+public static const float WAKE_LOCK = 1.5;
+/// The light's colour: sunlight through water, a little warm.
+public static const float3 WAKE_LIGHT_RGB = float3(1.0, 0.97, 0.90);
+/// Wave height a stroke at WAKE_FULL_SPEED raises: the strength. Taller
+/// waves fold the light sooner, into a finer and brighter net, and bend the
+/// picture further.
+public static const float WAKE_HEIGHT = 2.2;
+/// Pointer speed that raises waves WAKE_HEIGHT tall, logical px/s; slower
+/// motion raises proportionally less.
+public static const float WAKE_FULL_SPEED = 900.0;
+/// A click's wave, as a multiple of WAKE_HEIGHT.
+public static const float WAKE_CLICK = 1.6;
+/// Crest to crest: the mesh of the net.
+public static const float WAKE_WAVELENGTH = 28.0;
+/// How fast the waves run out from where they were raised, logical px/s.
+public static const float WAKE_SPEED = 170.0;
+/// Seconds a wave lives, damping smoothly to flat: the longest a surface
+/// keeps drawing after the pointer stops.
+public static const float WAKE_SETTLE_S = 1.6;
+/// Depth of the pool. Deeper water focuses the same waves further, into a
+/// sharper and busier net, and shifts the picture seen through it further.
+public static const float WAKE_DEPTH = 90.0;
+/// Water's dispersion, as a multiple of the real thing: how far the warm and
+/// cool fringes part on a fold's flanks, and the picture's colours where the
+/// water bends it. 0 is white light, one band.
+public static const float WAKE_DISPERSION = 4.0;
+
 /// How many milliseconds one `canvas_shape` pass may take on the device
 /// before the host stops shaping until the font's arena is written again: a
 /// prompt's few runs take well under one, so this is far past a healthy pass

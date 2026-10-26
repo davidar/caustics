@@ -22,6 +22,7 @@ mod dim;
 mod gpu;
 mod keys;
 mod lock;
+mod pointer;
 mod prompt;
 mod role;
 mod sidecars;

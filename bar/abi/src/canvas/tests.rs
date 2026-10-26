@@ -15,11 +15,12 @@ fn canvas_params_layout() {
     assert_eq!(offset_of!(CanvasParams, now_lo), 16);
     assert_eq!(offset_of!(CanvasParams, now_hi), 20);
     assert_eq!(offset_of!(CanvasParams, target), 24);
+    assert_eq!(offset_of!(CanvasParams, pane), 28);
 }
 
 #[test]
 fn canvas_facts_layout() {
-    assert_eq!(size_of::<CanvasFacts>(), 144);
+    assert_eq!(size_of::<CanvasFacts>(), 160);
     assert_eq!(offset_of!(CanvasFacts, show), 0);
     assert_eq!(offset_of!(CanvasFacts, dim), 32);
     assert_eq!(offset_of!(CanvasFacts, from_slot), 64);
@@ -27,6 +28,10 @@ fn canvas_facts_layout() {
     assert_eq!(offset_of!(CanvasFacts, shows), 72);
     assert_eq!(offset_of!(CanvasFacts, literal_count), 76);
     assert_eq!(offset_of!(CanvasFacts, prompt), 80);
+    assert_eq!(offset_of!(CanvasFacts, pointer_pane), 144);
+    assert_eq!(offset_of!(CanvasFacts, pointer_x), 148);
+    assert_eq!(offset_of!(CanvasFacts, pointer_y), 152);
+    assert_eq!(offset_of!(CanvasFacts, presses), 156);
 }
 
 #[test]
@@ -51,9 +56,9 @@ fn canvas_state_layout() {
     assert_eq!(size_of::<Note>(), 48);
     assert_eq!(
         size_of::<CanvasState>(),
-        32 + 16 * CANVAS_TEXT_BLOCKS + 48 * MAX_CANVAS_WITNESSES
+        48 + 16 * CANVAS_TEXT_BLOCKS + 48 * MAX_CANVAS_WITNESSES
     );
-    assert_eq!(size_of::<CanvasState>(), 1648);
+    assert_eq!(size_of::<CanvasState>(), 1664);
     assert_eq!(offset_of!(CanvasState, wants_redraw), 0);
     assert_eq!(offset_of!(CanvasState, witness_frame), 4);
     assert_eq!(offset_of!(CanvasState, witness_count), 8);
@@ -62,8 +67,9 @@ fn canvas_state_layout() {
     assert_eq!(offset_of!(CanvasState, dim_id), 20);
     assert_eq!(offset_of!(CanvasState, shape_watchdog_ms), 24);
     assert_eq!(offset_of!(CanvasState, cover_count), 28);
-    assert_eq!(offset_of!(CanvasState, covers), 32);
-    assert_eq!(offset_of!(CanvasState, witnesses), 112);
+    assert_eq!(offset_of!(CanvasState, wants_pointer), 32);
+    assert_eq!(offset_of!(CanvasState, covers), 48);
+    assert_eq!(offset_of!(CanvasState, witnesses), 128);
 }
 
 /// The ring is read against the frame it was stamped with, and never past

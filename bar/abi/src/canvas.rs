@@ -14,15 +14,17 @@
 //! Seven buffers of its own, by name (docs/abi.md, *The canvas's buffer*):
 //!
 //! - **`params`**, one [`CanvasParams`] per surface (an output's background,
-//!   its overlay while a dim is up, its prompt pane while a prompt is): its
-//!   size, its scale, the frame stamp, the time and which surface it is,
-//!   written before every frame drawn on it;
+//!   its overlay while a dim is up, its prompt pane while a prompt is, its
+//!   lock surface while the session is locked): its size, its scale, the
+//!   frame stamp, the time, which surface it is and which pane, written
+//!   before every frame drawn on it;
 //! - **`facts`**, one [`CanvasFacts`]: what the host was told, where it put
-//!   the pictures, and the prompt up now ([`CanvasPrompt`]), written whole
-//!   when any of them changes;
+//!   the pictures, the prompt up now ([`CanvasPrompt`]) and where the pointer
+//!   is, written whole when any of them changes;
 //! - **`state`**, one [`CanvasState`]: the one buffer read back, a witness
-//!   ring, `wants_redraw`, whether the dim has reached its depth, the shape
-//!   pass's threshold and the runs the font could not draw;
+//!   ring, `wants_redraw` and `wants_pointer`, whether the dim has reached
+//!   its depth, the shape pass's threshold and the runs the font could not
+//!   draw;
 //! - **`private`**, the caustic's own, at the stride Slang's reflection
 //!   reports, which the host allocates and never reads or writes;
 //! - **`runs`**, [`CANVAS_GLYPHS`] shaped glyphs, the caustic's as `private`
@@ -117,6 +119,10 @@ abi_consts! {
     /// The prompt's pane on the top layer, up only while a prompt is: the
     /// wallpaper darkened by `PROMPT_DARKEN`, opaque, and the panel on it.
     pub const TARGET_PROMPT: u32 = 2;
+    /// A lock surface, up only while the session is locked: what the
+    /// prompt's pane draws, the panel while a conversation is up, and the
+    /// pointer's wake under it.
+    pub const TARGET_LOCK: u32 = 3;
 }
 
 abi_struct! {
@@ -140,7 +146,9 @@ abi_struct! {
         pub now_hi: u32,
         /// `TARGET_*`: which surface of the output this frame is drawn on.
         pub target: u32,
-        pub _pad1: u32,
+        /// Which pane this surface is, ≥ 1, never reused while the host
+        /// runs: what [`CanvasFacts::pointer_pane`] names.
+        pub pane: u32,
     }
 }
 
@@ -189,11 +197,11 @@ abi_struct! {
 
 abi_struct! {
     /// What the host knows (storage `facts`), written whole whenever it
-    /// changes: the picture, the dim, the prompt. 144 B.
+    /// changes: the picture, the dim, the prompt, the pointer. 160 B.
     ///
     /// The two commands are the wire's heads, copied: the host reads a show's
     /// key to put the image it names in a slot, and nothing else of either.
-    { #[repr(C, align(16))] #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)] }
+    { #[repr(C, align(16))] #[derive(Clone, Copy, Debug, Default, PartialEq)] }
     pub struct CanvasFacts {
         /// The last `CANVAS_SHOW`, as it crossed the wire; zero before one.
         pub show: CanvasBody,
@@ -211,6 +219,15 @@ abi_struct! {
         pub literal_count: u32,
         /// The prompt up now; `state` `PROMPT_IDLE` when there is none.
         pub prompt: CanvasPrompt,
+        /// The pane (`CanvasParams::pane`) the pointer is on, when that is
+        /// a background or a lock surface; 0 when it is on neither.
+        pub pointer_pane: u32,
+        /// Where on that pane, its buffer's px, as the compositor last said.
+        pub pointer_x: f32,
+        pub pointer_y: f32,
+        /// Buttons pressed on those panes since the host started: a new
+        /// value is a press, where the pointer is.
+        pub presses: u32,
     }
 }
 
@@ -231,9 +248,10 @@ abi_struct! {
 
 abi_struct! {
     /// The one buffer the host reads back (storage `state`), after every
-    /// frame: the caustic's witness ring, the word that says the surface just
-    /// drawn wants another frame, the two that say the dim is at its depth,
-    /// the shape pass's threshold, and the runs to cover. 1648 B.
+    /// frame: the caustic's witness ring, the words that say the surface just
+    /// drawn wants another frame and wants one when the pointer moves on it,
+    /// the two that say the dim is at its depth, the shape pass's threshold,
+    /// and the runs to cover. 1664 B.
     { #[repr(C, align(16))] #[derive(Clone, Copy, Debug, PartialEq)] }
     pub struct CanvasState {
         /// Non-zero when the surface this frame was drawn on (its
@@ -258,6 +276,13 @@ abi_struct! {
         pub shape_watchdog_ms: u32,
         /// Live entries of `covers`.
         pub cover_count: u32,
+        /// Non-zero when the pointer moving on the surface this frame was
+        /// drawn on is something the caustic draws (its wake): the host
+        /// draws that surface again when it does. 0, a motion is no frame.
+        pub wants_pointer: u32,
+        pub _pad0: u32,
+        pub _pad1: u32,
+        pub _pad2: u32,
         /// The text blocks the font has a glyph missing for, as bytes; empty
         /// while no block can be drawn at all (no font has landed yet).
         pub covers: [CanvasCover; CANVAS_TEXT_BLOCKS],
@@ -275,6 +300,10 @@ impl CanvasState {
         dim_id: 0,
         shape_watchdog_ms: 0,
         cover_count: 0,
+        wants_pointer: 0,
+        _pad0: 0,
+        _pad1: 0,
+        _pad2: 0,
         covers: [CanvasCover {
             source: 0,
             off: 0,

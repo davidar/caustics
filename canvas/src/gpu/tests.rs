@@ -181,7 +181,7 @@ fn frame_on(gpu: &mut Gpu, now: u64, role: u32) -> (u32, [u8; 4]) {
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
     let (lo, hi) = clock::words(now);
-    gpu.write_params(&target.params, SIDE, SIDE, 120, lo, hi, role);
+    gpu.write_params(&target.params, SIDE, SIDE, 120, lo, hi, role, 1);
     gpu.shape_if_pending();
     gpu.encode(&target.params, &view, SIDE, SIDE);
     let stamp = gpu.finish().expect("the frame completes");
@@ -528,6 +528,19 @@ fn with_font() -> Gpu {
 
 /// A whole frame of `role` at `width` x `height`, scale 1, as RGBA8.
 fn image_on(gpu: &mut Gpu, width: u32, height: u32, role: u32) -> Vec<[u8; 4]> {
+    image_at(gpu, width, height, role, 1, 1_000)
+}
+
+/// A whole frame of `role` on pane `pane`, drawn at `now` ms, at `width` x
+/// `height`, scale 1, as RGBA8.
+fn image_at(
+    gpu: &mut Gpu,
+    width: u32,
+    height: u32,
+    role: u32,
+    pane: u32,
+    now: u64,
+) -> Vec<[u8; 4]> {
     let target = gpu.configure(None, width, height);
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("canvas-test-text-dst"),
@@ -544,8 +557,8 @@ fn image_on(gpu: &mut Gpu, width: u32, height: u32, role: u32) -> Vec<[u8; 4]> {
         view_formats: &[],
     });
     let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-    let (lo, hi) = clock::words(1_000);
-    gpu.write_params(&target.params, width, height, 120, lo, hi, role);
+    let (lo, hi) = clock::words(now);
+    gpu.write_params(&target.params, width, height, 120, lo, hi, role, pane);
     gpu.shape_if_pending();
     gpu.encode(&target.params, &view, width, height);
     gpu.finish().expect("the frame completes");
@@ -707,4 +720,358 @@ fn the_prompt_draws_its_text_on_the_device() {
     }
     assert_eq!(gpu.mirror().cover_count, 0, "the font draws both runs");
     assert!(!gpu.shape_blocked());
+}
+
+// -- On a device: the wake ------------------------------------------------------
+
+/// A canvas showing `image` in slot A, cut in, with the pointer nowhere.
+fn showing(image: &Image) -> (Gpu, CanvasFacts) {
+    let mut gpu = Gpu::headless().expect("a Vulkan adapter (lavapipe will do)");
+    gpu.upload(SLOT_A, image).expect("uploads");
+    let facts = CanvasFacts {
+        show: Canvas::Show {
+            key: image.key.clone(),
+            fade_start_ms: 0,
+            fade_duration_ms: 0,
+        }
+        .body(),
+        from_slot: NO_INDEX,
+        to_slot: SLOT_A,
+        shows: 1,
+        ..CanvasFacts::default()
+    };
+    gpu.write_facts(&facts);
+    (gpu, facts)
+}
+
+/// How many pixels of `a` and `b` differ, inside columns `x0..x1`.
+fn differing(a: &[[u8; 4]], b: &[[u8; 4]], width: u32, x0: u32, x1: u32) -> usize {
+    a.iter()
+        .zip(b)
+        .enumerate()
+        .filter(|(i, (p, q))| {
+            let x = *i as u32 % width;
+            x >= x0 && x < x1 && p[..3] != q[..3]
+        })
+        .count()
+}
+
+/// The wake on a lock surface: the pointer moving on its pane stirs the
+/// water around its path and nowhere far from it, the pane asks for frames
+/// while it does, another pane drawn at the same moment is the plain lock,
+/// a press drops a wave of its own, and `WAKE_SETTLE_S` after the last
+/// source the lock is the resting picture pixel for pixel and asks for
+/// nothing. The prompt's pane, under the same pointer, is no pool.
+#[test]
+fn the_wake_stirs_the_lock_where_the_pointer_moves_and_settles_to_the_picture() {
+    use caustics_bar_abi::canvas::{TARGET_LOCK, TARGET_PROMPT};
+    if !gated() {
+        return;
+    }
+    let (mut gpu, mut facts) = showing(&solid("blue", [0, 0, 255, 255]));
+    let (width, height) = (640u32, 200u32);
+    let settle_ms = (tunable("WAKE_SETTLE_S")[0] * 1000.0) as u64;
+    let rest = image_at(&mut gpu, width, height, TARGET_LOCK, 1, 10_000);
+    assert_eq!(
+        gpu.mirror().wants_redraw,
+        0,
+        "a still lock asks for nothing"
+    );
+    assert_ne!(gpu.mirror().wants_pointer, 0, "the lock wants the pointer");
+
+    // A sweep along y = 100 from x = 40, 16 px a frame at 60 frames a
+    // second (960 px/s), half a second long.
+    let mut now = 10_000u64;
+    let mut moving = Vec::new();
+    for k in 0..30u32 {
+        now = 10_000 + u64::from(k) * 16;
+        facts.pointer_pane = 1;
+        facts.pointer_x = 40.0 + 6.0 * k as f32;
+        facts.pointer_y = 100.0;
+        gpu.write_facts(&facts);
+        moving = image_at(&mut gpu, width, height, TARGET_LOCK, 1, now);
+    }
+    let end_x = 40 + 6 * 29;
+    assert_ne!(
+        gpu.mirror().wants_redraw,
+        0,
+        "a stirred lock asks for its next frame"
+    );
+    let near = differing(&moving, &rest, width, 0, end_x + 60);
+    assert!(
+        near > 2_000,
+        "the water moved around the path: {near} px differ"
+    );
+    let far = differing(&moving, &rest, width, width - 40, width);
+    assert_eq!(far, 0, "nothing reaches the far end yet: {far} px differ");
+
+    // Another pane, at the same moment: its own water is flat.
+    let other = image_at(&mut gpu, width, height, TARGET_LOCK, 2, now);
+    assert_eq!(
+        differing(&other, &rest, width, 0, width),
+        0,
+        "pane 2 shows pane 1's wake"
+    );
+    assert_eq!(
+        gpu.mirror().wants_redraw,
+        0,
+        "pane 2 asks for frames for pane 1's wake"
+    );
+
+    // The prompt's pane is no pool, whoever's pointer is on it.
+    let prompt_rest = image_at(&mut gpu, width, height, TARGET_PROMPT, 3, now);
+    facts.pointer_pane = 3;
+    for k in 0..20u32 {
+        facts.pointer_x = 40.0 + 12.0 * k as f32;
+        gpu.write_facts(&facts);
+        let prompt = image_at(
+            &mut gpu,
+            width,
+            height,
+            TARGET_PROMPT,
+            3,
+            now + u64::from(k) * 16,
+        );
+        assert_eq!(differing(&prompt, &prompt_rest, width, 0, width), 0);
+        assert_eq!(
+            gpu.mirror().wants_pointer,
+            0,
+            "the prompt's pane wants no pointer"
+        );
+    }
+
+    // A press, back on the lock, after the sweep's sources have died: a
+    // wave at the pointer, at once.
+    facts.pointer_pane = 1;
+    facts.pointer_x = 500.0;
+    gpu.write_facts(&facts);
+    now += settle_ms + 100;
+    let arrived = image_at(&mut gpu, width, height, TARGET_LOCK, 1, now);
+    assert_eq!(
+        differing(&arrived, &rest, width, 0, width),
+        0,
+        "arriving is not moving"
+    );
+    facts.presses += 1;
+    gpu.write_facts(&facts);
+    let _ = image_at(&mut gpu, width, height, TARGET_LOCK, 1, now + 16);
+    let pressed = image_at(&mut gpu, width, height, TARGET_LOCK, 1, now + 300);
+    let ring = differing(&pressed, &rest, width, 400, width);
+    assert!(ring > 2_000, "a press drops a wave: {ring} px differ");
+    assert_ne!(gpu.mirror().wants_redraw, 0);
+
+    // And WAKE_SETTLE_S after it, the resting lock, which asks for nothing.
+    let settled = image_at(
+        &mut gpu,
+        width,
+        height,
+        TARGET_LOCK,
+        1,
+        now + 16 + settle_ms + 20,
+    );
+    assert_eq!(
+        differing(&settled, &rest, width, 0, width),
+        0,
+        "the water is flat again"
+    );
+    assert_eq!(
+        gpu.mirror().wants_redraw,
+        0,
+        "a settled lock asks for nothing"
+    );
+}
+
+/// Not a check: with `CAUSTICS_CANVAS_WAKE_DUMP=<dir>`, a pointer's sweep
+/// across a 1920x1080 background and a lock, drawn frame by frame, the
+/// frames timed (submission to readback, the host's own wait) and a few
+/// written as PPMs for looking at. `CAUSTICS_CANVAS_WAKE_PICTURE` names a
+/// binary PPM to draw the water over instead of a made-up picture.
+#[test]
+fn the_wake_drawn_for_a_look() {
+    use caustics_bar_abi::canvas::TARGET_LOCK;
+    if !gated() {
+        return;
+    }
+    let Some(dir) = std::env::var_os("CAUSTICS_CANVAS_WAKE_DUMP").map(PathBuf::from) else {
+        eprintln!("skipping: set CAUSTICS_CANVAS_WAKE_DUMP=<dir> to look at the wake");
+        return;
+    };
+    std::fs::create_dir_all(&dir).expect("the dump directory");
+    let picture = match std::env::var_os("CAUSTICS_CANVAS_WAKE_PICTURE") {
+        Some(path) => read_ppm(Path::new(&path)),
+        None => made_up_picture(480, 270),
+    };
+    let (width, height) = (1920u32, 1080u32);
+    let settle_ms = (tunable("WAKE_SETTLE_S")[0] * 1000.0) as u64;
+    for (name, role) in [("background", TARGET_BACKGROUND), ("lock", TARGET_LOCK)] {
+        let (mut gpu, mut facts) = showing(&picture);
+        let target = gpu.configure(None, width, height);
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("canvas-test-wake-dst"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        // A sweep in an arc, 1400 px/s, for 1.2 s; then a click; then rest.
+        let frames = 72u32;
+        let mut times = Vec::new();
+        let draw = |gpu: &mut Gpu, now: u64, times: &mut Vec<f64>| {
+            let (lo, hi) = clock::words(now);
+            gpu.write_params(&target.params, width, height, 120, lo, hi, role, 1);
+            let t0 = std::time::Instant::now();
+            gpu.encode(&target.params, &view, width, height);
+            gpu.finish().expect("the frame completes");
+            times.push(t0.elapsed().as_secs_f64() * 1000.0);
+        };
+        draw(&mut gpu, 100_000, &mut Vec::new());
+        for k in 0..frames {
+            let t = k as f32 / 60.0;
+            facts.pointer_pane = 1;
+            facts.pointer_x = 300.0 + 1400.0 * t * 0.8;
+            facts.pointer_y = 540.0 + 260.0 * (t * 3.0).sin();
+            if k == frames - 1 {
+                facts.presses += 1;
+            }
+            gpu.write_facts(&facts);
+            let now = 100_000 + u64::from(k) * 16;
+            draw(&mut gpu, now, &mut times);
+            if k == 36 || k == frames - 1 {
+                dump(
+                    &gpu,
+                    &texture,
+                    width,
+                    height,
+                    &dir.join(format!("{name}-{k}.ppm")),
+                );
+            }
+        }
+        let end = 100_000 + u64::from(frames) * 16;
+        for (label, after) in [("after-400ms", 400), ("after-900ms", 900)] {
+            draw(&mut gpu, end + after, &mut times);
+            dump(
+                &gpu,
+                &texture,
+                width,
+                height,
+                &dir.join(format!("{name}-{label}.ppm")),
+            );
+        }
+        draw(&mut gpu, end + settle_ms + 50, &mut Vec::new());
+        let settled = gpu.mirror().wants_redraw;
+        times.sort_by(f64::total_cmp);
+        let mean = times.iter().sum::<f64>() / times.len() as f64;
+        eprintln!(
+            "wake on the {name}, {width}x{height}: {} stirred frames, mean {mean:.2} ms, median {:.2} ms, \
+             worst {:.2} ms; settled: wants_redraw {settled}",
+            times.len(),
+            times[times.len() / 2],
+            times[times.len() - 1]
+        );
+    }
+}
+
+/// A frame's texture, written as a binary PPM.
+fn dump(gpu: &Gpu, texture: &wgpu::Texture, width: u32, height: u32, path: &Path) {
+    let row = (width * 4).next_multiple_of(256);
+    let out = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("canvas-test-wake-readback"),
+        size: u64::from(row * height),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = gpu
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &out,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit(Some(encoder.finish()));
+    let mut words = vec![0u32; (row * height / 4) as usize];
+    caustics_host::surface::read_words(&gpu.device, &out, &mut words);
+    let mut ppm = format!("P6 {width} {height} 255\n").into_bytes();
+    for y in 0..height {
+        for x in 0..width {
+            ppm.extend_from_slice(&words[(y * row / 4 + x) as usize].to_le_bytes()[..3]);
+        }
+    }
+    std::fs::write(path, ppm).expect("the dump is written");
+}
+
+/// A binary PPM, as an opaque picture.
+fn read_ppm(path: &Path) -> Image {
+    let bytes = std::fs::read(path).expect("the picture reads");
+    let mut fields = Vec::new();
+    let mut at = 0;
+    while fields.len() < 4 {
+        while bytes[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        let start = at;
+        while !bytes[at].is_ascii_whitespace() {
+            at += 1;
+        }
+        fields.push(String::from_utf8_lossy(&bytes[start..at]).into_owned());
+    }
+    assert_eq!(fields[0], "P6", "a binary PPM");
+    let (width, height): (u32, u32) = (fields[1].parse().unwrap(), fields[2].parse().unwrap());
+    let rgb = &bytes[at + 1..];
+    Image {
+        key: "picture".into(),
+        width,
+        height,
+        rgba: rgb
+            .chunks(3)
+            .flat_map(|p| [p[0], p[1], p[2], 255])
+            .collect(),
+    }
+}
+
+/// A picture with something in it to see bent: a dusk gradient, soft hills
+/// and a grid of pale dots.
+fn made_up_picture(width: u32, height: u32) -> Image {
+    let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+    for y in 0..height {
+        for x in 0..width {
+            let (u, v) = (x as f32 / width as f32, y as f32 / height as f32);
+            let hill = 0.62 + 0.08 * (u * 9.0).sin() + 0.05 * (u * 23.0 + 1.0).sin();
+            let mut c = if v > hill {
+                [0.10 + 0.10 * u, 0.22 + 0.12 * v, 0.20]
+            } else {
+                [0.30 + 0.45 * v, 0.25 + 0.25 * v, 0.55 - 0.25 * v]
+            };
+            if x % 24 < 3 && y % 24 < 3 {
+                c = [0.9, 0.9, 0.85];
+            }
+            rgba.extend(c.iter().map(|c| (c * 255.0) as u8));
+            rgba.push(255);
+        }
+    }
+    Image {
+        key: "made-up".into(),
+        width,
+        height,
+        rgba,
+    }
 }

@@ -183,6 +183,66 @@ public struct PromptLayout
     public float radius;
 };
 
+/// The wake's sources (`canvas_wake.slang`): a fixed ring, so it is part of
+/// the private buffer's layout and not a tunable. Small, because every pixel
+/// a live train might reach checks its distance to each of them.
+public static const uint WAKE_SOURCES = 16u;
+
+/// One source of the wake: where it was dropped, on which pane, when, and
+/// how tall. Height 0 is an empty slot.
+public struct WakeSource
+{
+    /// Buffer px of its pane.
+    public float2 at;
+    /// A multiple of `WAKE_HEIGHT`.
+    public float height;
+    /// Seconds since it was dropped, as of this frame's `canvas_apply`:
+    /// what `canvas_draw` reads, so no pixel does the clock's arithmetic.
+    public float age;
+    /// `CanvasParams::pane` of the pane it was dropped on: the only pane
+    /// that draws it.
+    public uint pane;
+    /// `CLOCK_BOOTTIME` ms when it was dropped, two words.
+    public uint born_lo;
+    public uint born_hi;
+    public uint _pad0;
+};
+
+/// What the wake keeps between frames (`canvas_wake.slang`).
+///
+/// **One ring for every pane, each source tagged with its pane**, rather
+/// than a ring per pane: the caustic is never told how many panes there
+/// are, and the pointer is on one at a time, so one ring is all the sources
+/// any moment can have. Each pane draws, ages into its box and asks frames
+/// for only its own, so a wake on one output never shows on another, and a
+/// pane whose sources have all died asks for nothing.
+public struct CanvasWake
+{
+    public WakeSource sources[WAKE_SOURCES];
+    /// The slot the next source takes.
+    public uint next;
+    /// The pane the pointer was last seen on by its own pane's frame (0 for
+    /// none), where, and the px it has travelled there since the last
+    /// source.
+    public uint last_pane;
+    public float2 last;
+    public float travel;
+    /// `CLOCK_BOOTTIME` ms of the last source dropped, two words.
+    public uint drop_lo;
+    public uint drop_hi;
+    /// `facts.presses` as of the last frame of the pointer's pane: a new
+    /// value is a press.
+    public uint presses_seen;
+    /// 1 while any source lives on any pane, as last witnessed (`wake:
+    /// stirred`, `wake: still`).
+    public uint said;
+    /// Whether any source lives on the pane being drawn, and the box, buffer
+    /// px `(x0, y0, x1, y1)`, outside which none of them reaches: this
+    /// frame's, written by `canvas_apply` for `canvas_draw`.
+    public uint live;
+    public float4 box;
+};
+
 /// What the canvas keeps for itself between frames. The host allocates it at
 /// the stride Slang reports and never reads or writes a word of it.
 public struct CanvasPrivate
@@ -220,6 +280,8 @@ public struct CanvasPrivate
     public CanvasRun text[CANVAS_TEXT_BLOCKS];
     /// The prompt's layout on the surface this frame draws.
     public PromptLayout prompt;
+    /// The pointer's wake (`canvas_wake.slang`).
+    public CanvasWake wake;
 };
 
 [[vk::binding(7, 0)]]

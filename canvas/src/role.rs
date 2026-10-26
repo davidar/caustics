@@ -12,7 +12,9 @@
 //! which carries the same darkened wallpaper and the prompt's panel when the
 //! lock asks for a secret. All four are drawn by the one caustic, which is
 //! told which it is drawing by `CanvasParams::target`, as the bar's caustic
-//! is told whether it draws the bar or its popup.
+//! is told whether it draws the bar or its popup. The background and the
+//! lock also carry the pointer's wake, so the pointer on them is told to the
+//! caustic ([`Role::stirs`]).
 //!
 //! The host's mechanism (a swapchain, a frame pacer, a fractional scale and a
 //! viewport per surface) is the same for every role; what is here is what is
@@ -27,7 +29,7 @@
 //! `wayland.rs` makes a layer surface from a [`LayerSpec`] or a lock surface
 //! from the lock, one branch, in one place.
 
-use caustics_bar_abi::canvas::{TARGET_BACKGROUND, TARGET_OVERLAY, TARGET_PROMPT};
+use caustics_bar_abi::canvas::{TARGET_BACKGROUND, TARGET_LOCK, TARGET_OVERLAY, TARGET_PROMPT};
 use smithay_client_toolkit::shell::wlr_layer::{Anchor, KeyboardInteractivity, Layer};
 
 /// The layer surfaces' namespace for the background: what a compositor's
@@ -133,11 +135,22 @@ impl Role {
         match self {
             Role::Background => TARGET_BACKGROUND,
             Role::Overlay => TARGET_OVERLAY,
-            // The lock is the prompt's look: the wallpaper darkened by
+            Role::Top => TARGET_PROMPT,
+            // The lock is the prompt's look (the wallpaper darkened by
             // `PROMPT_DARKEN`, opaque, and the panel while a conversation
-            // asks.
-            Role::Top | Role::Lock => TARGET_PROMPT,
+            // asks) with the pointer's wake under it: its own target, so the
+            // caustic can tell the two apart.
+            Role::Lock => TARGET_LOCK,
         }
+    }
+
+    /// Whether the pointer on this role's surfaces is told to the caustic,
+    /// which stirs its wake there (docs/canvas.md, *The wake*): the
+    /// background's, wherever the compositor gives it the pointer, and the
+    /// lock's. On the overlay the pointer is a cancel, and on the prompt's
+    /// pane it is the panel's.
+    pub fn stirs(self) -> bool {
+        matches!(self, Role::Background | Role::Lock)
     }
 
     /// Whether pointer and touch input on this role's surfaces cancels the

@@ -55,10 +55,19 @@
 //! core, and neither a key nor the pointer nor a touch cancels a dim that is
 //! also up, which stays as it was when the prompt closes.
 //!
+//! **The wake's pointer** is apart from all of that: on a background or a
+//! lock pane (`Role::stirs`) the pointer's place, in that pane's buffer px,
+//! and a count of its presses there are written into `facts` once per
+//! dispatch (`pointer.rs`), whatever else the handler does with the event,
+//! and the pane draws again if the caustic said of its last frame that the
+//! pointer is something it draws there (`CanvasState::wants_pointer`). What
+//! the water does is the caustic's (docs/canvas.md, *The wake*).
+//!
 //! # The frames
 //!
 //! A frame is one pane's. It is drawn when that pane is dirty (a configure, a
-//! command, a reload) or the caustic said `wants_redraw` for it, and its frame
+//! command, a reload, the pointer's news on a pane whose caustic wants it)
+//! or the caustic said `wants_redraw` for it, and its frame
 //! request is answered or [`FRAME_STALL`] old: each pane is paced on its own
 //! `wl_surface.frame`, made before the present so it rides the commit
 //! (docs/architecture.md, *The frame*). A compositor that sends no callbacks
@@ -127,6 +136,7 @@ use crate::dim::Dims;
 use crate::gpu::{self, Gpu};
 use crate::keys::{self, xkb::Xkb};
 use crate::lock::{self, Locks};
+use crate::pointer::Pointer;
 use crate::prompt::{Effect, Prompts};
 use crate::role::Role;
 use crate::sidecars::{self, GLYPHS, RELOAD, WALLPAPER};
@@ -192,6 +202,8 @@ struct Pane {
     /// Dropped first, before the surface its raw pointers name.
     target: Option<Surface>,
     role: Role,
+    /// `CanvasParams::pane`: ≥ 1, never reused while the host runs.
+    id: u32,
     output: wl_output::WlOutput,
     /// The output's name, for the journal.
     name: String,
@@ -208,6 +220,11 @@ struct Pane {
     /// Something changed that this pane has not drawn.
     dirty: bool,
     pacing: Pacing,
+    /// Whether the caustic said, of this pane's last frame, that the pointer
+    /// moving on it is something it draws (`CanvasState::wants_pointer`).
+    pointer_frames: bool,
+    /// Frames drawn since the caustic last began asking for them here.
+    run: u32,
 }
 
 impl Pane {
@@ -265,6 +282,14 @@ pub struct Canvas {
     /// Where the pointer last was on an overlay, surface-local: what a
     /// motion is measured from.
     pointer_at: Option<(f64, f64)>,
+    /// The pointer as the wake is told it (`pointer.rs`), and whether
+    /// `facts` is behind it.
+    wake_pointer: Pointer,
+    pointer_unwritten: bool,
+    /// The facts as last written: what a pointer's news is written over.
+    facts: CanvasFacts,
+    /// The id the next pane takes.
+    next_pane: u32,
     /// Pictures placed before the device existed, by slot.
     unplaced: [Option<Image>; 2],
     /// `Bytes` runs that arrived before there was a device to put them in:
@@ -359,6 +384,10 @@ impl Canvas {
             xkb: None,
             xkb_missing_said: false,
             pointer_at: None,
+            wake_pointer: Pointer::new(),
+            pointer_unwritten: false,
+            facts: CanvasFacts::default(),
+            next_pane: 1,
             unplaced: [None, None],
             pending_bytes: Vec::new(),
             covers: Covers::new(GLYPHS, REQ_COVER),
@@ -415,14 +444,45 @@ impl Canvas {
                 caustics_bar_abi::canvas::PROMPT_TEXT_BYTES
             );
         }
-        let facts = CanvasFacts {
+        let mut facts = CanvasFacts {
             literal_count: self.literal_count,
             prompt,
             ..*self.slots.facts()
         };
+        self.wake_pointer.write(&mut facts);
+        self.facts = facts;
+        self.pointer_unwritten = false;
         if let Some(gpu) = self.gpu.as_mut() {
             gpu.write_prompt_text(&text);
             gpu.write_facts(&facts);
+        }
+    }
+
+    /// The pointer's news, written over the facts as they were last written:
+    /// once per dispatch however many motions it carried, and with nothing
+    /// else rewritten.
+    fn push_pointer(&mut self) {
+        if !std::mem::replace(&mut self.pointer_unwritten, false) {
+            return;
+        }
+        self.wake_pointer.write(&mut self.facts);
+        if let Some(gpu) = self.gpu.as_mut() {
+            gpu.write_facts(&self.facts);
+        }
+    }
+
+    /// The wake's pointer on pane `index` moved, arrived, left or pressed
+    /// (`news` says whether that changed anything): the facts are behind,
+    /// and the pane draws again if its caustic said the pointer is something
+    /// it draws there.
+    fn stirred(&mut self, index: usize, news: bool) {
+        if !news {
+            return;
+        }
+        self.pointer_unwritten = true;
+        let pane = &mut self.panes[index];
+        if pane.pointer_frames {
+            pane.dirty = true;
         }
     }
 
@@ -511,9 +571,12 @@ impl Canvas {
             if role == Role::Overlay { "n" } else { "" },
             role.name()
         );
+        let id = self.next_pane;
+        self.next_pane = self.next_pane.wrapping_add(1).max(1);
         self.panes.push(Pane {
             target: None,
             role,
+            id,
             output: output.clone(),
             name,
             shell,
@@ -525,6 +588,8 @@ impl Canvas {
             pending: false,
             dirty: false,
             pacing: Pacing::new(Instant::now()),
+            pointer_frames: false,
+            run: 0,
         });
     }
 
@@ -533,6 +598,9 @@ impl Canvas {
     /// points at, then the layer or lock surface (destroyed as it drops).
     fn remove_pane(&mut self, index: usize) {
         let mut pane = self.panes.remove(index);
+        if self.wake_pointer.left(pane.id) {
+            self.pointer_unwritten = true;
+        }
         pane.target = None;
         if let Some(viewport) = pane.viewport.take() {
             viewport.destroy();
@@ -794,6 +862,7 @@ impl Canvas {
         if self.gpu.is_none() {
             return Ok(());
         }
+        self.push_pointer();
         let now = Instant::now();
         for index in 0..self.panes.len() {
             let pane = &self.panes[index];
@@ -824,11 +893,37 @@ impl Canvas {
         let wl_surface = pane.shell.wl_surface();
         wl_surface.frame(&self.qh, wl_surface.clone());
         pane.pacing.requested(Instant::now());
-        let stamp = gpu.draw(target, frame, pane.scale, pane.role.target())?;
+        let stamp = gpu.draw(target, frame, pane.scale, pane.role.target(), pane.id)?;
         pane.dirty = false;
         self.frames += 1;
         let mirror = gpu.mirror();
-        pane.pacing.set_animating(mirror.wants_redraw != 0);
+        // Whether the caustic asks for the next frame here, said once each
+        // way: a fade, a dim on its way or a wake, until it settles.
+        let animating = mirror.wants_redraw != 0;
+        pane.run = if animating {
+            pane.run.saturating_add(1)
+        } else {
+            pane.run
+        };
+        if animating != pane.pacing.animating() {
+            if animating {
+                tracing::info!(
+                    "output {}: the {} draws frame by frame",
+                    pane.name,
+                    pane.role.name()
+                );
+            } else {
+                tracing::info!(
+                    "output {}: the {} is settled; no more frames after {} of them",
+                    pane.name,
+                    pane.role.name(),
+                    pane.run
+                );
+                pane.run = 0;
+            }
+        }
+        pane.pacing.set_animating(animating);
+        pane.pointer_frames = mirror.wants_pointer != 0;
         for note in mirror.witnesses_of(stamp) {
             self.printer.print(note, &self.strings, &[]);
         }
@@ -1700,7 +1795,24 @@ impl PointerHandler for Canvas {
         // stays as it is.
         let prompting = self.prompts.raised();
         for event in events {
-            let role = self.role_of_surface(&event.surface);
+            let index = self.pane_of_surface(&event.surface);
+            let role = index.map(|index| self.panes[index].role);
+            // The wake's: where the pointer is on a pane that stirs, and its
+            // presses there. Nothing else in this handler reads it.
+            if let Some(index) = index
+                && self.panes[index].role.stirs()
+            {
+                let (id, scale) = (self.panes[index].id, self.panes[index].scale);
+                let news = match event.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        self.wake_pointer.at(id, event.position, scale)
+                    }
+                    PointerEventKind::Leave { .. } => self.wake_pointer.left(id),
+                    PointerEventKind::Press { .. } => self.wake_pointer.pressed(id),
+                    _ => false,
+                };
+                self.stirred(index, news);
+            }
             if (role == Some(Role::Lock) || prompting && role == Some(Role::Top))
                 && let PointerEventKind::Enter { serial } = event.kind
             {
