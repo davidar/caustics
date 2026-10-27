@@ -48,18 +48,9 @@ SCREEN_H=800
 # one GPU, or a driver this does not know, nothing is pinned and the bar takes
 # whatever Vulkan offers; the start-up step then checks only that an adapter
 # was chosen.
-nested_icd() { # nested_icd <render node> -> "<icd file> <adapter word>" or nothing
-    local node="$1" driver icd word
-    (($(find /sys/class/drm -maxdepth 1 -name 'renderD*' | wc -l) > 1)) || return 0
-    driver=$(basename "$(readlink -f "/sys/class/drm/$(basename "$node")/device/driver")")
-    case "$driver" in
-        amdgpu | radeon) icd=radeon_icd; word=RADV ;;
-        i915 | xe) icd=intel_icd; word=Intel ;;
-        *) return 0 ;;
-    esac
-    icd="/usr/share/vulkan/icd.d/$icd.$(uname -m).json"
-    [[ -f "$icd" ]] && printf '%s %s' "$icd" "$word"
-}
+# nested_icd is the harness's, shared with bar/lock-try.sh.
+# shellcheck source=bar/harness/nested-niri.sh
+source "$REPO/bar/harness/nested-niri.sh"
 read -r derived_icd derived_adapter <<<"$(nested_icd "${CAUSTICS_NESTED_RENDER_NODE:-}")"
 if [[ -n "${CAUSTICS_NESTED_VK_ICD:-}" ]]; then
     VK_ICD="$CAUSTICS_NESTED_VK_ICD"

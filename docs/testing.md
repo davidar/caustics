@@ -107,7 +107,8 @@ could touch the developer's own bar.
   `$XDG_RUNTIME_DIR`, `$HOME` and `/dev/dri` with the host, so sway's socket
   appears where the host-side niri can reach it; only sway runs inside it.
   The image and the container's name are variables at the top of
-  `bar/nested-run.sh`. With `CAUSTICS_NESTED_HOST=desktop` no container is
+  `bar/harness/nested-niri.sh`, which starts the host and the nested niri.
+  With `CAUSTICS_NESTED_HOST=desktop` no container is
   needed, but the desktop must itself be niri (the script uses `niri msg` to
   float the window and hand focus back).
 - The render node the headless sway draws on, and the Vulkan driver the bar

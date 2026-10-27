@@ -35,28 +35,14 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SELF="$REPO/bar/nested-run.sh"
 HOST_KIND="${CAUSTICS_NESTED_HOST:-headless}"
 CAP_S="${CAUSTICS_NESTED_CAP_S:-600}"
-# The headless host is sway in a toolbox (podman) container, so the gate needs
-# no sway on the host itself. The container and its image are the harness's
-# own business; both can be named.
-TOOLBOX="${CAUSTICS_NESTED_TOOLBOX:-caustics-headless}"
-TOOLBOX_IMAGE="${CAUSTICS_NESTED_TOOLBOX_IMAGE:-registry.fedoraproject.org/fedora-toolbox:44}"
-# The GPU the headless sway renders on: `$CAUSTICS_NESTED_RENDER_NODE`, else the
-# first render node whose kernel driver is not NVIDIA's (a hybrid laptop's
-# discrete GPU must never be woken by a test), else the first render node.
-# Exported, because the nested target pins the bar's Vulkan driver to the same
-# GPU (bar/targets/nested.sh).
-first_render_node() {
-    local node driver first=""
-    for node in /dev/dri/renderD*; do
-        [[ -e "$node" ]] || continue
-        first="${first:-$node}"
-        driver=$(basename "$(readlink -f "/sys/class/drm/$(basename "$node")/device/driver")")
-        [[ "$driver" == nvidia ]] && continue
-        printf '%s' "$node"
-        return
-    done
-    printf '%s' "$first"
-}
+# The host compositor, the nested niri and their teardown, shared with
+# bar/lock-try.sh; the toolbox the headless host runs in is named there.
+NESTED_WHO=nested-run
+# shellcheck source=bar/harness/nested-niri.sh
+source "$REPO/bar/harness/nested-niri.sh"
+# The GPU the headless sway renders on (first_render_node says how it is
+# chosen). Exported, because the nested target pins the bar's Vulkan driver
+# to the same GPU (bar/targets/nested.sh).
 RENDER_NODE="${CAUSTICS_NESTED_RENDER_NODE:-$(first_render_node)}"
 [[ -n "$RENDER_NODE" ]] || { echo "nested-run: no /dev/dri/renderD* node; the gate needs a GPU"; exit 2; }
 export CAUSTICS_NESTED_RENDER_NODE="$RENDER_NODE"
@@ -91,21 +77,7 @@ if [[ -n "${CAUSTICS_NESTED_INNER:-}" ]]; then
     : >"$PIDS_FILE"
     RT="$XDG_RUNTIME_DIR/caustics-nested.$$"
     mkdir -m 700 "$RT"
-    HOST_PID=""      # sway itself (headless) — the process that owns the socket
-    TOOLBOX_PID=""   # the `toolbox run` wrapper around it
-    NIRI_PID=""
     TEST_PID=""
-    PREV_FOCUS=""
-
-    alive() { [[ -n "$1" ]] && kill -0 "$1" 2>/dev/null; }
-    stop_pid() { # stop_pid <pid> <what>: TERM, five seconds, KILL
-        local pid="$1" i
-        alive "$pid" || return 0
-        kill -TERM "$pid" 2>/dev/null
-        for i in $(seq 50); do alive "$pid" || return 0; sleep 0.1; done
-        echo "nested-run: $2 (pid $pid) ignored TERM; KILL"
-        kill -KILL "$pid" 2>/dev/null
-    }
 
     teardown() {
         local role pid
@@ -131,111 +103,19 @@ if [[ -n "${CAUSTICS_NESTED_INNER:-}" ]]; then
             sleep 1
             kill -KILL -- "-$pid" 2>/dev/null
         done <"$PIDS_FILE"
-        stop_pid "$NIRI_PID" "nested niri"
-        stop_pid "$HOST_PID" "headless sway"
-        stop_pid "$TOOLBOX_PID" "toolbox run"
-        if [[ -n "$PREV_FOCUS" ]]; then
-            niri msg action focus-window --id "$PREV_FOCUS" >/dev/null 2>&1
-        fi
+        nested_down
         rm -rf "$RT"
         echo "nested-run: torn down (niri ${NIRI_PID:-none}, host ${HOST_PID:-none})"
     }
     trap teardown EXIT
     trap 'exit 130' INT TERM
 
-    strip() { sed 's/\x1b\[[0-9;]*m//g' "$1"; }
-
-    # The host compositor: the Wayland display the nested niri is a window on.
-    if [[ "$HOST_KIND" == headless ]]; then
-        # A copy of the config named for this run, so the sway this run started
-        # is the one process whose command line names it — that is how its pid
-        # is found (the toolbox wraps it, and its environ is not readable from
-        # here), and it is never found by its name alone.
-        SWAY_CONF="$RUN/sway-$(basename "$RUN").conf"
-        cp "$REPO/bar/harness/sway.conf" "$SWAY_CONF"
-        toolbox run -c "$TOOLBOX" env XDG_RUNTIME_DIR="$RT" \
-            WLR_BACKENDS=headless WLR_RENDER_DRM_DEVICE="$RENDER_NODE" WLR_LIBINPUT_NO_DEVICES=1 \
-            sway -V -c "$SWAY_CONF" >"$RUN/sway.log" 2>&1 </dev/null &
-        TOOLBOX_PID=$!
-        for _ in $(seq 300); do
-            grep -q "Running compositor on wayland display" "$RUN/sway.log" && break
-            alive "$TOOLBOX_PID" || break
-            sleep 0.1
-        done
-        host_socket=$(sed -n "s/.*Running compositor on wayland display '\([^']*\)'.*/\1/p" "$RUN/sway.log" | tail -1)
-        for p in $(pgrep -u "$(id -u)" -x sway); do
-            tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -qF -- "$SWAY_CONF" && HOST_PID=$p
-        done
-        if [[ -z "$host_socket" || -z "$HOST_PID" ]]; then
-            echo "nested-run: the headless sway did not come up (socket '${host_socket:-}', pid '${HOST_PID:-}')"
-            tail -20 "$RUN/sway.log"
-            exit 9
-        fi
-        echo "host compositor: headless sway pid $HOST_PID, socket $host_socket ($(grep -oE 'GL renderer: .*|GL vendor: .*' "$RUN/sway.log" | head -2 | tr '\n' ' '))"
-        HOST_DISPLAY="$RT/$host_socket"
-    else
-        HOST_DISPLAY="${XDG_RUNTIME_DIR}/${WAYLAND_DISPLAY:?desktop needs a Wayland session}"
-        PREV_FOCUS=$(niri msg --json focused-window 2>/dev/null |
-            python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["id"] if d else "")' 2>/dev/null)
-        echo "host compositor: the desktop ($HOST_DISPLAY); a window will appear for the run"
-    fi
-
-    # The nested niri. No DISPLAY (winit would try X), no NIRI_SOCKET (its own
-    # is read from its log), the private runtime dir for its sockets.
-    # No session bus either: niri posts a notification for every screenshot
-    # ("Screenshot captured"), and on the run's bus that is caustics-notify's
-    # history — the steps count it. Its children (the dock's "New window")
-    # inherit the rest: the scratch XDG tree and a plain `sh`.
-    mkdir -p "$RUN/home" "$RUN/xdg/config" "$RUN/xdg/state" "$RUN/xdg/cache"
-    env -u DISPLAY -u NIRI_SOCKET WAYLAND_DISPLAY="$HOST_DISPLAY" XDG_RUNTIME_DIR="$RT" \
-        DBUS_SESSION_BUS_ADDRESS="unix:path=$RUN/no-bus" \
-        XDG_CONFIG_HOME="$RUN/xdg/config" XDG_STATE_HOME="$RUN/xdg/state" \
-        XDG_CACHE_HOME="$RUN/xdg/cache" SHELL=/bin/sh HISTFILE="$RUN/home/.sh_history" \
-        RUST_LOG="niri=debug,smithay::backend::renderer=info,smithay::backend::egl=info" \
-        setsid niri --config "$REPO/bar/harness/niri.kdl" >"$RUN/niri.log" 2>&1 </dev/null &
-    NIRI_PID=$!
+    nested_host_up "$HOST_KIND" "$RUN" "$RT" "$RENDER_NODE" || exit 9
+    nested_niri_up "$HOST_KIND" "$RUN" "$RT"
+    niri_rc=$?
     echo "niri $NIRI_PID" >>"$PIDS_FILE"
-    for _ in $(seq 300); do
-        strip "$RUN/niri.log" | grep -q "IPC listening on" && break
-        alive "$NIRI_PID" || break
-        sleep 0.1
-    done
-    NESTED_WAYLAND=$(strip "$RUN/niri.log" | sed -n 's/.*listening on Wayland socket: //p' | tail -1)
-    NESTED_NIRI_SOCKET=$(strip "$RUN/niri.log" | sed -n 's/.*IPC listening on: //p' | tail -1)
-    if [[ -z "$NESTED_WAYLAND" || -z "$NESTED_NIRI_SOCKET" ]]; then
-        echo "nested-run: the nested niri did not come up"
-        strip "$RUN/niri.log" | tail -20
-        exit 9
-    fi
-    echo "nested niri: pid $NIRI_PID, socket $NESTED_WAYLAND, ipc $NESTED_NIRI_SOCKET"
-
-    if [[ "$HOST_KIND" == desktop ]]; then
-        # Floating at the VM target's size on the desktop's niri, so it does
-        # not push the developer's columns about, and their focus handed back. The size is the host's
-        # logical px, so at a fractional scale it is 1280x800 only nearly.
-        win=""
-        for _ in $(seq 50); do
-            win=$(niri msg --json windows | python3 -c "
-import json, sys
-for w in json.load(sys.stdin):
-    if w.get('pid') == $NIRI_PID: print(w['id'])" 2>/dev/null)
-            [[ -n "$win" ]] && break
-            sleep 0.1
-        done
-        scale=$(niri msg --json focused-output | python3 -c 'import json,sys; print(json.load(sys.stdin)["logical"]["scale"])' 2>/dev/null)
-        if [[ -n "$win" ]]; then
-            niri msg action toggle-window-floating --id "$win" >/dev/null
-            niri msg action set-window-width --id "$win" "$(python3 -c "print(round(1280 / ${scale:-1}))")" >/dev/null
-            niri msg action set-window-height --id "$win" "$(python3 -c "print(round(800 / ${scale:-1}))")" >/dev/null
-        fi
-        [[ -n "$PREV_FOCUS" ]] && niri msg action focus-window --id "$PREV_FOCUS" >/dev/null 2>&1
-        sleep 1
-    fi
-    mode=$(NIRI_SOCKET="$NESTED_NIRI_SOCKET" niri msg --json outputs | python3 -c '
-import json, sys
-for name, o in json.load(sys.stdin).items():
-    m = o["modes"][o["current_mode"]]
-    print("%s %dx%d" % (name, m["width"], m["height"]))' 2>/dev/null)
+    ((niri_rc == 0)) || exit 9
+    mode="$NESTED_MODE"
     echo "nested output: $mode"
     [[ "$mode" == "winit 1280x800" ]] || echo "nested-run: the output is not 1280x800; the steps assume it"
 
@@ -289,27 +169,7 @@ fi
 echo "nested-run: built in $((SECONDS - t0)) s"
 
 if [[ "$HOST_KIND" == headless ]]; then
-    # First use. Another run may be doing the same at the same moment, so a
-    # failed create or install is judged by what is there afterwards, not by
-    # its exit status.
-    if ! toolbox run -c "$TOOLBOX" true >/dev/null 2>&1; then
-        echo "nested-run: creating the '$TOOLBOX' toolbox (first use; sway goes in it, nothing else)"
-        toolbox create -y -c "$TOOLBOX" --image "$TOOLBOX_IMAGE" >"$RUN/toolbox-create.log" 2>&1 ||
-            echo "nested-run: toolbox create said: $(tail -1 "$RUN/toolbox-create.log")"
-        toolbox run -c "$TOOLBOX" true >/dev/null 2>&1 || {
-            echo "nested-run: the '$TOOLBOX' toolbox is not usable; $RUN/toolbox-create.log"
-            exit 9
-        }
-    fi
-    if ! toolbox run -c "$TOOLBOX" sh -c 'command -v sway' >/dev/null 2>&1; then
-        echo "nested-run: installing sway into '$TOOLBOX' (first use)"
-        toolbox run -c "$TOOLBOX" sudo dnf install -y sway >"$RUN/toolbox-dnf.log" 2>&1 ||
-            echo "nested-run: dnf install sway said: $(tail -1 "$RUN/toolbox-dnf.log")"
-        toolbox run -c "$TOOLBOX" sh -c 'command -v sway' >/dev/null 2>&1 || {
-            echo "nested-run: sway is not in '$TOOLBOX'; $RUN/toolbox-dnf.log"
-            exit 9
-        }
-    fi
+    nested_toolbox_ready "$RUN" || exit 9
 fi
 
 t1=$SECONDS
