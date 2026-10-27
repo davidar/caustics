@@ -44,6 +44,7 @@ use anyhow::{Context, Result};
 use smithay_client_toolkit::reexports::calloop::{
     EventLoop,
     channel::{Event as ChannelEvent, channel},
+    ping::make_ping,
     timer::{TimeoutAction, Timer},
 };
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
@@ -222,7 +223,18 @@ fn run(max_runtime: Option<Duration>, edge_lock: File) -> Result<i32> {
     // The lock moves into `Bar`, which holds it for the life of the process
     // and swaps it if the caustic asks for the other edge. Dropping the file
     // closes the fd, which releases the flock, so it must outlive the bar.
-    let mut bar = Bar::new(conn.clone(), &globals, qh, Some(edge_lock), updates.clone())?;
+    // The compile workers' wake: a pipeline built off this thread is
+    // installed on it, on the loop's next turn (`Bar::pipelines_landed`).
+    let (ping, landed) = make_ping().context("could not create the compile wake")?;
+    let wake: caustics_host::compile::Wake = std::sync::Arc::new(move || ping.ping());
+    let mut bar = Bar::new(
+        conn.clone(),
+        &globals,
+        qh,
+        Some(edge_lock),
+        updates.clone(),
+        wake,
+    )?;
     // The clock is an update like any other, on the same path as everything
     // else the bar knows.
     bar.tick_clock();
@@ -268,6 +280,9 @@ fn run(max_runtime: Option<Duration>, edge_lock: File) -> Result<i32> {
             }
         })
         .map_err(|err| anyhow::anyhow!("could not insert the update channel: {err}"))?;
+    handle
+        .insert_source(landed, |_, _, bar: &mut Bar| bar.pipelines_landed())
+        .map_err(|err| anyhow::anyhow!("could not insert the compile wake: {err}"))?;
 
     // The capture feeder's timer is the bar's own, and it needs the loop to
     // arm itself on (`Bar::arm_capture`).

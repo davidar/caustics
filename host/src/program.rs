@@ -1,7 +1,7 @@
 //! The caustic on the device: its bind group layouts, its pipelines, and the
 //! reload that swaps the pipelines whole or not at all.
 //!
-//! Two shapes here are deliberate:
+//! Three shapes here are deliberate:
 //!
 //! - **passthrough SPIR-V.** The caustic is Slang; wgpu takes the module
 //!   through `create_shader_module_passthrough`, which performs no validation
@@ -14,6 +14,13 @@
 //!   is the two things a reflection cannot carry, both keyed on the
 //!   parameter's name: a storage image's texel format (the `storage_format`
 //!   closure) and which resource to bind ([`group_entries`]'s closure).
+//! - **the pipelines are built off the host's loop** ([`crate::compile`]): the
+//!   layouts are made at once, and each entry's pipeline is queued on the
+//!   compile workers in the host's order of need and installed when it lands
+//!   ([`Program::poll`]). A host asks [`Program::pipeline`] for what exists
+//!   and skips the dispatches whose pipeline does not, so a cold driver cache
+//!   delays what is drawn and never the loop. A reload is the same queue,
+//!   staged beside the running program and swapped in whole.
 //!
 //! The entry points are the host's: an [`Entry`] per point, in dispatch order,
 //! and a pipeline is named by its index in that list (the bar's list is the
@@ -21,7 +28,7 @@
 
 use std::num::NonZeroU64;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use punchcutter_core::gpu::passthrough_pipeline;
 use punchcutter_slang::{Binding, BindingKind, Reflection};
 
@@ -256,6 +263,10 @@ pub fn first_difference(old: &[Binding], new: &[Binding]) -> Option<String> {
 /// Every pipeline of `entries`, from `spirv` in the same order, inside one
 /// validation error scope: either every one of them is good, or the caller
 /// keeps what it had.
+///
+/// On the caller's thread and waited out: for a pipeline a test loads beside
+/// a program (the bar's oracle loads `bar_check`). A host's own pipelines go
+/// through [`Program`], which builds them off its loop.
 pub fn build_pipelines(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -301,7 +312,7 @@ pub fn build_pipelines(
     Ok(pipelines)
 }
 
-/// Why [`Program::reload`] kept the program it had.
+/// Why a reload kept the program it had.
 #[derive(Debug)]
 pub enum Refused {
     /// The new compile's bindings are not the ones the layouts were built
@@ -324,17 +335,64 @@ impl std::fmt::Display for Refused {
 
 impl std::error::Error for Refused {}
 
+/// What one landed result did to the program ([`Program::poll`]).
+#[derive(Debug)]
+pub enum Landed {
+    /// A pipeline of the running program is in, the entry at `entry`; `all`
+    /// when it was the last one owed. A host draws what it now can.
+    Live { entry: usize, all: bool },
+    /// A pipeline of the running program was refused. Only the baked caustic
+    /// is ever the running program before it is whole, so this is a build
+    /// whose own SPIR-V does not load, which is a build to fix, as it was
+    /// when the pipelines were built at bring-up.
+    Broken(String),
+    /// A reload's generation is whole, every pipeline built and validated,
+    /// and is now the running program.
+    Swapped { generation: u64 },
+    /// A reload's generation was refused by the device; the running program
+    /// is untouched.
+    Refused { generation: u64, error: Refused },
+}
+
+/// One entry's pipeline in the running program.
+enum Slot {
+    Pending,
+    Ready(wgpu::ComputePipeline),
+}
+
+/// A reload being built: its pipelines as they land, swapped in together
+/// when the last does.
+struct Staged {
+    generation: u64,
+    pipelines: Vec<Option<wgpu::ComputePipeline>>,
+}
+
 /// A caustic on the device: one bind group layout per descriptor set, the
-/// pipeline layout over them, one pipeline per entry point, and the bindings
-/// the layouts were built from.
+/// pipeline layout over them, one pipeline per entry point (built on the
+/// compile workers and installed as each lands), and the bindings the
+/// layouts were built from.
 pub struct Program {
     /// By set number: the set at position `n` of the pipeline layout is set
     /// `n`.
     layouts: Vec<wgpu::BindGroupLayout>,
     pipeline_layout: wgpu::PipelineLayout,
     entries: &'static [Entry],
-    /// One per entry, in the entries' order; swapped together or not at all.
-    pipelines: Vec<wgpu::ComputePipeline>,
+    /// The entries' indices in the order a host needs them: what is queued
+    /// first, at bring-up and on every reload.
+    need: Vec<usize>,
+    /// One per entry, in the entries' order.
+    live: Vec<Slot>,
+    /// The generation `live` is: 1 for the baked caustic, then one more per
+    /// reload swapped in.
+    generation: u64,
+    /// The reload being built, if one is.
+    staged: Option<Staged>,
+    /// The last generation number handed out.
+    issued: u64,
+    /// When the running generation was queued, for the line that says it is
+    /// whole.
+    queued_at: std::time::Instant,
+    compiler: crate::compile::Compiler,
     /// The bindings the layouts above were built from, as the baked
     /// reflection declared them. A reload compares its own compile's against
     /// these and refuses rather than swap in modules the layouts do not
@@ -343,13 +401,18 @@ pub struct Program {
 }
 
 impl Program {
-    /// Build the layouts from `bindings` and the pipelines from `spirv`.
+    /// Build the layouts from `bindings` now, and queue the pipelines from
+    /// `spirv` on the compile workers: this returns before any is built.
     ///
     /// `sets` is every descriptor set's label, set 0 first: the reflection
     /// must declare exactly those sets, or this panics ([`assert_sets`]).
     /// `storage_format` names a storage image's texel format by the image's
     /// name. `entries` and `spirv` are one module per entry point, in
-    /// dispatch order.
+    /// dispatch order. `need` is every entry's index once, in the order the
+    /// host wants them built: what its first frame needs first. `workers`
+    /// threads build, and `wake` is called from one of them each time a
+    /// result is waiting for [`Program::poll`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
         bindings: Vec<Binding>,
@@ -358,7 +421,25 @@ impl Program {
         storage_format: &dyn Fn(&str) -> wgpu::TextureFormat,
         entries: &'static [Entry],
         spirv: &[&[u8]],
+        need: &[usize],
+        workers: usize,
+        wake: crate::compile::Wake,
     ) -> Result<Program> {
+        if spirv.len() != entries.len() {
+            bail!(
+                "{} modules for {} entry points; a program is one module per entry point",
+                spirv.len(),
+                entries.len()
+            );
+        }
+        let mut sorted = need.to_vec();
+        sorted.sort_unstable();
+        if sorted != (0..entries.len()).collect::<Vec<_>>() {
+            bail!(
+                "the order of need {need:?} does not name each of the {} entry points once",
+                entries.len()
+            );
+        }
         let numbers: Vec<u32> = (0..sets.len() as u32).collect();
         assert_sets(&bindings, &numbers);
         let layouts: Vec<wgpu::BindGroupLayout> = sets
@@ -371,14 +452,51 @@ impl Program {
             bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
             immediate_size: 0,
         });
-        let pipelines = build_pipelines(device, &pipeline_layout, entries, spirv)?;
-        Ok(Program {
+        let compiler = crate::compile::Compiler::start(device, &pipeline_layout, workers, wake);
+        let program = Program {
             layouts,
             pipeline_layout,
             entries,
-            pipelines,
+            need: need.to_vec(),
+            live: entries.iter().map(|_| Slot::Pending).collect(),
+            generation: 1,
+            staged: None,
+            issued: 1,
+            queued_at: std::time::Instant::now(),
+            compiler,
             bindings,
-        })
+        };
+        program.queue(1, spirv);
+        tracing::info!(
+            "pipelines: {} queued on {} compile worker{}, in the order {}",
+            entries.len(),
+            program.compiler.workers(),
+            if program.compiler.workers() == 1 {
+                ""
+            } else {
+                "s"
+            },
+            program
+                .need
+                .iter()
+                .map(|&index| entries[index].name)
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        Ok(program)
+    }
+
+    /// One generation's jobs, in the order of need.
+    fn queue(&self, generation: u64, spirv: &[&[u8]]) {
+        self.compiler
+            .submit(self.need.iter().map(|&index| crate::compile::Job {
+                generation,
+                slot: index,
+                label: self.entries[index].label,
+                entry: self.entries[index].name,
+                workgroup: self.entries[index].workgroup,
+                spirv: spirv[index].to_vec(),
+            }));
     }
 
     /// Set `set`'s layout.
@@ -392,9 +510,38 @@ impl Program {
         &self.pipeline_layout
     }
 
-    /// The pipeline of the entry at `index` in the entry list.
-    pub fn pipeline(&self, index: usize) -> &wgpu::ComputePipeline {
-        &self.pipelines[index]
+    /// The pipeline of the entry at `index` in the entry list, once it is
+    /// built. A dispatch whose pipeline is not here yet is not recorded: the
+    /// host skips the work that needs it and does it when it lands.
+    pub fn pipeline(&self, index: usize) -> Option<&wgpu::ComputePipeline> {
+        match &self.live[index] {
+            Slot::Ready(pipeline) => Some(pipeline),
+            Slot::Pending => None,
+        }
+    }
+
+    /// Whether every one of these entries' pipelines is built.
+    pub fn has(&self, indices: &[usize]) -> bool {
+        indices
+            .iter()
+            .all(|&index| matches!(self.live[index], Slot::Ready(_)))
+    }
+
+    /// Whether every pipeline of the running program is built.
+    pub fn whole(&self) -> bool {
+        self.live.iter().all(|slot| matches!(slot, Slot::Ready(_)))
+    }
+
+    /// Whether a reload is being built.
+    pub fn reloading(&self) -> bool {
+        self.staged.is_some()
+    }
+
+    /// The running program's generation: 1 for the one [`Program::new`]
+    /// queued, then the number [`Program::reload`] returned for each one
+    /// swapped in since.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The bindings the layouts were built from.
@@ -402,29 +549,175 @@ impl Program {
         &self.bindings
     }
 
-    /// Rebuild every pipeline from freshly compiled SPIR-V, or change
-    /// nothing. Nothing but the pipelines is touched, so a host keeps its
-    /// buffers, and with them the caustic's state, across a reload.
+    /// Queue a freshly compiled generation, to be swapped in whole once every
+    /// one of its pipelines is built, or not at all; returns its number,
+    /// which [`Landed::Swapped`] and [`Landed::Refused`] carry. Nothing but
+    /// the pipelines is touched, so a host keeps its buffers, and with them
+    /// the caustic's state, across a reload.
+    ///
+    /// A reload still being built when this is called is superseded: its
+    /// queued jobs are withdrawn and its results, when the ones already on a
+    /// worker land, are dropped.
     ///
     /// `reflection` is that same compile's reflection. The layouts were
     /// built from the *baked* one and cannot be rebuilt without rebuilding
     /// the pipeline layout and every bind group hanging off it, so a caustic
-    /// that moved, added or retyped a binding is refused here rather than
-    /// swapped in: what a live reload would otherwise produce is a dispatch
-    /// whose descriptors and whose `[[vk::binding]]` literals disagree — a
-    /// device-lost on one driver, silently wrong buffers on another.
-    pub fn reload(
-        &mut self,
-        device: &wgpu::Device,
-        reflection: &Reflection,
-        spirv: &[&[u8]],
-    ) -> Result<(), Refused> {
+    /// that moved, added or retyped a binding is refused here, at once,
+    /// rather than queued: what a live reload would otherwise produce is a
+    /// dispatch whose descriptors and whose `[[vk::binding]]` literals
+    /// disagree — a device-lost on one driver, silently wrong buffers on
+    /// another.
+    pub fn reload(&mut self, reflection: &Reflection, spirv: &[&[u8]]) -> Result<u64, Refused> {
         if let Some(witness) = first_difference(&self.bindings, &reflection.bindings) {
             return Err(Refused::Bindings(witness));
         }
-        self.pipelines = build_pipelines(device, &self.pipeline_layout, self.entries, spirv)
-            .map_err(Refused::Pipelines)?;
+        if spirv.len() != self.entries.len() {
+            return Err(Refused::Pipelines(anyhow::anyhow!(
+                "{} modules for {} entry points; a program is one module per entry point",
+                spirv.len(),
+                self.entries.len()
+            )));
+        }
+        if let Some(old) = self.staged.take() {
+            let withdrawn = self.compiler.withdraw(old.generation);
+            tracing::info!(
+                "pipelines: reload {} superseded before it was whole ({withdrawn} not yet started)",
+                old.generation
+            );
+        }
+        self.issued += 1;
+        let generation = self.issued;
+        self.staged = Some(Staged {
+            generation,
+            pipelines: self.entries.iter().map(|_| None).collect(),
+        });
+        self.queue(generation, spirv);
+        Ok(generation)
+    }
+
+    /// Install every result that has landed, and say what each did. Called
+    /// by the host when the wake it passed to [`Program::new`] fires.
+    pub fn poll(&mut self) -> Vec<Landed> {
+        self.compiler
+            .drain()
+            .into_iter()
+            .filter_map(|built| self.land(built))
+            .collect()
+    }
+
+    /// Block until every pipeline of the running program is built: for a
+    /// host that runs its pipelines synchronously (the device tests).
+    pub fn wait_ready(&mut self) -> Result<()> {
+        while !self.whole() {
+            let built = self
+                .compiler
+                .wait()
+                .context("the compile workers are gone")?;
+            if let Some(Landed::Broken(err)) = self.land(built) {
+                bail!("{err}");
+            }
+        }
         Ok(())
+    }
+
+    /// Block until the reload being built is swapped in or refused: the
+    /// synchronous reload, for the device tests.
+    pub fn wait_staged(&mut self) -> Result<(), Refused> {
+        while let Some(staged) = &self.staged {
+            let generation = staged.generation;
+            let built = self.compiler.wait().ok_or_else(|| {
+                Refused::Pipelines(anyhow::anyhow!("the compile workers are gone"))
+            })?;
+            match self.land(built) {
+                Some(Landed::Swapped { generation: done }) if done == generation => return Ok(()),
+                Some(Landed::Refused {
+                    generation: done,
+                    error,
+                }) if done == generation => return Err(error),
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn land(&mut self, built: crate::compile::Built) -> Option<Landed> {
+        let entry = &self.entries[built.slot];
+        let took = crate::compile::human(built.took);
+        if built.generation == self.generation {
+            return match built.result {
+                Ok(pipeline) => {
+                    tracing::info!("pipeline {}: built in {took}", entry.name);
+                    self.live[built.slot] = Slot::Ready(pipeline);
+                    let all = self.whole();
+                    if all {
+                        tracing::info!(
+                            "pipelines: all {} built, {} after they were queued",
+                            self.entries.len(),
+                            crate::compile::human(self.queued_at.elapsed())
+                        );
+                    }
+                    Some(Landed::Live {
+                        entry: built.slot,
+                        all,
+                    })
+                }
+                Err(err) => Some(Landed::Broken(format!(
+                    "pipeline {} was refused: {err}",
+                    entry.name
+                ))),
+            };
+        }
+        let Some(staged) = self.staged.as_mut() else {
+            tracing::debug!(
+                "pipeline {}: generation {} landed after it stopped mattering",
+                entry.name,
+                built.generation
+            );
+            return None;
+        };
+        if staged.generation != built.generation {
+            tracing::debug!(
+                "pipeline {}: generation {} landed after it stopped mattering",
+                entry.name,
+                built.generation
+            );
+            return None;
+        }
+        let generation = staged.generation;
+        match built.result {
+            Ok(pipeline) => {
+                tracing::info!(
+                    "pipeline {}: built in {took} (reload {generation})",
+                    entry.name
+                );
+                staged.pipelines[built.slot] = Some(pipeline);
+                if staged.pipelines.iter().any(Option::is_none) {
+                    return None;
+                }
+                let staged = self.staged.take().expect("checked above");
+                // Whatever of the running generation is still queued is
+                // for a program that is no longer running.
+                self.compiler.withdraw(self.generation);
+                self.live = staged
+                    .pipelines
+                    .into_iter()
+                    .map(|pipeline| Slot::Ready(pipeline.expect("every one landed")))
+                    .collect();
+                self.generation = generation;
+                Some(Landed::Swapped { generation })
+            }
+            Err(err) => {
+                self.staged = None;
+                self.compiler.withdraw(generation);
+                Some(Landed::Refused {
+                    generation,
+                    error: Refused::Pipelines(anyhow::anyhow!(
+                        "pipeline creation rejected for {}: {err}",
+                        entry.name
+                    )),
+                })
+            }
+        }
     }
 }
 

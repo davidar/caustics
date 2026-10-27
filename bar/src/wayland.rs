@@ -83,9 +83,11 @@ use crate::feeders::{Feeders, pipe};
 use crate::gpu::Gpu;
 use crate::health::{self, Health};
 use crate::model::{Action, Model, Update, Updates};
+use caustics_host::compile::Wake;
 use caustics_host::images::Images;
 use caustics_host::modules::{Collected, Modules};
 use caustics_host::pacing::Pacing;
+use caustics_host::program::Landed;
 use caustics_host::witness::{Caustic, Printer};
 
 /// Which screen edge the bar takes. `FrameInputs::edge` carries it to the
@@ -387,6 +389,13 @@ pub struct Bar {
     /// its own beyond the clock: the capture feeder's,
     /// armed on `Feeders::next_deadline` (feeders/mod.rs, "Timers").
     loop_handle: Option<LoopHandle<'static, Bar>>,
+    /// What the compile workers call when a pipeline lands: the loop's own
+    /// wake, so it installs the pipeline on its next turn
+    /// ([`Bar::pipelines_landed`]).
+    wake: Wake,
+    /// A generation of the caustic queued on the compile workers and not
+    /// yet swapped in, and what its swap needs from the frames.
+    reloading: Option<Reloading>,
     capture_token: Option<RegistrationToken>,
     capture_deadline: Option<Instant>,
 
@@ -436,6 +445,7 @@ impl Bar {
         qh: QueueHandle<Bar>,
         edge_lock: Option<File>,
         updates: Updates,
+        wake: Wake,
     ) -> Result<Bar> {
         let compositor =
             CompositorState::bind(globals, &qh).context("wl_compositor is not available")?;
@@ -552,6 +562,8 @@ impl Bar {
             last_frame: now,
             frames: 0,
             loop_handle: None,
+            wake,
+            reloading: None,
             capture_token: None,
             capture_deadline: None,
             printer: Printer::new(Caustic::Bar),
@@ -778,8 +790,9 @@ impl Bar {
     /// One `Module` frame — one entry point — and the swap
     /// when it completes a generation (docs/abi.md, *Module*).
     ///
-    /// The swap is `Gpu::reload_all`'s: all-or-nothing,
-    /// refused outright if the compile moved a binding, and it never touches
+    /// The generation is queued by `Gpu::reload_all` and swapped in by
+    /// [`Bar::pipelines_landed`] when its last pipeline is built: all or
+    /// nothing, refused outright if the compile moved a binding, and it never touches
     /// the state buffer — so the bar keeps its popup, its menu level and its
     /// animations across it. The strings go with the modules or not at all: a
     /// hash in the mirror is only meaningful against the caustic that produced
@@ -821,35 +834,90 @@ impl Bar {
             );
             return;
         };
-        let started = Instant::now();
+        // Queued on the compile workers; the swap is `pipelines_landed`'s,
+        // when the last of them is built. The loop keeps drawing the bar that
+        // runs meanwhile.
         match gpu.reload_all(&reflection, &ready.spirv()) {
-            Ok(()) => {
-                // The modules are live, so the table that came with them is
-                // the one the mirror's hashes belong to.
-                self.strings.replace(reflection.strings);
-                // ...and the witness printer's complaints are about a program
-                // that is no longer running (docs/abi.md, *The witness ring*).
-                self.printer.reset();
-                // ...and the literal pool the next compose publishes is that
-                // table's, which is what makes a reload's own words spellable
-                // on the GPU. Nothing is reserved against it: the embassy
-                // mints no key at all (docs/abi.md, *The facts*).
-                // New modules may build a different table from the same
-                // facts, so the model passes owe a run.
-                gpu.mark_shape_pending();
-                tracing::info!(
-                    "sidecar {sidecar}: generation {generation}, {} modules, swapped \
-                     ({} KiB, {} ms)",
-                    ready.len(),
-                    ready.bytes() / 1024,
-                    started.elapsed().as_millis()
-                );
-                self.request_frame();
+            Ok(token) => {
+                if let Some(old) = self.reloading.take() {
+                    tracing::info!(
+                        "sidecar {}: generation {} superseded by {generation} before it was built",
+                        old.sidecar,
+                        old.generation
+                    );
+                }
+                self.reloading = Some(Reloading {
+                    token,
+                    sidecar: sidecar.to_owned(),
+                    generation,
+                    modules: ready.len(),
+                    bytes: ready.bytes(),
+                    reflection,
+                    started: Instant::now(),
+                });
             }
             Err(err) => tracing::error!(
                 "sidecar {sidecar}: generation {generation} refused: {err:#}; \
                  keeping the old bar"
             ),
+        }
+    }
+
+    /// The compile workers' wake: install what landed. A pipeline of the
+    /// running program owes a frame (the first one drawn is the first frame
+    /// there is, and each landing after it may draw more); a reload swapped
+    /// in brings its literals; a refusal keeps the bar that runs.
+    pub fn pipelines_landed(&mut self) {
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        for landed in gpu.poll_pipelines() {
+            match landed {
+                Landed::Live { .. } => self.request_frame(),
+                Landed::Broken(err) => {
+                    self.exit = Some(Exit::Protocol(format!(
+                        "the bar caustic baked in at build time does not load: {err}"
+                    )));
+                }
+                Landed::Swapped { generation } => {
+                    let Some(reload) = self.reloading.take_if(|r| r.token == generation) else {
+                        continue;
+                    };
+                    // The modules are live, so the table that came with them
+                    // is the one the mirror's hashes belong to.
+                    self.strings.replace(reload.reflection.strings);
+                    // ...and the witness printer's complaints are about a
+                    // program that is no longer running (docs/abi.md, *The
+                    // witness ring*).
+                    self.printer.reset();
+                    // ...and the literal pool the next compose publishes is
+                    // that table's, which is what makes a reload's own words
+                    // spellable on the GPU. Nothing is reserved against it:
+                    // the embassy mints no key at all (docs/abi.md, *The
+                    // facts*). New modules may build a different table from
+                    // the same facts, so the model passes owe a run, which
+                    // `poll_pipelines` has marked.
+                    tracing::info!(
+                        "sidecar {}: generation {}, {} modules, swapped ({} KiB, {} ms)",
+                        reload.sidecar,
+                        reload.generation,
+                        reload.modules,
+                        reload.bytes / 1024,
+                        reload.started.elapsed().as_millis()
+                    );
+                    self.request_frame();
+                }
+                Landed::Refused { generation, error } => {
+                    let Some(reload) = self.reloading.take_if(|r| r.token == generation) else {
+                        continue;
+                    };
+                    tracing::error!(
+                        "sidecar {}: generation {} refused: {error}; keeping the old bar",
+                        reload.sidecar,
+                        reload.generation
+                    );
+                }
+            }
         }
     }
 
@@ -1827,6 +1895,12 @@ impl Bar {
             self.dirty = false;
             return Ok(());
         };
+        // The frame submission's pipelines are still being built: the frame
+        // stays owed (and the commands queued), and is drawn when they land
+        // (`pipelines_landed`).
+        if !gpu.can_render() {
+            return Ok(());
+        }
         let now = Instant::now();
         let dt = (now - self.last_frame).as_secs_f32();
         self.last_frame = now;
@@ -2090,7 +2164,7 @@ impl Bar {
         // SAFETY: the connection and the layer surface are owned by this
         // struct and dropped after `gpu` (declared later in the struct), so
         // both handles outlive the wgpu surface.
-        let mut gpu = unsafe { Gpu::new(display, surface, width, height) }?;
+        let mut gpu = unsafe { Gpu::new(display, surface, width, height, self.wake.clone()) }?;
         // Everything `caustics-glyphs` sent while there was nowhere to put it
         // — which on a warm start is the whole font, since it is read and sent
         // before the compositor has answered the first configure.
@@ -2153,6 +2227,20 @@ impl Bar {
     pub fn frames(&self) -> u64 {
         self.frames
     }
+}
+
+/// A generation queued on the compile workers: the program's number for it,
+/// and what the swap line and the swap itself need from the frames.
+struct Reloading {
+    token: u64,
+    sidecar: String,
+    generation: u32,
+    modules: usize,
+    bytes: usize,
+    /// The compile's reflection: its literals are the ones the mirror's
+    /// hashes mean once it is swapped in, and not before.
+    reflection: punchcutter_slang::Reflection,
+    started: Instant,
 }
 
 /// Straight RGBA8 into premultiplied RGBA8, reusing `out`'s allocation. The

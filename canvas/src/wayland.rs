@@ -88,9 +88,11 @@ use caustics_bar_abi::wire::{
     Module, PROGRAM_CANVAS, REQ_COVER, REQ_OUTPUT_SIZE, REQ_PROGRAM, Request,
 };
 use caustics_bar_abi::{CANVAS_ENTRIES, wire::Image};
+use caustics_host::compile::Wake;
 use caustics_host::modules::{Collected, Modules};
 use caustics_host::pacing::Pacing;
 use caustics_host::pipe::{Event, Pipe};
+use caustics_host::program::Landed;
 use caustics_host::strings::Strings;
 use caustics_host::surface::Surface;
 use caustics_host::text::Covers;
@@ -304,6 +306,13 @@ pub struct Canvas {
     told: Option<(u32, u32)>,
     sizes: u32,
     loop_handle: Option<LoopHandle<'static, Canvas>>,
+    /// What the compile workers call when a pipeline lands: the loop's own
+    /// wake, so it installs the pipeline on its next turn
+    /// ([`Canvas::pipelines_landed`]).
+    wake: Wake,
+    /// A generation of the caustic queued on the compile workers and not
+    /// yet swapped in, and what its swap line says.
+    reloading: Option<Reloading>,
     stall_token: Option<RegistrationToken>,
     stall_at: Option<Instant>,
     frames: u64,
@@ -319,6 +328,7 @@ impl Canvas {
         globals: &GlobalList,
         qh: QueueHandle<Canvas>,
         events: &smithay_client_toolkit::reexports::calloop::channel::Sender<Event>,
+        wake: Wake,
     ) -> Result<Canvas> {
         let compositor =
             CompositorState::bind(globals, &qh).context("wl_compositor is not available")?;
@@ -395,6 +405,8 @@ impl Canvas {
             told: None,
             sizes: 0,
             loop_handle: None,
+            wake,
+            reloading: None,
             stall_token: None,
             stall_at: None,
             frames: 0,
@@ -773,7 +785,8 @@ impl Canvas {
         let (display, surface) = handles(&self.conn, pane.shell.wl_surface())?;
         // SAFETY: as in `service`: the connection and the pane's surface
         // outlive the target, and the device is dropped after every target.
-        let (mut gpu, target) = unsafe { Gpu::new(display, surface, width, height) }?;
+        let (mut gpu, target) =
+            unsafe { Gpu::new(display, surface, width, height, self.wake.clone()) }?;
         tracing::info!(
             "output {}: {width}x{height} px at scale {}/120 for the {}; the device is up",
             pane.name,
@@ -883,6 +896,14 @@ impl Canvas {
         let Some(target) = pane.target.as_mut() else {
             return Ok(());
         };
+        // The pipelines a frame needs are still being built: the pane stays
+        // owed, and is drawn when they land (`pipelines_landed`). A lock pane
+        // waits here too, and the compositor keeps the session blank until it
+        // has a frame.
+        if !gpu.can_draw() {
+            pane.dirty = true;
+            return Ok(());
+        }
         let Some(frame) = gpu.acquire(target)? else {
             // Nothing to draw into: the next configure or the stall tries
             // again.
@@ -1389,26 +1410,94 @@ impl Canvas {
         let Some(gpu) = self.gpu.as_mut() else {
             return;
         };
-        let started = Instant::now();
         match gpu.reload(&reflection, &ready.spirv()) {
-            Ok(()) => {
-                self.strings.replace(reflection.strings);
-                self.literal_count = gpu.write_literals(&self.strings);
-                self.printer.reset();
-                tracing::info!(
-                    "sidecar {sidecar}: generation {generation}, {} modules, swapped ({} KiB, {} ms)",
-                    ready.len(),
-                    ready.bytes() / 1024,
-                    started.elapsed().as_millis()
-                );
-                self.mark_all_dirty();
-                self.push_facts();
+            Ok(token) => {
+                if let Some(old) = self.reloading.take() {
+                    tracing::info!(
+                        "sidecar {}: generation {} superseded by {generation} before it was built",
+                        old.sidecar,
+                        old.generation
+                    );
+                }
+                self.reloading = Some(Reloading {
+                    token,
+                    sidecar: sidecar.to_owned(),
+                    generation,
+                    modules: ready.len(),
+                    bytes: ready.bytes(),
+                    reflection,
+                    started: Instant::now(),
+                });
             }
             Err(err) => tracing::error!(
                 "sidecar {sidecar}: generation {generation} refused: {err}; keeping the old canvas"
             ),
         }
     }
+
+    /// The compile workers' wake: install what landed. A pipeline of the
+    /// running program owes every pane a frame (the first one drawn is the
+    /// first frame there is); a reload swapped in brings its literals and
+    /// draws everything again; a refusal keeps the canvas that runs.
+    pub fn pipelines_landed(&mut self) {
+        let Some(gpu) = self.gpu.as_mut() else {
+            return;
+        };
+        for landed in gpu.poll_pipelines() {
+            match landed {
+                Landed::Live { .. } => self.mark_all_dirty(),
+                Landed::Broken(err) => {
+                    self.exit = Some(Exit::Fault(format!(
+                        "the canvas caustic baked in at build time does not load: {err}"
+                    )));
+                }
+                Landed::Swapped { generation } => {
+                    let Some(reload) = self.reloading.take_if(|r| r.token == generation) else {
+                        continue;
+                    };
+                    self.strings.replace(reload.reflection.strings);
+                    if let Some(gpu) = self.gpu.as_mut() {
+                        self.literal_count = gpu.write_literals(&self.strings);
+                    }
+                    self.printer.reset();
+                    tracing::info!(
+                        "sidecar {}: generation {}, {} modules, swapped ({} KiB, {} ms)",
+                        reload.sidecar,
+                        reload.generation,
+                        reload.modules,
+                        reload.bytes / 1024,
+                        reload.started.elapsed().as_millis()
+                    );
+                    self.mark_all_dirty();
+                    self.push_facts();
+                }
+                Landed::Refused { generation, error } => {
+                    let Some(reload) = self.reloading.take_if(|r| r.token == generation) else {
+                        continue;
+                    };
+                    tracing::error!(
+                        "sidecar {}: generation {} refused: {error}; keeping the old canvas",
+                        reload.sidecar,
+                        reload.generation
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// A generation queued on the compile workers: the program's number for it,
+/// and what the swap line and the swap itself need from the frames.
+struct Reloading {
+    token: u64,
+    sidecar: String,
+    generation: u32,
+    modules: usize,
+    bytes: usize,
+    /// The compile's reflection: its literals are the ones the mirror's
+    /// hashes mean once it is swapped in, and not before.
+    reflection: punchcutter_slang::Reflection,
+    started: Instant,
 }
 
 /// The raw `wl_display` and `wl_surface` a wgpu surface is made from.

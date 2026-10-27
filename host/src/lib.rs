@@ -31,6 +31,7 @@
 //! bar (`bar/`) is this crate's first client, and the code here is the code
 //! the bar ran before it was a client, moved rather than rewritten.
 
+pub mod compile;
 pub mod device;
 pub mod images;
 pub mod modules;

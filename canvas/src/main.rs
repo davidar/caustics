@@ -35,6 +35,7 @@ use anyhow::{Context, Result};
 use smithay_client_toolkit::reexports::calloop::{
     EventLoop,
     channel::{Event as ChannelEvent, channel},
+    ping::make_ping,
     timer::{TimeoutAction, Timer},
 };
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
@@ -127,7 +128,11 @@ fn run(max_runtime: Option<Duration>) -> Result<i32> {
 
     // Every sidecar's events, applied on the loop's own thread.
     let (events, incoming) = channel::<Event>();
-    let mut canvas = Canvas::new(conn.clone(), &globals, qh, &events)?;
+    // The compile workers' wake: a pipeline built off this thread is
+    // installed on it, on the loop's next turn (`Canvas::pipelines_landed`).
+    let (ping, landed) = make_ping().context("could not create the compile wake")?;
+    let wake: caustics_host::compile::Wake = std::sync::Arc::new(move || ping.ping());
+    let mut canvas = Canvas::new(conn.clone(), &globals, qh, &events, wake)?;
 
     // The first output's configure brings the device up, on a plain
     // dispatch before calloop owns the queue, as the bar's does (bar/src/main.rs
@@ -136,6 +141,8 @@ fn run(max_runtime: Option<Duration>) -> Result<i32> {
     // `BEFORE_DEVICE_POLL_MS`: a restarted host whose session is locked is
     // asked to lock before it has painted anything, and the lock goes out
     // then, not when the device is up (docs/canvas.md, *Failure model*).
+    // Bringing the device up builds no pipeline: they are queued on the
+    // compile workers, and this loop ends as soon as the device exists.
     let mut first_surface: Option<std::time::Instant> = None;
     while canvas.awaiting_device() {
         if canvas.has_screens() {
@@ -172,6 +179,11 @@ fn run(max_runtime: Option<Duration>) -> Result<i32> {
             }
         })
         .map_err(|err| anyhow::anyhow!("could not insert the sidecar channel: {err}"))?;
+    handle
+        .insert_source(landed, |_, _, canvas: &mut Canvas| {
+            canvas.pipelines_landed()
+        })
+        .map_err(|err| anyhow::anyhow!("could not insert the compile wake: {err}"))?;
     canvas.set_loop_handle(handle.clone());
     if let Some(deadline) = max_runtime {
         handle

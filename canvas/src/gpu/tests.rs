@@ -1075,3 +1075,46 @@ fn made_up_picture(width: u32, height: u32) -> Image {
         rgba,
     }
 }
+
+/// A reload is queued on the compile workers, never built on the caller:
+/// the canvas that runs keeps drawing while the next one builds, a
+/// generation superseded before it was whole is never swapped in, and the
+/// one that superseded it is.
+#[test]
+fn a_reload_builds_beside_the_running_canvas() {
+    if !gated() {
+        return;
+    }
+    let mut gpu = fading(0, 1000);
+    let spirv = baked_spv(gpu.presentation.format).expect("a baked format");
+    let older = gpu
+        .reload(baked_reflection(), spirv)
+        .expect("the baked bindings are the baked bindings");
+    let newer = gpu
+        .reload(baked_reflection(), spirv)
+        .expect("the baked bindings are the baked bindings");
+    assert!(newer > older, "each reload is a generation of its own");
+    assert!(
+        gpu.program.reloading(),
+        "nothing is swapped until it is polled"
+    );
+    assert!(gpu.can_draw(), "the running canvas still draws");
+    let (before, _) = frame_at(&mut gpu, 500);
+    assert_eq!(
+        gpu.program.generation(),
+        1,
+        "the baked canvas drew that frame"
+    );
+
+    gpu.program
+        .wait_staged()
+        .expect("the newer generation builds and swaps in");
+    assert!(!gpu.program.reloading());
+    assert_eq!(
+        gpu.program.generation(),
+        newer,
+        "the superseded generation never ran"
+    );
+    let (after, _) = frame_at(&mut gpu, 500);
+    assert!(after > before, "and the swapped one draws");
+}

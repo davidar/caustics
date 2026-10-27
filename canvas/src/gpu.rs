@@ -30,8 +30,9 @@ use caustics_bar_abi::canvas::{
 };
 use caustics_bar_abi::wire::Image;
 use caustics_bar_abi::{CANVAS_ENTRIES, Literal, NO_INDEX, as_bytes};
+use caustics_host::compile::Wake;
 use caustics_host::device::{self, Device, Presentation};
-use caustics_host::program::{Entry, Program, Refused, group_entries};
+use caustics_host::program::{Entry, Landed, Program, Refused, group_entries};
 use caustics_host::strings::Strings;
 use caustics_host::surface::{
     self, AcquireError, Surface, acquire, create_surface, refresh_mirror,
@@ -51,6 +52,17 @@ pub const BAKED_REFLECTION: &str =
 const SHAPE: usize = 0;
 const APPLY: usize = 1;
 const DRAW: usize = 2;
+
+/// The order the pipelines are built in: what a frame needs first, so the
+/// wallpaper is drawn before the shaper, most of the compile, is built.
+const NEED: [usize; CANVAS_ENTRIES.len()] = [APPLY, DRAW, SHAPE];
+
+/// The compile workers' count (`caustics_host::compile`). Two: on RADV with
+/// a cold cache the shaper builds beside the rest instead of after it, which
+/// is the bar's whole program in 11.7 s rather than 16.2 s with its chips no
+/// later; the canvas's are the shaper and two small ones, and come in no
+/// slower. A third bought the bar half a second.
+const COMPILE_WORKERS: usize = 2;
 
 /// The canvas's own set, the text engine's curve buffers (`text.slang`
 /// declares them in set 1), and the shaper's tables with the strings buffer.
@@ -163,11 +175,17 @@ impl Gpu {
     ///
     /// `display` and `surface` must be a live `wl_display` and `wl_surface`
     /// that outlive the returned [`Surface`].
+    ///
+    /// The pipelines are not built when this returns: they are queued on the
+    /// compile workers, and `wake` is called each time one lands, for the
+    /// host to [`Gpu::poll_pipelines`]. Until they are, a frame is skipped
+    /// ([`Gpu::can_draw`]).
     pub unsafe fn new(
         display: NonNull<std::ffi::c_void>,
         surface: NonNull<std::ffi::c_void>,
         width: u32,
         height: u32,
+        wake: Wake,
     ) -> Result<(Gpu, Surface)> {
         let instance = device::instance();
         // SAFETY: the caller's contract, above.
@@ -196,13 +214,15 @@ impl Gpu {
             bindings,
             features.contains(wgpu::Features::TIMESTAMP_QUERY),
             shader_clock,
+            wake,
         )?;
         let target = gpu.configure(Some(wgpu_surface), width, height);
         Ok((gpu, target))
     }
 
     /// The same device, buffers and pipelines with no surface: what the
-    /// tests run the caustic on.
+    /// tests run the caustic on. Every pipeline is built before this
+    /// returns, so a test runs them synchronously.
     #[cfg(test)]
     pub fn headless() -> Result<Gpu> {
         let bindings = baked_reflection().bindings.clone();
@@ -219,7 +239,7 @@ impl Gpu {
             &bindings,
             "caustics-canvas-device",
         )?;
-        Gpu::bring_up(
+        let mut gpu = Gpu::bring_up(
             instance,
             adapter,
             device,
@@ -228,7 +248,18 @@ impl Gpu {
             bindings,
             features.contains(wgpu::Features::TIMESTAMP_QUERY),
             shader_clock,
-        )
+            std::sync::Arc::new(|| {}),
+        )?;
+        gpu.wait_ready()?;
+        Ok(gpu)
+    }
+
+    /// Block until every pipeline is built.
+    #[cfg(test)]
+    pub fn wait_ready(&mut self) -> Result<()> {
+        self.program
+            .wait_ready()
+            .context("the canvas caustic baked in at build time does not load")
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -241,6 +272,7 @@ impl Gpu {
         bindings: Vec<Binding>,
         timing: bool,
         shader_clock: punchcutter_core::gpu::ShaderClock,
+        wake: Wake,
     ) -> Result<Gpu> {
         let format = presentation.format;
         let program = Program::new(
@@ -255,6 +287,9 @@ impl Gpu {
             &|name| storage_texture_format(name, format),
             &CANVAS_ENTRY_TABLE,
             baked_spv(format)?,
+            &NEED,
+            COMPILE_WORKERS,
+            wake,
         )
         .context("the canvas caustic baked in at build time does not load")?;
 
@@ -503,13 +538,38 @@ impl Gpu {
         Ok(())
     }
 
-    /// Swap in a freshly compiled generation, or keep what runs. New
-    /// pipelines shape again, and their first pass is not judged.
-    pub fn reload(&mut self, reflection: &Reflection, spirv: &[&[u8]]) -> Result<(), Refused> {
-        self.program.reload(&self.device, reflection, spirv)?;
-        self.watchdog.swapped();
-        self.shape_pending = true;
-        Ok(())
+    /// Queue a freshly compiled generation, to be swapped in whole when its
+    /// last pipeline is built ([`Landed::Swapped`] from
+    /// [`Gpu::poll_pipelines`]), or refused, the running canvas kept either
+    /// way. Returns its number.
+    pub fn reload(&mut self, reflection: &Reflection, spirv: &[&[u8]]) -> Result<u64, Refused> {
+        self.program.reload(reflection, spirv)
+    }
+
+    /// Install every pipeline that has landed and say what each did. A
+    /// swapped generation shapes again, and its first pass is not judged; a
+    /// pipeline of the running program that lands owes the text a pass,
+    /// which is a no-op when nothing was waiting for it.
+    pub fn poll_pipelines(&mut self) -> Vec<Landed> {
+        let landed = self.program.poll();
+        for news in &landed {
+            match news {
+                Landed::Swapped { .. } => {
+                    self.watchdog.swapped();
+                    self.shape_pending = true;
+                }
+                Landed::Live { .. } => self.shape_pending = true,
+                Landed::Broken(_) | Landed::Refused { .. } => {}
+            }
+        }
+        landed
+    }
+
+    /// Whether a frame can be drawn on a surface: `canvas_apply` and
+    /// `canvas_draw` are built. The text needs `canvas_shape` as well and
+    /// waits for it on its own; a frame before it draws no glyphs.
+    pub fn can_draw(&self) -> bool {
+        self.program.has(&[APPLY, DRAW])
     }
 
     // -- the text ------------------------------------------------------------
@@ -636,6 +696,11 @@ impl Gpu {
         if !self.shape_pending || self.watchdog.blocked() {
             return;
         }
+        // Not built yet: still owed, and run when it lands.
+        let Some(shape) = self.program.pipeline(SHAPE) else {
+            return;
+        };
+        let shape = shape.clone();
         self.shape_pending = false;
         let group = self.bind_group(&self.shape_params, &self.shape_dst);
         let mut encoder = self
@@ -651,7 +716,7 @@ impl Gpu {
             pass.set_bind_group(SET_CANVAS, &group, &[]);
             pass.set_bind_group(SET_TEXT, &self.text_group, &[]);
             pass.set_bind_group(SET_SHAPE, &self.shape_group, &[]);
-            pass.set_pipeline(self.program.pipeline(SHAPE));
+            pass.set_pipeline(&shape);
             pass.dispatch_workgroups(CANVAS_TEXT_BLOCKS as u32, 1, 1);
         }
         self.watchdog.resolve(&mut encoder);
@@ -759,6 +824,13 @@ impl Gpu {
     }
 
     fn encode(&self, params: &wgpu::Buffer, dst: &wgpu::TextureView, width: u32, height: u32) {
+        let (Some(apply), Some(draw)) = (self.program.pipeline(APPLY), self.program.pipeline(DRAW))
+        else {
+            // `can_draw` is the caller's check, and an image acquired without
+            // it is presented with whatever it held.
+            tracing::warn!("canvas: a frame was asked for before its pipelines were built");
+            return;
+        };
         let group = self.bind_group(params, dst);
         let mut encoder = self
             .device
@@ -775,9 +847,9 @@ impl Gpu {
             pass.set_bind_group(SET_SHAPE, &self.shape_group, &[]);
             // Two dispatches, two usage scopes: the barrier between them is
             // what lets `canvas_draw` read the alpha `canvas_apply` wrote.
-            pass.set_pipeline(self.program.pipeline(APPLY));
+            pass.set_pipeline(apply);
             pass.dispatch_workgroups(1, 1, 1);
-            pass.set_pipeline(self.program.pipeline(DRAW));
+            pass.set_pipeline(draw);
             pass.dispatch_workgroups(width.div_ceil(TILE).max(1), height.div_ceil(TILE).max(1), 1);
         }
         encoder.copy_buffer_to_buffer(

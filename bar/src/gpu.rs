@@ -58,8 +58,9 @@
 use std::ptr::NonNull;
 
 use anyhow::{Context, Result, anyhow, bail};
+use caustics_host::compile::Wake;
 use caustics_host::device::{self, Device, Presentation};
-use caustics_host::program::{Entry, Program, Refused, group_entries};
+use caustics_host::program::{Entry, Landed, Program, Refused, group_entries};
 use caustics_host::surface::{self, ID_FORMAT, Surface, acquire, create_surface, refresh_mirror};
 use caustics_host::text::{Group, TextBuffers, Watchdog, growable_buffer};
 use punchcutter_core::gpu::storage_buffer;
@@ -105,6 +106,23 @@ const APPLY: usize = 3;
 const VISIBILITY: usize = 4;
 const SAMPLE: usize = 5;
 const DRAW: usize = 6;
+
+/// The order the pipelines are built in, which is the order of need: the
+/// frame submission's four first, so the slab is drawn as soon as they land;
+/// then the model passes, so the chips are; the shaper, most of the compile,
+/// last, so the text comes in after everything else is already on screen.
+const NEED: [usize; abi::BAR_ENTRIES.len()] =
+    [APPLY, VISIBILITY, SAMPLE, DRAW, BUILD, COMPOSE, SHAPE];
+
+/// What a frame submission dispatches.
+const FRAME_PIPELINES: [usize; 4] = [APPLY, VISIBILITY, SAMPLE, DRAW];
+
+/// The compile workers' count (`caustics_host::compile`). Two: on RADV with
+/// a cold cache the shaper builds beside the rest instead of after it, which
+/// is the bar's whole program in 11.7 s rather than 16.2 s with its chips no
+/// later; the canvas's are the shaper and two small ones, and come in no
+/// slower. A third bought the bar half a second.
+const COMPILE_WORKERS: usize = 2;
 
 /// The seven entry points, in `abi::BAR_ENTRIES` order: each one's name, its
 /// pipeline's label, and its `[numthreads]`.
@@ -316,16 +334,22 @@ impl Gpu {
     /// that outlive the returned [`Gpu`]. The caller (`wayland.rs`) keeps the
     /// connection and the layer surface for the life of the process, and
     /// drops the `Gpu` before either.
+    ///
+    /// The pipelines are not built when this returns: they are queued on the
+    /// compile workers, `wake` is called each time one lands, and the host
+    /// installs it with [`Gpu::poll_pipelines`]. A frame before the frame
+    /// submission's are built is not drawn ([`Gpu::can_render`]).
     pub unsafe fn new(
         display: NonNull<std::ffi::c_void>,
         surface: NonNull<std::ffi::c_void>,
         width: u32,
         height: u32,
+        wake: Wake,
     ) -> Result<Self> {
         let instance = device::instance();
         // SAFETY: the caller's contract, above.
         let bar_surface = unsafe { create_surface(&instance, display, surface)? };
-        Gpu::bring_up(instance, Some(bar_surface), width, height)
+        Gpu::bring_up(instance, Some(bar_surface), width, height, wake)
     }
 
     /// The same device, the same buffers and the same pipelines with **no
@@ -336,9 +360,28 @@ impl Gpu {
     /// integrated or CPU adapter whose name does not say NVIDIA — and the
     /// format is fixed rather than negotiated. Everything after that is the
     /// production path, which is the whole point: the oracle tests what ships.
+    ///
+    /// Every pipeline is built before this returns, so the oracle runs them
+    /// synchronously.
     #[cfg(test)]
     pub fn headless(width: u32, height: u32) -> Result<Self> {
-        Gpu::bring_up(device::instance(), None, width, height)
+        let mut gpu = Gpu::bring_up(
+            device::instance(),
+            None,
+            width,
+            height,
+            std::sync::Arc::new(|| {}),
+        )?;
+        gpu.wait_ready()?;
+        Ok(gpu)
+    }
+
+    /// Block until every pipeline is built.
+    #[cfg(test)]
+    pub fn wait_ready(&mut self) -> Result<()> {
+        self.program
+            .wait_ready()
+            .context("the bar caustic baked in at build time does not load")
     }
 
     fn bring_up(
@@ -346,6 +389,7 @@ impl Gpu {
         bar_surface: Option<wgpu::Surface<'static>>,
         width: u32,
         height: u32,
+        wake: Wake,
     ) -> Result<Self> {
         // The device, its refusals and its exit on loss are the crate's
         // (`caustics_host::device`). Its storage-buffer limit is counted from
@@ -375,8 +419,9 @@ impl Gpu {
         };
         let format = presentation.format;
 
-        // Three layouts from the reflection, the pipeline layout over them
-        // and the seven pipelines, in one validation scope
+        // Three layouts from the reflection and the pipeline layout over
+        // them, now; the seven pipelines queued on the compile workers in the
+        // order of need, each in a validation scope of its own
         // (`caustics_host::program`). The sets the reflection declares must
         // be exactly these three, or this stops here.
         let program = Program::new(
@@ -391,6 +436,9 @@ impl Gpu {
             &|name| storage_texture_format(name, format),
             &ENTRY_POINTS,
             baked_spv(format),
+            &NEED,
+            COMPILE_WORKERS,
+            wake,
         )
         .context("the bar caustic baked in at build time does not load")?;
         let reflected = program.bindings();
@@ -922,16 +970,44 @@ impl Gpu {
     /// swap and its refusal are `caustics_host::program::Program::reload`'s;
     /// what is the bar's is the wording of a refusal and the cold pass it
     /// owes the watchdog.
-    pub fn reload_all(&mut self, reflection: &Reflection, spirv: &[&[u8]]) -> Result<()> {
-        match self.program.reload(&self.device, reflection, spirv) {
-            Ok(()) => {}
+    ///
+    /// The bindings are checked here; the pipelines are queued on the
+    /// compile workers and swapped in together when the last is built
+    /// ([`Landed::Swapped`] from [`Gpu::poll_pipelines`]), or refused, the
+    /// bar that runs untouched either way. Returns the generation's number.
+    pub fn reload_all(&mut self, reflection: &Reflection, spirv: &[&[u8]]) -> Result<u64> {
+        match self.program.reload(reflection, spirv) {
+            Ok(generation) => Ok(generation),
             Err(Refused::Bindings(witness)) => {
                 bail!("reload refused: bindings changed ({witness}); restart the bar")
             }
-            Err(Refused::Pipelines(err)) => return Err(err),
+            Err(Refused::Pipelines(err)) => Err(err),
         }
-        self.watchdog.swapped();
-        Ok(())
+    }
+
+    /// Install every pipeline that has landed and say what each did. A
+    /// swapped generation owes the watchdog a cold pass and the model passes
+    /// a run; so does a pipeline of the running program, since the shape
+    /// submission it completes may have run without it.
+    pub fn poll_pipelines(&mut self) -> Vec<Landed> {
+        let landed = self.program.poll();
+        for news in &landed {
+            match news {
+                Landed::Swapped { .. } => {
+                    self.watchdog.swapped();
+                    self.shape_pending = true;
+                }
+                Landed::Live { .. } => self.shape_pending = true,
+                Landed::Broken(_) | Landed::Refused { .. } => {}
+            }
+        }
+        landed
+    }
+
+    /// Whether a frame can be drawn: the frame submission's four pipelines
+    /// are built. The model passes and the shaper come after, on their own.
+    pub fn can_render(&self) -> bool {
+        self.program.has(&FRAME_PIPELINES)
     }
 
     /// One frame: drain the command ring, run apply once, then
@@ -946,6 +1022,15 @@ impl Gpu {
             frame: self.frame,
             ..*inputs
         };
+        // The caller's check (`can_render`); a frame asked for before the
+        // pipelines are built is an error rather than an image acquired and
+        // presented unwritten.
+        let apply = self
+            .program
+            .pipeline(APPLY)
+            .filter(|_| self.can_render())
+            .context("a frame was asked for before its pipelines were built")?
+            .clone();
         self.shape_if_pending(inputs);
         // The ring: the caustic reads `command_count` entries from the front,
         // so only the live prefix needs writing.
@@ -1037,7 +1122,7 @@ impl Gpu {
             // apply runs once and lays out every target, so a popup frame
             // never needs a second one. It is bound with the bar's group;
             // it reads `params` only through `inputs`.
-            pass.set_pipeline(self.program.pipeline(APPLY));
+            pass.set_pipeline(&apply);
             pass.dispatch_workgroups(1, 1, 1);
 
             let bar_dims = (self.bar.config.width, self.bar.config.height);
@@ -1133,6 +1218,19 @@ impl Gpu {
         if self.watchdog.blocked() {
             return;
         }
+        // The model passes are not built yet: still owed, and run when they
+        // land. The shaper may come after them; until it does, the blocks
+        // are laid out unshaped, which is what they are before a font
+        // arrives: text of no size and no glyphs, and every chip and icon
+        // where it goes. Its landing owes the passes another run
+        // (`poll_pipelines`).
+        let (Some(build), Some(compose)) =
+            (self.program.pipeline(BUILD), self.program.pipeline(COMPOSE))
+        else {
+            return;
+        };
+        let (build, compose) = (build.clone(), compose.clone());
+        let shape = self.program.pipeline(SHAPE).cloned();
         self.shape_pending = false;
         // The passes read the frame stamp, the scale and the three clock words,
         // so the uniform has to be current *before* they run rather than with
@@ -1164,7 +1262,7 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.set_bind_group(1, &self.text_group, &[]);
             pass.set_bind_group(2, &self.shape_group, &[]);
-            pass.set_pipeline(self.program.pipeline(BUILD));
+            pass.set_pipeline(&build);
             pass.dispatch_workgroups(1, 1, 1);
         }
         {
@@ -1175,10 +1273,10 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.set_bind_group(1, &self.text_group, &[]);
             pass.set_bind_group(2, &self.shape_group, &[]);
-            pass.set_pipeline(self.program.pipeline(COMPOSE));
+            pass.set_pipeline(&compose);
             pass.dispatch_workgroups(1, 1, 1);
         }
-        {
+        if let Some(shape) = &shape {
             // **Its own pass**, and that is the whole of why the compose pass
             // is correct: `bar_shape` reads the byte length `bar_compose`
             // writes into a block, and two dispatches inside one compute pass
@@ -1199,10 +1297,14 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.set_bind_group(1, &self.text_group, &[]);
             pass.set_bind_group(2, &self.shape_group, &[]);
-            pass.set_pipeline(self.program.pipeline(SHAPE));
+            pass.set_pipeline(shape);
             pass.dispatch_workgroups(SHAPE_BLOCKS.div_ceil(SHAPE_GROUP), 1, 1);
         }
-        self.watchdog.resolve(&mut encoder);
+        // The watchdog times the shape pass and nothing else, so a
+        // submission without one has nothing for it to read.
+        if shape.is_some() {
+            self.watchdog.resolve(&mut encoder);
+        }
         let started = std::time::Instant::now();
         self.queue.submit(Some(encoder.finish()));
         // Waited out before the frame's own submission: the layout reads what
@@ -1220,7 +1322,7 @@ impl Gpu {
         // an `ACT_WATCHDOG` and the response is fixed. What was owed is still
         // owed: the flag the pass cleared goes back on, so the release
         // re-shapes rather than leaving last arena's metrics.
-        if self.watchdog.check(&self.device) {
+        if shape.is_some() && self.watchdog.check(&self.device) {
             self.shape_pending = true;
         }
     }
@@ -1247,9 +1349,14 @@ impl Gpu {
 
     /// `reload_all` with the baked modules, as `caustics-reload` would deliver an
     /// unchanged caustic: the swap without a compile.
+    /// Synchronous, as the oracle wants it: queued, waited out, installed.
     #[cfg(test)]
     pub fn reload_baked(&mut self) -> Result<()> {
-        self.reload_all(baked_reflection(), baked_spv(self.presentation.format))
+        self.reload_all(baked_reflection(), baked_spv(self.presentation.format))?;
+        self.program.wait_staged().map_err(|err| anyhow!("{err}"))?;
+        self.watchdog.swapped();
+        self.shape_pending = true;
+        Ok(())
     }
 
     /// Bind group 0 for the shape pass: the bar's own resources, with a
@@ -1374,7 +1481,11 @@ impl Gpu {
             pass.set_bind_group(0, &group, &[]);
             pass.set_bind_group(1, &self.text_group, &[]);
             pass.set_bind_group(2, &self.shape_group, &[]);
-            pass.set_pipeline(self.program.pipeline(APPLY));
+            pass.set_pipeline(
+                self.program
+                    .pipeline(APPLY)
+                    .expect("a headless device waits"),
+            );
             pass.dispatch_workgroups(1, 1, 1);
         }
         encoder.copy_buffer_to_buffer(
@@ -1628,12 +1739,20 @@ fn dispatch_target(
 ) {
     let groups_x = width.div_ceil(TILE).max(1);
     let groups_y = height.div_ceil(TILE).max(1);
+    let (Some(visibility), Some(sample), Some(draw)) = (
+        program.pipeline(VISIBILITY),
+        program.pipeline(SAMPLE),
+        program.pipeline(DRAW),
+    ) else {
+        // `render` checked `can_render` before acquiring anything.
+        return;
+    };
     pass.set_bind_group(0, group, &[]);
-    pass.set_pipeline(program.pipeline(VISIBILITY));
+    pass.set_pipeline(visibility);
     pass.dispatch_workgroups(groups_x, groups_y, 1);
-    pass.set_pipeline(program.pipeline(SAMPLE));
+    pass.set_pipeline(sample);
     pass.dispatch_workgroups(1, 1, 1);
-    pass.set_pipeline(program.pipeline(DRAW));
+    pass.set_pipeline(draw);
     pass.dispatch_workgroups(groups_x, groups_y, 1);
 }
 
