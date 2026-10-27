@@ -499,7 +499,10 @@ impl Watchdog {
         }
         // A map that failed left the buffer idle: there is nothing to unmap,
         // and nothing to read either.
-        if !matches!(rx.try_recv(), Ok(Ok(()))) {
+        if !matches!(
+            rx.recv_timeout(crate::surface::MAP_CALLBACK_GRACE),
+            Ok(Ok(()))
+        ) {
             return false;
         }
         // The view must die before the unmap, hence the block.

@@ -59,6 +59,13 @@ pub fn create_id_texture(
     texture.create_view(&wgpu::TextureViewDescriptor::default())
 }
 
+/// How long a readback waits for its map callback after the device poll that
+/// should have run it. The compile workers poll the device too (each waits
+/// out its warming dispatch, `crate::compile`), and a poll on a worker can
+/// take a callback this thread's poll would have run and still be running it
+/// when this one returns; the callback is in flight, not lost.
+pub const MAP_CALLBACK_GRACE: std::time::Duration = std::time::Duration::from_secs(1);
+
 /// Pull the mirror out of a readback buffer, the device having already been
 /// waited out.
 ///
@@ -84,7 +91,7 @@ pub fn refresh_mirror<T: Plain>(device: &wgpu::Device, buffer: &wgpu::Buffer, mi
         tracing::warn!("mirror map poll failed: {err}");
         return;
     }
-    match rx.try_recv() {
+    match rx.recv_timeout(MAP_CALLBACK_GRACE) {
         Ok(Ok(())) => {}
         Ok(Err(err)) => {
             tracing::warn!("mirror readback could not be mapped: {err}");
@@ -126,7 +133,7 @@ pub fn read_words(device: &wgpu::Device, buffer: &wgpu::Buffer, out: &mut [u32])
             let _ = tx.send(result);
         });
     let _ = device.poll(wgpu::PollType::wait_indefinitely());
-    if !matches!(rx.try_recv(), Ok(Ok(()))) {
+    if !matches!(rx.recv_timeout(MAP_CALLBACK_GRACE), Ok(Ok(()))) {
         return;
     }
     {

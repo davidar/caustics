@@ -426,6 +426,7 @@ impl Gpu {
         // be exactly these three, or this stops here.
         let program = Program::new(
             &device,
+            &queue,
             reflected,
             &[
                 "caustics-bar-bgl",
@@ -1006,8 +1007,11 @@ impl Gpu {
 
     /// Whether a frame can be drawn: the frame submission's four pipelines
     /// are built. The model passes and the shaper come after, on their own.
+    ///
+    /// Nor while a pipeline is being warmed: a frame submitted behind a
+    /// warming dispatch waits for the driver's compile (`Program::warming`).
     pub fn can_render(&self) -> bool {
-        self.program.has(&FRAME_PIPELINES)
+        self.program.has(&FRAME_PIPELINES) && !self.program.warming()
     }
 
     /// One frame: drain the command ring, run apply once, then
@@ -1216,6 +1220,11 @@ impl Gpu {
         // owed is shaped on the frame after the release — this is a pause, not
         // a discard.
         if self.watchdog.blocked() {
+            return;
+        }
+        // A pipeline is warming on the queue, and this submission would wait
+        // behind it; still owed, and run on the frame after it lands.
+        if self.program.warming() {
             return;
         }
         // The model passes are not built yet: still owed, and run when they

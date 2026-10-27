@@ -277,6 +277,7 @@ impl Gpu {
         let format = presentation.format;
         let program = Program::new(
             &device,
+            &queue,
             bindings,
             &[
                 "caustics-canvas-bgl",
@@ -568,8 +569,11 @@ impl Gpu {
     /// Whether a frame can be drawn on a surface: `canvas_apply` and
     /// `canvas_draw` are built. The text needs `canvas_shape` as well and
     /// waits for it on its own; a frame before it draws no glyphs.
+    ///
+    /// Nor while a pipeline is being warmed: a frame submitted behind a
+    /// warming dispatch waits for the driver's compile (`Program::warming`).
     pub fn can_draw(&self) -> bool {
-        self.program.has(&[APPLY, DRAW])
+        self.program.has(&[APPLY, DRAW]) && !self.program.warming()
     }
 
     // -- the text ------------------------------------------------------------
@@ -693,7 +697,7 @@ impl Gpu {
     /// can rely on. The watchdog's pair goes round this pass and no other:
     /// it is the one that walks bytes a sidecar sent.
     fn shape_if_pending(&mut self) {
-        if !self.shape_pending || self.watchdog.blocked() {
+        if !self.shape_pending || self.watchdog.blocked() || self.program.warming() {
             return;
         }
         // Not built yet: still owed, and run when it lands.

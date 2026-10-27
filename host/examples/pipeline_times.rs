@@ -122,6 +122,7 @@ fn main() -> Result<()> {
             let wake: caustics_host::compile::Wake = std::sync::Arc::new(|| {});
             let mut program = Program::new(
                 &device.device,
+                &device.queue,
                 reflection.bindings.clone(),
                 &labels,
                 "pipeline-times-layout",

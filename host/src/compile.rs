@@ -10,6 +10,20 @@
 //!
 //! - **One job, one pipeline**, in the order they were queued, which is the
 //!   host's order of need ([`crate::program::Program::new`] takes it).
+//! - **Built means built and warmed.** A software rasteriser (lavapipe) only
+//!   lowers the module when the pipeline is created and compiles it at the
+//!   pipeline's first dispatch: 3 s and then 13 s for the canvas's shaper.
+//!   So each pipeline is dispatched once on the worker, one workgroup over
+//!   scratch bind groups of its own ([`Warm`]), and waited out, before it is
+//!   handed back; the host's first real dispatch then finds it compiled. A
+//!   driver that compiles at creation (RADV) pays microseconds for it.
+//! - **Nothing is submitted behind a warming dispatch.** lavapipe runs its
+//!   queue on one thread and compiles there, so a frame submitted while the
+//!   shaper warms waits the whole compile (46 s, measured) in the host's
+//!   device wait. [`Compiler::warming`] says one is in flight, and a host
+//!   draws nothing until it has landed; its loop stays live meanwhile, and
+//!   the landing's wake brings the frame. A frame submitted in the instant
+//!   between that check and a worker's submit waits once; nothing is lost.
 //! - **Each worker holds its own validation error scope.** wgpu's error
 //!   scopes are per thread (a scope pushed on one thread never sees another's
 //!   errors), so a rejected module on a worker is that job's result and
@@ -25,6 +39,7 @@
 //!   dropped by the owner, which knows it is stale.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -34,6 +49,22 @@ use punchcutter_core::gpu::passthrough_pipeline;
 /// What a host is told when a result is waiting: called from a worker
 /// thread, once per pipeline built or refused.
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
+
+/// What a worker warms a pipeline with: one bind group per set, over
+/// resources nothing else binds, all zero.
+///
+/// Zero is a dispatch that does nothing a caustic can see: no surface (a
+/// draw's image is 1x1 and its size words are 0), no commands, no blocks to
+/// shape, no rows; and whatever a pass writes lands in buffers no frame
+/// reads. Every storage buffer holds at least one element of its reflected
+/// stride, so an entry that reads element 0 of its state reads zeros.
+pub struct Warm {
+    pub queue: wgpu::Queue,
+    pub groups: Vec<wgpu::BindGroup>,
+}
+
+/// The warming dispatches submitted and not yet waited out.
+struct InFlight(AtomicUsize);
 
 /// One pipeline to build.
 pub struct Job {
@@ -69,6 +100,7 @@ struct Queue {
 struct Shared {
     queue: Mutex<Queue>,
     work: Condvar,
+    warming: InFlight,
 }
 
 /// The queue and its workers, for one device and one pipeline layout.
@@ -84,15 +116,18 @@ impl Compiler {
     pub fn start(
         device: &wgpu::Device,
         layout: &wgpu::PipelineLayout,
+        warm: Warm,
         workers: usize,
         wake: Wake,
     ) -> Compiler {
+        let warm = Arc::new(warm);
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue {
                 jobs: VecDeque::new(),
                 closed: false,
             }),
             work: Condvar::new(),
+            warming: InFlight(AtomicUsize::new(0)),
         });
         let (send, results) = mpsc::channel();
         let workers = workers.max(1);
@@ -102,9 +137,10 @@ impl Compiler {
             let layout = layout.clone();
             let send: Sender<Built> = send.clone();
             let wake = Arc::clone(&wake);
+            let warm = Arc::clone(&warm);
             std::thread::Builder::new()
                 .name(format!("compile-{n}"))
-                .spawn(move || work(&shared, &device, &layout, &send, &*wake))
+                .spawn(move || work(&shared, &device, &layout, &warm, &send, &*wake))
                 .expect("a compile worker thread could not be started");
         }
         Compiler {
@@ -117,6 +153,12 @@ impl Compiler {
     /// How many threads build.
     pub fn workers(&self) -> usize {
         self.workers
+    }
+
+    /// Whether a warming dispatch is on the device's queue now: anything the
+    /// host submits would wait behind it.
+    pub fn warming(&self) -> bool {
+        self.shared.warming.0.load(Ordering::Acquire) > 0
     }
 
     /// Queue jobs behind whatever is queued, in the order given.
@@ -157,12 +199,13 @@ impl Drop for Compiler {
     }
 }
 
-/// One worker: take the front job, build it inside this thread's own error
-/// scope, send it back, wake the host.
+/// One worker: take the front job, build and warm it inside this thread's
+/// own error scope, send it back, wake the host.
 fn work(
     shared: &Shared,
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
+    warm: &Warm,
     send: &Sender<Built>,
     wake: &(dyn Fn() + Send + Sync),
 ) {
@@ -189,6 +232,9 @@ fn work(
             &job.spirv,
             job.workgroup,
         );
+        shared.warming.0.fetch_add(1, Ordering::AcqRel);
+        warm_up(device, warm, &pipeline, job.label);
+        shared.warming.0.fetch_sub(1, Ordering::AcqRel);
         let result = match pollster::block_on(scope.pop()) {
             Some(err) => Err(format!("{err}")),
             None => Ok(pipeline),
@@ -204,6 +250,31 @@ fn work(
             return;
         }
         wake();
+    }
+}
+
+/// One workgroup of `pipeline` over the scratch groups, submitted and waited
+/// for: the dispatch a driver that compiles late compiles at.
+fn warm_up(device: &wgpu::Device, warm: &Warm, pipeline: &wgpu::ComputePipeline, label: &str) {
+    let mut encoder =
+        device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+    {
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some(label),
+            timestamp_writes: None,
+        });
+        for (set, group) in warm.groups.iter().enumerate() {
+            pass.set_bind_group(set as u32, group, &[]);
+        }
+        pass.set_pipeline(pipeline);
+        pass.dispatch_workgroups(1, 1, 1);
+    }
+    let index = warm.queue.submit(Some(encoder.finish()));
+    if let Err(err) = device.poll(wgpu::PollType::Wait {
+        submission_index: Some(index),
+        timeout: None,
+    }) {
+        tracing::warn!("pipeline {label}: the warming dispatch was not waited out: {err}");
     }
 }
 

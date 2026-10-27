@@ -312,6 +312,104 @@ pub fn build_pipelines(
     Ok(pipelines)
 }
 
+/// A bind group over `set`'s bindings with a zeroed resource of its own for
+/// each, for the warming dispatch ([`crate::compile::Warm`]): a uniform of
+/// the largest size a uniform binding may be, a storage buffer of one
+/// element of its stride and never under 64 KiB, a 1x1 image of each texture
+/// binding's kind and format, a sampler.
+fn scratch_group(
+    device: &wgpu::Device,
+    bindings: &[Binding],
+    set: u32,
+    layout: &wgpu::BindGroupLayout,
+    storage_format: &dyn Fn(&str) -> wgpu::TextureFormat,
+) -> wgpu::BindGroup {
+    const STORAGE_FLOOR: u64 = 64 * 1024;
+    const UNIFORM: u64 = 16 * 1024;
+    enum Held {
+        Buffer(wgpu::Buffer),
+        View(wgpu::TextureView),
+        Sampler(wgpu::Sampler),
+    }
+    let image = |format: wgpu::TextureFormat, usage: wgpu::TextureUsages, array: bool| {
+        device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("caustics-warm-image"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(if array {
+                    wgpu::TextureViewDimension::D2Array
+                } else {
+                    wgpu::TextureViewDimension::D2
+                }),
+                ..Default::default()
+            })
+    };
+    let buffer = |size: u64, usage: wgpu::BufferUsages| {
+        device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("caustics-warm-buffer"),
+            size,
+            usage,
+            mapped_at_creation: false,
+        })
+    };
+    let held: Vec<(u32, Held)> = bindings
+        .iter()
+        .filter(|binding| binding.set == set)
+        .map(|binding| {
+            let resource = match binding.kind {
+                BindingKind::Uniform => Held::Buffer(buffer(UNIFORM, wgpu::BufferUsages::UNIFORM)),
+                BindingKind::Storage { stride, .. } => {
+                    let stride = u64::from(stride.unwrap_or(4)).max(4);
+                    let size = STORAGE_FLOOR.max(stride).next_multiple_of(stride);
+                    Held::Buffer(buffer(size, wgpu::BufferUsages::STORAGE))
+                }
+                BindingKind::StorageTexture { .. } => Held::View(image(
+                    storage_format(&binding.name),
+                    wgpu::TextureUsages::STORAGE_BINDING,
+                    false,
+                )),
+                BindingKind::Texture { array } => Held::View(image(
+                    wgpu::TextureFormat::Rgba8Unorm,
+                    wgpu::TextureUsages::TEXTURE_BINDING,
+                    array,
+                )),
+                BindingKind::Sampler => {
+                    Held::Sampler(device.create_sampler(&wgpu::SamplerDescriptor::default()))
+                }
+            };
+            (binding.index, resource)
+        })
+        .collect();
+    let entries: Vec<wgpu::BindGroupEntry<'_>> = held
+        .iter()
+        .map(|(index, held)| wgpu::BindGroupEntry {
+            binding: *index,
+            resource: match held {
+                Held::Buffer(buffer) => buffer.as_entire_binding(),
+                Held::View(view) => wgpu::BindingResource::TextureView(view),
+                Held::Sampler(sampler) => wgpu::BindingResource::Sampler(sampler),
+            },
+        })
+        .collect();
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("caustics-warm-group"),
+        layout,
+        entries: &entries,
+    })
+}
+
 /// Why a reload kept the program it had.
 #[derive(Debug)]
 pub enum Refused {
@@ -404,6 +502,7 @@ impl Program {
     /// Build the layouts from `bindings` now, and queue the pipelines from
     /// `spirv` on the compile workers: this returns before any is built.
     ///
+    /// `queue` carries each pipeline's warming dispatch ([`crate::compile`]).
     /// `sets` is every descriptor set's label, set 0 first: the reflection
     /// must declare exactly those sets, or this panics ([`assert_sets`]).
     /// `storage_format` names a storage image's texel format by the image's
@@ -415,6 +514,7 @@ impl Program {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         bindings: Vec<Binding>,
         sets: &[&str],
         pipeline_label: &str,
@@ -452,7 +552,22 @@ impl Program {
             bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
             immediate_size: 0,
         });
-        let compiler = crate::compile::Compiler::start(device, &pipeline_layout, workers, wake);
+        let warm = crate::compile::Warm {
+            queue: queue.clone(),
+            groups: (0..sets.len() as u32)
+                .map(|set| {
+                    scratch_group(
+                        device,
+                        &bindings,
+                        set,
+                        &layouts[set as usize],
+                        storage_format,
+                    )
+                })
+                .collect(),
+        };
+        let compiler =
+            crate::compile::Compiler::start(device, &pipeline_layout, warm, workers, wake);
         let program = Program {
             layouts,
             pipeline_layout,
@@ -525,6 +640,13 @@ impl Program {
         indices
             .iter()
             .all(|&index| matches!(self.live[index], Slot::Ready(_)))
+    }
+
+    /// Whether a pipeline is being warmed on the device's queue
+    /// ([`crate::compile`]): a host submits nothing until it lands, since its
+    /// submission would wait behind a driver's whole compile.
+    pub fn warming(&self) -> bool {
+        self.compiler.warming()
     }
 
     /// Whether every pipeline of the running program is built.
