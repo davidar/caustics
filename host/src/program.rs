@@ -274,14 +274,25 @@ pub fn build_pipelines(
         .iter()
         .zip(spirv)
         .map(|(entry, spv)| {
-            passthrough_pipeline(
+            // The driver compiles the module here, on this thread, and the
+            // time is the driver's: milliseconds from a warm shader cache,
+            // seconds from a cold one, minutes on a software renderer. The
+            // line says which pipeline a slow start was waiting on.
+            let started = std::time::Instant::now();
+            let pipeline = passthrough_pipeline(
                 device,
                 layout,
                 entry.label,
                 entry.name,
                 spv,
                 entry.workgroup,
-            )
+            );
+            tracing::info!(
+                "pipeline {}: built in {:.3} s",
+                entry.name,
+                started.elapsed().as_secs_f64()
+            );
+            pipeline
         })
         .collect();
     if let Some(err) = pollster::block_on(scope.pop()) {
