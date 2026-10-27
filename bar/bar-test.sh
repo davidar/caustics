@@ -1417,9 +1417,13 @@ if [[ ${#bell_before[@]} -eq 4 ]]; then
                 fail "the daemon still holds a notification after the click"
             fi
             if [[ "$have_gdbus" == yes ]]; then
-                sleep 1
-                if on_target 20 'cat "$T_HOME/notify-monitor.txt"' |
-                    grep -qF "NotificationClosed (uint32 $notify_id, uint32 2)"; then
+                # Bounded, not a fixed sleep: the signal reaches the monitor's
+                # file a moment after the daemon's line. `jgrep`, not
+                # `grep -q`: an early exit would SIGPIPE the `cat` and fail
+                # the pipeline under `pipefail` despite the match.
+                notify_closed="NotificationClosed (uint32 $notify_id, uint32 2)"
+                if wait_until "NotificationClosed on the bus" 10 \
+                    'on_target 20 "cat \"\$T_HOME/notify-monitor.txt\"" | jgrep -F "$notify_closed"'; then
                     pass "the bus saw NotificationClosed($notify_id, 2)"
                 else
                     fail "the monitor saw no NotificationClosed($notify_id, 2): $(on_target 20 \
