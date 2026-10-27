@@ -210,6 +210,8 @@ canvas: dim 2 to 1000/1000 over 10000 ms             a dim began
 canvas: dim 2 reached 1000/1000                      at its depth, said once
 dim 2: cancelled by a key; told to caustics-wallpaper, the overlays go
 output winit: background surface configured …       one per output
+pipeline canvas_apply: built in 65 ms                one per pipeline, built off the loop; canvas_draw next, canvas_shape last
+pipelines: all 3 built, 8.38 s after they were queued   seconds after a driver or caustic change, milliseconds after
 output winit: overlay surface configured …          one per output, while a dim is up
 output size: 2880x1800 px, told to caustics-wallpaper
 sidecar caustics-reload: generation 2, 3 modules, swapped …   a tunables save

@@ -157,6 +157,21 @@ to take it on in place of the session's previous locker. No wire or
 buffer contract changed. The VM target's set upload gained the canvas's
 five binaries, so its install step's sixteen hold there.
 
+**Pipelines off the loop.** Both hosts build their caustic's pipelines on
+two compile workers instead of on their event loops, one at a time in the
+order a frame needs them, and install each as it lands with a
+`pipeline <name>: built in <t>` line. A cold driver cache (after a driver or
+caustic change) cost the bar about sixteen seconds on RADV and the canvas
+nine before either drew or read anything; now the canvas draws its
+wallpaper a fifth of a second in, while its shaper is still building, a
+restarted canvas whose session is locked locks before any pipeline exists,
+and the bar's whole program is in after about twelve. The bar draws its
+chips before its text, as it does while waiting for a font. A hot reload
+builds beside the caustic that runs, which keeps drawing and answering
+input, and swaps in whole when its last pipeline is built and validated;
+a newer save supersedes a generation still building. No wire or buffer
+contract changed.
+
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout
 applied on the GPU from the font's own tables, both as Slang modules the

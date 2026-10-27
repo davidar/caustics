@@ -69,20 +69,17 @@ device without the shader clock) are punchcutter's roadmap.
     the wire reader's line stands in for it (docs/abi.md, *The arenas*).
 8. **The five VM-only steps** of the gate stay VM-only (one hangs a hardware
     driver's arena) until a live-GPU run is deliberately tried.
-9. **The hot-reload stall.** A swap whose pipelines are new to the driver
-    blocks the bar's event loop for several seconds (docs/testing.md). Create
-    the pipelines off the loop and swap when they are ready.
 
 ## Icons
 
-10. XPM and ICO `Icon=` paths; KDE colour-scheme SVGs recoloured with the
+9. XPM and ICO `Icon=` paths; KDE colour-scheme SVGs recoloured with the
     text ink (two routes, undecided); a Steam game's icon from its manifest;
     a pixmap whose file went away cannot be retracted; a theme installed
     while a sidecar runs is not searched until it restarts.
 
 ## Watching the bar
 
-11. **A witness watcher.** An always-on local reader of the journal's
+10. **A witness watcher.** An always-on local reader of the journal's
     witnesses that files a report when a stated rule is broken, for the next
     piece of work to pick up. One clause exists: `notify/tools`'
     `caustics-notify-watch`, which reports a notification click that reached no
@@ -96,19 +93,19 @@ writes `Rows` frames under its own applet value, the tunables'
 worked example (docs/architecture.md, *Sidecars*). Three things still
 stand between that and a sidecar from another tree.
 
-12. **An additive roster.** `SIDECARS` is compiled in and `$CAUSTICS_SIDECARS`
+11. **An additive roster.** `SIDECARS` is compiled in and `$CAUSTICS_SIDECARS`
     *replaces* it, so adding one sidecar to an installed bar means naming
     all of them in a unit drop-in. A variable that appends, or a directory
     beside the set whose entries are spawned like the compiled names,
     resolved the same way (docs/abi.md, *Lifecycle*).
-13. **The ABI pin, written down.** The bar refuses a sidecar built against
+12. **The ABI pin, written down.** The bar refuses a sidecar built against
     another ABI at its first frame (docs/abi.md, *Hello*), so a sidecar from
     another tree pins `caustics-bar-abi` to the revision the installed set
     was built from. That is the rule working; it needs saying in *Writing a
     sidecar*, with the way to read the installed set's revision. The design
     that removes the pin altogether, an append-only wire whose reader pads
     and truncates instead of refusing, is docs/wire.md.
-14. **A sidecar's own look.** Everything a third-party sidecar shows is drawn
+13. **A sidecar's own look.** Everything a third-party sidecar shows is drawn
     by `applets`: the generic chip, rows and sliders. A sidecar that wants
     its own drawing (as the charts and the toasts have) needs a subject
     module in the caustic, which today means editing `caustics/`. The design
@@ -125,7 +122,7 @@ stand between that and a sidecar from another tree.
 
 ## The canvas
 
-15. **Everything else a session paints that is not a window.** The
+14. **Everything else a session paints that is not a window.** The
     wallpaper, the idle fade, the lock screen, the polkit prompt and the
     login greeter as one caustic on a second host of the bar process's
     shape, with the jobs as sidecars; designed in docs/canvas.md, built in

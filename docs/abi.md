@@ -1476,8 +1476,11 @@ bakes the bar's, `canvas/build.rs` the canvas's, `caustics-reload` compiles
 the one its `REQ_PROGRAM` names, and each host names its pipelines from its
 own.
 
-**A generation is all or nothing.** `Gpu::reload_all` rebuilds every pipeline
-or none, so the bar collects entry points by generation and swaps only when
+**A generation is all or nothing.** A host builds a generation's every
+pipeline, on its compile workers and beside the caustic that runs, and swaps
+them in together when the last is built and validated, or swaps none; a
+newer generation queued before an older one is built supersedes it. So the
+bar collects entry points by generation and queues them only when
 `count` have arrived, with the bindings of index 0's reflection
 and the `getStringHash` literals merged from every module's (identical when
 the generation came from one link, and a union all the same, so a writer

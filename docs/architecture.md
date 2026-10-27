@@ -116,8 +116,9 @@ router, which a drawing process cannot shed.
 **The mechanism is a library, and the bar is its client.** The parts of this
 process that any program hosting a caustic would need live in the
 `caustics-host` crate (`host/`): the device and its refusals, the caustic's
-bind group layouts and pipelines built from the compiler's reflection, the
-reload that swaps them whole or not at all, one target's swapchain, frame
+bind group layouts built from the compiler's reflection, the pipelines built
+on compile workers off the host's loop, the reload that swaps them whole or
+not at all once they are built, one target's swapchain, frame
 pacing, the sidecar supervisor and its *Hello* gate, the collection of a
 reload's `Module` frames, the literal table, the witness printer, the image
 slots and the `/proc` reader. The crate names none of the bar's buffers,
@@ -201,6 +202,26 @@ module per subject the bar shows (`sysmon`, the charts; `notify`, the toasts;
   each texel, `bar_sample` reads the id under the pointer, and `bar_draw`
   paints.
 
+**What a frame needs is built first, and nothing waits for the rest.** A
+pipeline costs milliseconds with a warm driver cache and seconds without one
+(after a driver or caustic change, and on every nested-gate run): on RADV
+the layout, `bar_apply`, is about seven, the shaper about eight, and a
+software rasteriser takes minutes. So the host builds none of them on its
+loop. `caustics_host::program` queues each entry point's pipeline on two
+compile workers in the order the host needs them (for the bar the frame
+submission's four, then `bar_build` and `bar_compose`, then `bar_shape`; for
+the canvas `canvas_apply` and `canvas_draw`, then `canvas_shape`), installs
+each one as it lands and logs `pipeline <name>: built in <t>`, and a last
+line when the program is whole. Until then the loop runs as ever, reading
+Wayland and every sidecar pipe, and a frame runs what exists: no frame until
+the frame submission's pipelines are built; the model passes without the
+shaper, which lays the blocks out unshaped, text of no size beside every chip
+and icon, as before a font arrives; the shaper's landing then owes the
+submission a run. A hot reload is the same queue: its pipelines build beside
+the running caustic and swap in together when the last is built and
+validated, or not at all, and a newer save supersedes a generation still
+building.
+
 Layout is immediate-mode arithmetic over flat arrays. The wings' contents and
 order come from the tunables (`LEFT_ORDER`, `CENTER_ORDER`, `RIGHT_ORDER`,
 `APPLET_ORDER`), each element's rect is written to the caustic's private
@@ -227,8 +248,10 @@ buffer's layout is refused with "restart the bar".
    which picture, which sidecar is in which slot, the caustic's string
    literals. Sidecars' bytes are already in their arenas: a `Rows` frame is
    copied whole into that sidecar's region and announced with one command.
-2. If the caustic asked for a rebuild last frame, the shape submission runs.
-3. The frame submission runs, and the bar presents.
+2. If the caustic asked for a rebuild last frame, the shape submission runs,
+   once its pipelines are built (*The caustic*).
+3. The frame submission runs, and the bar presents. Before its pipelines are
+   built there is no frame; the one owed is drawn when they land.
 4. The bar process reads back one small buffer from **the previous frame**: a
    word saying whether anything is still animating, a ring of actions and a
    ring of witnesses. It forwards each action without resolving it (a window
@@ -509,11 +532,6 @@ support. Said up front so nobody discovers it later.
   through niri's IPC. Another compositor needs another implementation of the
   compositor seam, and a window key its IPC can address. Hover previews need
   a compositor that offers image capture over a foreign-toplevel source.
-- **The hot-reload stall.** A swap whose pipelines are new to the driver
-  blocks the bar's event loop for several seconds on RADV, because pipeline
-  creation runs on the loop (docs/testing.md). Moving it off the loop, and
-  swapping when the new pipelines are ready, is the obvious fix and not yet
-  done.
 - **The rest of the text engine**: bidi and Unicode properties, the
   complex-script shapers, colour glyphs, variable fonts (*Text*, *Not yet*).
 - **`MAX_ROWS`.** A sidecar frame carries at most 256 rows. A tray with a few

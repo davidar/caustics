@@ -371,8 +371,11 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   requests the lock before the host has painted a frame: the host applies
   its sidecars' frames from the moment its globals are bound, before its
   device is up, so the lock goes out at once and the lock surfaces get
-  their swapchains when the device comes, like any pane. The compositor
-  keeps the session locked and blank in between. Only the sidecar that
+  their swapchains when the device comes, like any pane. Bringing the device
+  up builds no pipeline (docs/architecture.md, *The caustic*), so nothing
+  holds the loop after that either: the lock panes are drawn when
+  `canvas_apply` and `canvas_draw` are built, and their text when the
+  shaper is. The compositor keeps the session locked and blank in between. Only the sidecar that
   locked may unlock; a lock asked for while locked changes nothing but is
   answered `locked` again, which is what a restarted sidecar waits for.
   `caustics-canvasctl lock --wait` returns when the host has said `locked`, the moment the hint
@@ -401,16 +404,17 @@ process holding a secret is the canvas host, and the bar is not it.
   again; the canvas host's unit restarts on everything, because a locked
   session must get its lock client back, and a lost device after resume is
   exactly when it is locked.
-- **The hot-reload stall** (docs/roadmap.md, *Wire and harness*) is a
-  pipeline compile new to the driver. It costs the canvas a frame or two of
-  stale wallpaper, never a missed lock, since the host is resident.
+- **A reload's compile** runs on the compile workers beside the canvas that
+  draws (docs/architecture.md, *The caustic*), so a pipeline new to the
+  driver costs the new caustic its seconds, never the old one a frame and
+  never a lock.
 
 ## Failure model
 
 | what dies | when | correct outcome |
 |---|---|---|
 | the host | unlocked | the compositor's backdrop shows; the unit restarts it; it paints the dim colour until the wallpaper sidecar re-sends the picture |
-| the host | locked | the compositor stays locked (niri keeps the session locked with its lock client dead); the unit restarts the host; the lock sidecar reads `LockedHint` and re-locks before the first frame, and niri gives the new lock `locked` at once in place of the dead one (the nested gate drives the same restart through the socket) |
+| the host | locked | the compositor stays locked (niri keeps the session locked with its lock client dead); the unit restarts the host; the lock sidecar reads `LockedHint` and re-locks before the first frame, before any pipeline is built (they build off the loop, so a cold driver cache delays the lock panes' first frame and not the lock), and niri gives the new lock `locked` at once in place of the dead one (the nested gate drives the same restart through the socket) |
 | the host | told `finished` | one line and exit 1; the unit restarts it; the lock sidecar's pipe closes, so a waiting `lock --wait` fails, and the restarted sidecar locks again if logind's hint says so |
 | `caustics-wallpaper` | any time | the last picture stays; the host restarts it with backoff; the restarted sidecar re-shows the path it kept, and takes the socket back once the old listener has gone (a listener still answering a probe is given a short window to die before it is read as another wallpaper's) |
 | `caustics-wallpaper` | mid-dim | the overlay goes with it (a dim without its owner is undone, so a crashed sidecar never leaves a dark screen); the picture stays; the host restarts it, and it comes back with no dim |

@@ -171,15 +171,20 @@ is one `SKIP` line, counted as skipped and never as passed:
 
 ### Known behaviour the steps account for
 
-- **A hot reload whose pipelines are new to the driver blocks the bar's
-  loop** for several seconds on RADV (7–9 s for the whole caustic, a few
-  hundred ms for a tint change, a few ms for a generation the driver has
-  compiled before). The swap runs on the bar's event loop, so for those
-  seconds the bar draws nothing and answers no input. Every swap in a gate
-  run is cold (Mesa's shader cache is under the run's scratch
-  `$XDG_CACHE_HOME`), so the gate pays it at every swap; a user pays it once
-  after a driver or caustic change. Moving the swap off the loop is an open
-  item (docs/roadmap.md).
+- **Every pipeline in a gate run is built cold.** Mesa's shader cache is
+  under the run's scratch `$XDG_CACHE_HOME`, so each host's start-up and
+  each swap pays the driver's full compile: on RADV about 12 s for the bar's
+  seven pipelines on its two compile workers, 9 s for the canvas's three
+  (the shaper nearly all of it), a few hundred ms for a tint change, and a
+  few ms for a generation the driver has compiled before. A user pays it once
+  after a driver or caustic change. None of it is on the hosts' loops
+  (docs/architecture.md, *The caustic*): a host reads its pipes, answers
+  input and keeps drawing the caustic that runs while the next one builds,
+  so what a step waits for is the swap line, never a loop that came back.
+  The bar's first frame waits for `bar_apply`, its layout, about seven
+  seconds of the cold compile; the canvas's first frame comes after its two
+  small pipelines, and step 27 checks it is drawn before the shaper is
+  built.
   Each pipeline build is one journal line, `pipeline <entry>: built in N s`,
   so a slow start says which pipeline it waited on; and
   `host/examples/pipeline_times.rs` times a program's pipelines on the

@@ -195,6 +195,7 @@ worth knowing:
 | line | means |
 |---|---|
 | `set: <dir> (ABI <hash>)` | which install set this bar resolved to, at startup |
+| `pipeline bar_apply: built in 6.81 s`, then `pipelines: all 7 built, …` | the caustic's pipelines, one line each as the compile workers build them, in the order the first frame needs them; seconds the first time after a driver or caustic change, milliseconds after that. The bar draws its first frame when the frame submission's four are in, its chips with `bar_build`, its text with `bar_shape` |
 | `health (startup): … sidecars=…` | ten seconds in: every sidecar, `running pid=`, `absent` or `refused`; then `health (hourly)` once an hour with what the bar and each sidecar cost |
 | `bound ext_foreign_toplevel_list_v1 v1`, `bound niri-ipc at …` | a feeder got its global or socket |
 | `<name> absent: …`, `niri-ipc absent: …` | it did not, and the bar goes on without that feature |
@@ -214,7 +215,8 @@ worth knowing:
 | `tunables: applied (edge=top height=32)` | the caustic asked for a surface and got it |
 | `caustics-reload: generation N sent (7 modules, … KiB, … ms, cold)` | the caustic was recompiled (`warm` = read back from the cache) |
 | `caustics-reload: failed; keeping the old bar` + Slang's own text (`--> path:line:col`) | a caustic that does not compile; the running one stays |
-| `sidecar caustics-reload: generation N, 7 modules, swapped (…)` | and the bar put that generation on the GPU |
+| `pipeline <name>: built in … (reload M)` | that generation's pipelines building beside the bar that runs, which keeps drawing |
+| `sidecar caustics-reload: generation N, 7 modules, swapped (…)` | and the bar put that generation on the GPU, the moment its last pipeline was built |
 | `text: N runs have a glyph the font lacks` | the caustic asked `caustics-glyphs` to cover them from a fallback face |
 | `redraw: still animating after N s: …` (WARN) | something has not settled; the caustic's `stall:` lines follow, naming what is still moving |
 | `items: table capped at …` (WARN) | the caustic could not fit everything it built; some of the bar is not drawn |
