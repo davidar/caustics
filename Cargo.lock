@@ -340,6 +340,7 @@ dependencies = [
  "punchcutter-slang",
  "raw-window-handle",
  "tracing",
+ "tracing-subscriber",
  "wgpu",
  "zeroize",
 ]

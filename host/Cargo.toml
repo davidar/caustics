@@ -30,3 +30,7 @@ tracing = "0.1.44"
 punchcutter-shape.workspace = true
 # An `Answer` frame's bytes are serialised into a zeroing buffer (`pipe`).
 zeroize = "1.9.1"
+
+[dev-dependencies]
+# The pipeline-timing example's log lines (`examples/pipeline_times.rs`).
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
