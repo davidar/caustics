@@ -146,6 +146,15 @@ dispatch*).
   charged against a budget before its first iteration
   (punchcutter/docs/arena.md, *Bounded in time*). A loop never uses a budget
   charge as its exit condition: one driver miscompiled exactly that shape.
+- **The canvas's draw is specialised per surface.** Which surface a
+  canvas dispatch draws is `surface_target()`, never `params.target` read
+  directly: it answers the specialisation constant `SPECIALISED_TARGET`
+  (`[[vk::constant_id(0)]]`, in `canvas_state`) where the host built the
+  pipeline for one surface, and the buffer's word where it did not (the
+  constant's default, `NO_INDEX`). The host builds `canvas_draw` once per
+  surface, so the driver folds every other surface's branch away;
+  `canvas_apply` and `canvas_shape` are built once and read the word. The
+  bar's caustic reads `params.target` and is built once per entry.
 - **Two swapchain formats.** The caustic compiles once with
   `-DDST_FORMAT_RGBA8` and once with `-DDST_FORMAT_BGRA8` (SPIR-V has no BGRA
   storage-image format, so that variant declares the image format-unknown).

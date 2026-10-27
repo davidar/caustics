@@ -228,6 +228,31 @@ the running caustic and swap in together when the last is built and
 validated, or not at all, and a newer save supersedes a generation still
 building.
 
+**The canvas's draw is one pipeline per surface.** `canvas_draw` is the
+background, the overlay, the prompt's pane and the lock in one entry point,
+and a pipeline that carries all four pays the union's instructions on every
+pixel. So the canvas builds it once per surface, each with a SPIR-V
+specialisation constant (caustics/README.md, *Conventions*) set to that
+surface, and the driver folds the rest away: on RADV the background's draw
+is 1347 instructions where the one draw for every surface was 7677, and the
+overlay's needs half the registers. wgpu passes no specialisation constants
+to a passthrough module, so the host writes the value into the constant's
+default in the module's words before creating it (`caustics_host::spirv`),
+for the baked caustic and every reload alike. `caustics_host::program`'s
+`variants` module keeps the slot table that makes one entry several
+pipelines; the canvas asks for them with `Program::new_specialised` and
+`Program::variant`, and picks one in `Gpu::draw_pipeline` alone. The bar's
+caustic, whose draw is element data walked at run time, gained nothing
+measurable from the same and is built once per entry.
+
+To take it out: delete `host/src/spirv.rs` and `host/src/program/variants.rs`
+with their tests; in `Program`, index the live and staged pipelines by entry
+again where they go through `Slots`, and drop `new_specialised` and
+`variant`; in the canvas, call `Program::new`, have `Gpu::draw_pipeline`
+return `pipeline(DRAW)` and drop `SURFACES` and `SPECIALISED` and the test
+over them; in `canvas_state.slang`, drop `SPECIALISED_TARGET` and let
+`surface_target()` return `params.target`.
+
 Layout is immediate-mode arithmetic over flat arrays. The wings' contents and
 order come from the tunables (`LEFT_ORDER`, `CENTER_ORDER`, `RIGHT_ORDER`,
 `APPLET_ORDER`), each element's rect is written to the caustic's private

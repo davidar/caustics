@@ -12,8 +12,11 @@
 //                          witnesses; `wants_redraw` for the surface being
 //                          drawn; whether the dim is at its depth. Once per
 //                          frame.
-//   canvas_draw   8x8    — onto one surface's swapchain image, by
-//                          `params.target`: on the background, the two source
+//   canvas_draw   8x8    — onto one surface's swapchain image, by the
+//                          surface its pipeline was built for
+//                          (`surface_target()`, one pipeline per surface,
+//                          caustics/README.md, *Conventions*): on the
+//                          background, the two source
 //                          pictures at that alpha, opaque, seen through the
 //                          pointer's wake; on the overlay, the same
 //                          wallpaper, darkened by `DIM_DARKEN`, at the dim's

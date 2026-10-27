@@ -181,6 +181,16 @@ input, and swaps in whole when its last pipeline is built and validated;
 a newer save supersedes a generation still building. No wire or buffer
 contract changed.
 
+**A pipeline per canvas surface.** The canvas's draw is built once for each
+surface (the background, the overlay, the prompt's pane, the lock), with a
+specialisation constant the host writes into the module's words, so the
+driver drops the other surfaces' code: the background's draw is 1347
+instructions on RADV where the one draw for every surface was 7677, and the
+overlay's needs half the registers. A surface whose pipeline is still
+building skips its frame there. punchcutter moves to the revision whose
+reflection passes over a specialisation constant. No wire or buffer
+contract changed.
+
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout
 applied on the GPU from the font's own tables, both as Slang modules the
