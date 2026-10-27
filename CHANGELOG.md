@@ -165,8 +165,17 @@ caustic change) cost the bar about sixteen seconds on RADV and the canvas
 nine before either drew or read anything; now the canvas draws its
 wallpaper a fifth of a second in, while its shaper is still building, a
 restarted canvas whose session is locked locks before any pipeline exists,
-and the bar's whole program is in after about twelve. The bar draws its
-chips before its text, as it does while waiting for a font. A hot reload
+and the bar's whole program is in after about twelve. Two workers rather
+than one: with one, the bar's chips came at 8.3 s and its whole program at
+16.2 s; with two the chips come at 8.4 s and everything at 11.7 s, the
+shaper building beside the rest. The bar draws its chips before its text,
+as it does while waiting for a font. A pipeline counts as built once it has
+been dispatched once on its worker, over scratch bind groups: lavapipe
+compiles at a pipeline's first dispatch, which put 14 s of the canvas's
+shaper on its first shaped frame and now puts it on the worker, and the
+hosts draw nothing while such a dispatch is on the device's queue, since
+lavapipe runs that queue on one thread and a frame behind it waited the
+whole compile. A hot reload
 builds beside the caustic that runs, which keeps drawing and answering
 input, and swaps in whole when its last pipeline is built and validated;
 a newer save supersedes a generation still building. No wire or buffer

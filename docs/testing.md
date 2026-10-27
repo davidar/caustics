@@ -189,7 +189,8 @@ is one `SKIP` line, counted as skipped and never as passed:
 - **Every pipeline in a gate run is built cold.** Mesa's shader cache is
   under the run's scratch `$XDG_CACHE_HOME`, so each host's start-up and
   each swap pays the driver's full compile: on RADV about 12 s for the bar's
-  seven pipelines on its two compile workers, 9 s for the canvas's three
+  seven pipelines on its two compile workers (16.2 s on one, with the chips
+  no sooner: 8.3 s there, 8.4 s on two), 9 s for the canvas's three
   (the shaper nearly all of it), a few hundred ms for a tint change, and a
   few ms for a generation the driver has compiled before. A user pays it once
   after a driver or caustic change. None of it is on the hosts' loops

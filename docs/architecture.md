@@ -217,7 +217,13 @@ Wayland and every sidecar pipe, and a frame runs what exists: no frame until
 the frame submission's pipelines are built; the model passes without the
 shaper, which lays the blocks out unshaped, text of no size beside every chip
 and icon, as before a font arrives; the shaper's landing then owes the
-submission a run. A hot reload is the same queue: its pipelines build beside
+submission a run. Built means warmed: each pipeline is dispatched once on
+its worker, one workgroup over zeroed scratch bind groups, because a
+software rasteriser (lavapipe) compiles at a pipeline's first dispatch, not
+at its creation, and that dispatch would otherwise be the host's first
+frame, seconds long. lavapipe runs its queue on one thread, so while a
+warming dispatch is on it the host submits nothing and draws when the
+pipeline lands. A hot reload is the same queue: its pipelines build beside
 the running caustic and swap in together when the last is built and
 validated, or not at all, and a newer save supersedes a generation still
 building.
