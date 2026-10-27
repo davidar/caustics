@@ -197,8 +197,12 @@ is one `SKIP` line, counted as skipped and never as passed:
   (docs/architecture.md, *The caustic*): a host reads its pipes, answers
   input and keeps drawing the caustic that runs while the next one builds,
   so what a step waits for is the swap line, never a loop that came back.
-  The bar's first frame waits for `bar_apply`, its layout, about seven
-  seconds of the cold compile; the canvas's first frame comes after its two
+  The bar's first frame waits for `bar_apply`, its layout: 1.9 s of RADV's
+  time on its own (it was 4.6 s, and about seven in a gate run beside the
+  other worker, before its witnesses and actions were written straight into
+  their ring slots and its loops of constant length stopped being unrolled
+  at every inlined copy; the comment on `Args` in `caustics/bar_state.slang`
+  says why that was the cost). The canvas's first frame comes after its two
   small pipelines, and step 27 checks it is drawn before the shaper is
   built.
   Each pipeline build is one journal line, `pipeline <entry>: built in N s`,

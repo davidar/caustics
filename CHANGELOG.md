@@ -191,6 +191,21 @@ building skips its frame there. punchcutter moves to the revision whose
 reflection passes over a specialisation constant. No wire or buffer
 contract changed.
 
+**A cheaper layout pass to compile.** `bar_apply`, the one-thread pass the
+bar's first frame waits for, cost RADV 4.6 s to compile cold and now costs
+1.9 s; on lavapipe, creation and first dispatch together went from 12.1 s
+to 7.9 s, and the whole bar's seven pipelines on one worker from 13.1 s to
+10.1 s on RADV. The driver's time was in unrolling: every inlined witness
+and action carried two ten-step loops, each wing's walk over its order
+array was unrolled per kind, and every inlined branch that leaves a
+function early, such as `rows_word`'s bounds check at hundreds of call
+sites, becomes a loop the driver unrolls by rewriting the whole function.
+A record is now written straight into its ring slot with one rolled loop,
+the wings' walks stay rolled, and the hot helpers have no early return.
+`bar_build` gained 14% on RADV and nothing on lavapipe; the pass's own
+time per frame is unchanged at 0.18 ms. The lines printed and the actions
+pushed are the same words in the same order.
+
 **Text**, by punchcutter, a dependency: glyphs and symbolic icons drawn from
 their outlines on the GPU with the Slug algorithm, and OpenType Layout
 applied on the GPU from the font's own tables, both as Slang modules the
