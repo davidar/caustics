@@ -103,6 +103,33 @@ fn the_baked_literals_carry_the_fade_s_witnesses() {
     }
 }
 
+/// `canvas_draw` declares the surface constant in both formats' modules, and
+/// set to each surface it is a module of its own that `spirv-val` takes.
+#[test]
+fn every_surface_s_draw_is_a_module_of_its_own() {
+    let [draw] = SPECIALISED;
+    assert_eq!(draw.entry, DRAW, "the draw is what is specialised");
+    for format in [
+        wgpu::TextureFormat::Rgba8Unorm,
+        wgpu::TextureFormat::Bgra8Unorm,
+    ] {
+        let spirv = baked_spv(format).expect("a baked format");
+        let mut modules = Vec::new();
+        for surface in draw.values {
+            let module = caustics_host::spirv::specialise(spirv[DRAW], draw.id, surface.value)
+                .unwrap_or_else(|err| panic!("{}: {err:#}", surface.name))
+                .unwrap_or_else(|| panic!("canvas_draw declares no SpecId {}", draw.id));
+            if let Some(Err(err)) = caustics_host::spirv::validate(&module) {
+                panic!("canvas_draw[{}] ({format:?}): {err}", surface.name);
+            }
+            modules.push(module);
+        }
+        modules.sort();
+        modules.dedup();
+        assert_eq!(modules.len(), draw.values.len(), "one module per surface");
+    }
+}
+
 // -- On a device: alpha(t) ----------------------------------------------------
 //
 // Gated as the bar's oracle is (docs/testing.md, *Three tiers*):
@@ -183,7 +210,7 @@ fn frame_on(gpu: &mut Gpu, now: u64, role: u32) -> (u32, [u8; 4]) {
     let (lo, hi) = clock::words(now);
     gpu.write_params(&target.params, SIDE, SIDE, 120, lo, hi, role, 1);
     gpu.shape_if_pending();
-    gpu.encode(&target.params, &view, SIDE, SIDE);
+    gpu.encode(&target.params, &view, SIDE, SIDE, role);
     let stamp = gpu.finish().expect("the frame completes");
 
     let row = 256u32;
@@ -560,7 +587,7 @@ fn image_at(
     let (lo, hi) = clock::words(now);
     gpu.write_params(&target.params, width, height, 120, lo, hi, role, pane);
     gpu.shape_if_pending();
-    gpu.encode(&target.params, &view, width, height);
+    gpu.encode(&target.params, &view, width, height, role);
     gpu.finish().expect("the frame completes");
     let row = (width * 4).next_multiple_of(256);
     let out = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -928,7 +955,7 @@ fn the_wake_drawn_for_a_look() {
             let (lo, hi) = clock::words(now);
             gpu.write_params(&target.params, width, height, 120, lo, hi, role, 1);
             let t0 = std::time::Instant::now();
-            gpu.encode(&target.params, &view, width, height);
+            gpu.encode(&target.params, &view, width, height, role);
             gpu.finish().expect("the frame completes");
             times.push(t0.elapsed().as_secs_f64() * 1000.0);
         };
@@ -1098,7 +1125,10 @@ fn a_reload_builds_beside_the_running_canvas() {
         gpu.program.reloading(),
         "nothing is swapped until it is polled"
     );
-    assert!(gpu.can_draw(), "the running canvas still draws");
+    assert!(
+        gpu.can_draw(TARGET_BACKGROUND),
+        "the running canvas still draws"
+    );
     let (before, _) = frame_at(&mut gpu, 500);
     assert_eq!(
         gpu.program.generation(),

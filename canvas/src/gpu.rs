@@ -25,14 +25,16 @@ use std::ptr::NonNull;
 use anyhow::{Context, Result, anyhow, bail};
 use caustics_bar_abi::canvas::{
     CANVAS_GLYPHS, CANVAS_STRINGS_BYTES, CANVAS_TEXT_BLOCKS, CanvasFacts, CanvasParams,
-    CanvasState, MAX_CANVAS_LITERALS, PROMPT_TEXT_BYTES, SLOT_A, SLOT_B, TEXT_LITERALS,
-    TEXT_PROMPT,
+    CanvasState, MAX_CANVAS_LITERALS, PROMPT_TEXT_BYTES, SLOT_A, SLOT_B, TARGET_BACKGROUND,
+    TARGET_LOCK, TARGET_OVERLAY, TARGET_PROMPT, TEXT_LITERALS, TEXT_PROMPT,
 };
 use caustics_bar_abi::wire::Image;
 use caustics_bar_abi::{CANVAS_ENTRIES, Literal, NO_INDEX, as_bytes};
 use caustics_host::compile::Wake;
 use caustics_host::device::{self, Device, Presentation};
-use caustics_host::program::{Entry, Landed, Program, Refused, group_entries};
+use caustics_host::program::{
+    Entry, Landed, Program, Refused, Specialised, Variant, group_entries,
+};
 use caustics_host::strings::Strings;
 use caustics_host::surface::{
     self, AcquireError, Surface, acquire, create_surface, refresh_mirror,
@@ -56,6 +58,35 @@ const DRAW: usize = 2;
 /// The order the pipelines are built in: what a frame needs first, so the
 /// wallpaper is drawn before the shaper, most of the compile, is built.
 const NEED: [usize; CANVAS_ENTRIES.len()] = [APPLY, DRAW, SHAPE];
+
+/// `canvas_draw` is built once per surface, with `SPECIALISED_TARGET`
+/// (`caustics/canvas_state.slang`, SpecId 0) set to it, so each pipeline
+/// carries that surface's code alone (docs/architecture.md, *The caustic*).
+/// The background's first, then the lock's, which a restarted canvas whose
+/// session is locked wants next.
+static SURFACES: [Variant; 4] = [
+    Variant {
+        value: TARGET_BACKGROUND,
+        name: "background",
+    },
+    Variant {
+        value: TARGET_LOCK,
+        name: "lock",
+    },
+    Variant {
+        value: TARGET_OVERLAY,
+        name: "overlay",
+    },
+    Variant {
+        value: TARGET_PROMPT,
+        name: "prompt",
+    },
+];
+const SPECIALISED: [Specialised; 1] = [Specialised {
+    entry: DRAW,
+    id: 0,
+    values: &SURFACES,
+}];
 
 /// The compile workers' count (`caustics_host::compile`). Two: on RADV with
 /// a cold cache the shaper builds beside the rest instead of after it, which
@@ -275,7 +306,7 @@ impl Gpu {
         wake: Wake,
     ) -> Result<Gpu> {
         let format = presentation.format;
-        let program = Program::new(
+        let program = Program::new_specialised(
             &device,
             &queue,
             bindings,
@@ -289,6 +320,7 @@ impl Gpu {
             &CANVAS_ENTRY_TABLE,
             baked_spv(format)?,
             &NEED,
+            &SPECIALISED,
             COMPILE_WORKERS,
             wake,
         )
@@ -572,8 +604,14 @@ impl Gpu {
     ///
     /// Nor while a pipeline is being warmed: a frame submitted behind a
     /// warming dispatch waits for the driver's compile (`Program::warming`).
-    pub fn can_draw(&self) -> bool {
-        self.program.has(&[APPLY, DRAW]) && !self.program.warming()
+    pub fn can_draw(&self, role: u32) -> bool {
+        self.program.has(&[APPLY]) && self.draw_pipeline(role).is_some() && !self.program.warming()
+    }
+
+    /// The `canvas_draw` a surface of `role` (`TARGET_*`) is drawn with: its
+    /// own, specialised for it (`SURFACES`).
+    fn draw_pipeline(&self, role: u32) -> Option<&wgpu::ComputePipeline> {
+        self.program.variant(DRAW, role)
     }
 
     // -- the text ------------------------------------------------------------
@@ -799,7 +837,7 @@ impl Gpu {
     ) {
         let (now_lo, now_hi) = clock::words(clock::boottime_ms());
         self.write_params(params, width, height, scale, now_lo, now_hi, role, pane);
-        self.encode(params, dst, width, height);
+        self.encode(params, dst, width, height, role);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -827,8 +865,15 @@ impl Gpu {
         self.queue.write_buffer(params, 0, as_bytes(&words));
     }
 
-    fn encode(&self, params: &wgpu::Buffer, dst: &wgpu::TextureView, width: u32, height: u32) {
-        let (Some(apply), Some(draw)) = (self.program.pipeline(APPLY), self.program.pipeline(DRAW))
+    fn encode(
+        &self,
+        params: &wgpu::Buffer,
+        dst: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+        role: u32,
+    ) {
+        let (Some(apply), Some(draw)) = (self.program.pipeline(APPLY), self.draw_pipeline(role))
         else {
             // `can_draw` is the caller's check, and an image acquired without
             // it is presented with whatever it held.

@@ -176,15 +176,15 @@ void canvas_apply()
     // The background and a lock surface while a wake lives on them, too.
     bool stirred = step_wake(f);
     bool more = false;
-    if (params.target == TARGET_OVERLAY)
+    if (surface_target() == TARGET_OVERLAY)
     {
         more = dimmed && !reached;
     }
-    else if (params.target == TARGET_BACKGROUND)
+    else if (surface_target() == TARGET_BACKGROUND)
     {
         more = (fading && t < 1.0) || stirred;
     }
-    else if (params.target == TARGET_LOCK)
+    else if (surface_target() == TARGET_LOCK)
     {
         more = stirred;
     }
@@ -243,7 +243,8 @@ void apply_prompt(CanvasPrompt pr)
 /// pane, and a lock surface.
 bool carries_prompt()
 {
-    return params.target == TARGET_PROMPT || params.target == TARGET_LOCK;
+    uint target = surface_target();
+    return target == TARGET_PROMPT || target == TARGET_LOCK;
 }
 
 /// The text's witnesses and the runs to cover, and the shape pass's
@@ -501,26 +502,26 @@ void canvas_draw(uint3 gid: SV_DispatchThreadID)
     }
     float2 p = float2(gid.xy) + 0.5;
     CanvasPrompt pr = facts[0].prompt;
-    if (params.target == TARGET_LOCK)
+    if (surface_target() == TARGET_LOCK)
     {
         // The prompt's look, the water over its floor and the panel over
         // the water.
         dst.Store(gid.xy, float4(draw_prompt(pr, through_water(p, true), p), 1.0));
         return;
     }
-    if (params.target == TARGET_BACKGROUND)
+    if (surface_target() == TARGET_BACKGROUND)
     {
         // Opaque: the background layer is the bottom of the output.
         dst.Store(gid.xy, float4(through_water(p, false), 1.0));
         return;
     }
     float3 colour = wallpaper(p);
-    if (params.target == TARGET_PROMPT)
+    if (surface_target() == TARGET_PROMPT)
     {
         dst.Store(gid.xy, float4(draw_prompt(pr, prompt_floor(colour), p), 1.0));
         return;
     }
-    if (params.target == TARGET_OVERLAY && pr.state != PROMPT_IDLE)
+    if (surface_target() == TARGET_OVERLAY && pr.state != PROMPT_IDLE)
     {
         // A prompt is up over the dim: the pane under this overlay is the
         // one to see, so the dim stands aside while it is, and is as it was
@@ -528,7 +529,7 @@ void canvas_draw(uint3 gid: SV_DispatchThreadID)
         dst.Store(gid.xy, float4(0.0, 0.0, 0.0, 0.0));
         return;
     }
-    if (params.target == TARGET_OVERLAY)
+    if (surface_target() == TARGET_OVERLAY)
     {
         // The wallpaper, darkened, at the dim's alpha, premultiplied:
         // transparent where the alpha is 0, so a dim on its way in shows

@@ -900,7 +900,7 @@ impl Canvas {
         // owed, and is drawn when they land (`pipelines_landed`). A lock pane
         // waits here too, and the compositor keeps the session blank until it
         // has a frame.
-        if !gpu.can_draw() {
+        if !gpu.can_draw(pane.role.target()) {
             pane.dirty = true;
             return Ok(());
         }

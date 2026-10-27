@@ -35,6 +35,22 @@ public RWStructuredBuffer<CanvasState> state;
 [[vk::binding(1, 0)]]
 public ConstantBuffer<CanvasParams> params;
 
+/// The surface a pipeline was specialised for (`TARGET_*`), or `NO_INDEX`
+/// in one that was not: a SPIR-V specialisation constant the host sets per
+/// pipeline (caustics/README.md, *Conventions*). `canvas_draw` is built once
+/// per target, so each pipeline carries one surface's code; the rest are
+/// built once and read the buffer's word.
+[[vk::constant_id(0)]]
+public const uint SPECIALISED_TARGET = NO_INDEX;
+
+/// Which of the output's surfaces this dispatch draws: the pipeline's
+/// specialisation where it has one, which the driver folds, and
+/// `params.target` where it has none.
+public uint surface_target()
+{
+    return SPECIALISED_TARGET != NO_INDEX ? SPECIALISED_TARGET : params.target;
+}
+
 /// The last show and the last dim, as they crossed the wire, and which slot
 /// holds which picture.
 [[vk::binding(2, 0)]]

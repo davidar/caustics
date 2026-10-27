@@ -54,11 +54,11 @@ float wake_scale()
 /// overlay or the prompt's pane, where the pointer is a cancel or a panel's.
 public float wake_alpha()
 {
-    if (params.target == TARGET_BACKGROUND)
+    if (surface_target() == TARGET_BACKGROUND)
     {
         return max(WAKE_ALPHA, 0.0);
     }
-    if (params.target == TARGET_LOCK)
+    if (surface_target() == TARGET_LOCK)
     {
         return max(WAKE_ALPHA * WAKE_LOCK, 0.0);
     }
@@ -227,7 +227,7 @@ public bool step_wake(CanvasFacts f)
         if (any)
         {
             arg(a, params.pane);
-            arg(a, params.target);
+            arg(a, surface_target());
             witness(WITNESS_INFO, getStringHash("wake: stirred on pane {0} (target {1})"), a);
         }
         else
