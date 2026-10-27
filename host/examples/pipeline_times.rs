@@ -22,9 +22,9 @@
 //! one that compiles on first use (llvmpipe, under lavapipe, JITs a compute
 //! shader when it is first launched) shows the compile in the first.
 //!
-//! `--parallel` builds each pipeline on a thread of its own, against the
-//! same layout, which is what a host compiling off its main thread would
-//! do; the program's time is then the slowest pipeline's, not the sum.
+//! `--parallel` gives every pipeline a compile worker of its own instead of
+//! the one worker that builds them in sequence; the program's time is then
+//! the slowest pipeline's, not the sum.
 //!
 //! `--pipeline-cache <file>` builds the same pipelines against a wgpu
 //! pipeline cache seeded from `<file>` and writes the cache back to it
@@ -115,51 +115,32 @@ fn main() -> Result<()> {
     let built = Instant::now();
     match cache_file {
         None => {
-            let (built, alone): (&[Entry], &[&[u8]]) = if parallel {
-                (&[], &[])
-            } else {
-                (entries, &spirv)
-            };
-            let program = Program::new(
+            // One worker builds in sequence; `--parallel` gives every entry a
+            // worker of its own. The workers print each pipeline's line.
+            let need: Vec<usize> = (0..entries.len()).collect();
+            let workers = if parallel { entries.len().max(1) } else { 1 };
+            let wake: caustics_host::compile::Wake = std::sync::Arc::new(|| {});
+            let mut program = Program::new(
                 &device.device,
                 reflection.bindings.clone(),
                 &labels,
                 "pipeline-times-layout",
                 &storage_format,
-                built,
-                alone,
+                entries,
+                &spirv,
+                &need,
+                workers,
+                wake,
             )?;
-            let pipelines: Vec<wgpu::ComputePipeline> = if parallel {
-                std::thread::scope(|scope| {
-                    let workers: Vec<_> = entries
-                        .iter()
-                        .zip(&spirv)
-                        .map(|(entry, spv)| {
-                            let device = &device.device;
-                            let layout = program.pipeline_layout();
-                            scope.spawn(move || {
-                                caustics_host::program::build_pipelines(
-                                    device,
-                                    layout,
-                                    std::slice::from_ref(entry),
-                                    &[spv],
-                                )
-                            })
-                        })
-                        .collect();
-                    workers
-                        .into_iter()
-                        .map(|worker| worker.join().expect("a build thread panicked"))
-                        .collect::<Result<Vec<_>>>()
-                })?
-                .into_iter()
-                .flatten()
-                .collect()
-            } else {
-                (0..entries.len())
-                    .map(|index| program.pipeline(index).clone())
-                    .collect()
-            };
+            program.wait_ready()?;
+            let pipelines: Vec<wgpu::ComputePipeline> = (0..entries.len())
+                .map(|index| {
+                    program
+                        .pipeline(index)
+                        .expect("wait_ready returned with every pipeline built")
+                        .clone()
+                })
+                .collect();
             if dispatch {
                 dispatch_each(&device, &program, &pipelines, entries, sets.len() as u32);
             }
