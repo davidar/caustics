@@ -452,7 +452,10 @@ pub enum Landed {
     Refused { generation: u64, error: Refused },
 }
 
-/// One entry's pipeline in the running program.
+mod variants;
+pub use variants::{Specialised, Variant};
+
+/// One pipeline's state in the running program.
 enum Slot {
     Pending,
     Ready(wgpu::ComputePipeline),
@@ -475,10 +478,13 @@ pub struct Program {
     layouts: Vec<wgpu::BindGroupLayout>,
     pipeline_layout: wgpu::PipelineLayout,
     entries: &'static [Entry],
-    /// The entries' indices in the order a host needs them: what is queued
-    /// first, at bring-up and on every reload.
+    /// Every pipeline the entries are: one per entry, and one per value of
+    /// an entry built per value ([`variants`]).
+    slots: variants::Slots,
+    /// The slots in the order a host needs them: what is queued first, at
+    /// bring-up and on every reload.
     need: Vec<usize>,
-    /// One per entry, in the entries' order.
+    /// One per slot.
     live: Vec<Slot>,
     /// The generation `live` is: 1 for the baked caustic, then one more per
     /// reload swapped in.
@@ -525,6 +531,41 @@ impl Program {
         workers: usize,
         wake: crate::compile::Wake,
     ) -> Result<Program> {
+        Program::new_specialised(
+            device,
+            queue,
+            bindings,
+            sets,
+            pipeline_label,
+            storage_format,
+            entries,
+            spirv,
+            need,
+            &[],
+            workers,
+            wake,
+        )
+    }
+
+    /// [`Program::new`], with the entries `specialised` lists built once per
+    /// value of a specialisation constant ([`variants`]): each value's
+    /// pipeline is [`Program::variant`]'s, in the order the values are
+    /// listed where the entry stands in `need`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_specialised(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        bindings: Vec<Binding>,
+        sets: &[&str],
+        pipeline_label: &str,
+        storage_format: &dyn Fn(&str) -> wgpu::TextureFormat,
+        entries: &'static [Entry],
+        spirv: &[&[u8]],
+        need: &[usize],
+        specialised: &[Specialised],
+        workers: usize,
+        wake: crate::compile::Wake,
+    ) -> Result<Program> {
         if spirv.len() != entries.len() {
             bail!(
                 "{} modules for {} entry points; a program is one module per entry point",
@@ -540,6 +581,8 @@ impl Program {
                 entries.len()
             );
         }
+        let names: Vec<&'static str> = entries.iter().map(|entry| entry.name).collect();
+        let slots = variants::Slots::new(&names, specialised)?;
         let numbers: Vec<u32> = (0..sets.len() as u32).collect();
         assert_sets(&bindings, &numbers);
         let layouts: Vec<wgpu::BindGroupLayout> = sets
@@ -572,8 +615,9 @@ impl Program {
             layouts,
             pipeline_layout,
             entries,
-            need: need.to_vec(),
-            live: entries.iter().map(|_| Slot::Pending).collect(),
+            need: slots.order(need),
+            live: (0..slots.len()).map(|_| Slot::Pending).collect(),
+            slots,
             generation: 1,
             staged: None,
             issued: 1,
@@ -581,10 +625,12 @@ impl Program {
             compiler,
             bindings,
         };
-        program.queue(1, spirv);
+        program
+            .queue(1, spirv)
+            .context("the baked caustic's modules cannot be built")?;
         tracing::info!(
             "pipelines: {} queued on {} compile worker{}, in the order {}",
-            entries.len(),
+            program.slots.len(),
             program.compiler.workers(),
             if program.compiler.workers() == 1 {
                 ""
@@ -594,24 +640,30 @@ impl Program {
             program
                 .need
                 .iter()
-                .map(|&index| entries[index].name)
+                .map(|&slot| program.slots.name(slot))
                 .collect::<Vec<_>>()
                 .join(", ")
         );
         Ok(program)
     }
 
-    /// One generation's jobs, in the order of need.
-    fn queue(&self, generation: u64, spirv: &[&[u8]]) {
-        self.compiler
-            .submit(self.need.iter().map(|&index| crate::compile::Job {
+    /// One generation's jobs, in the order of need. Nothing is queued if a
+    /// slot's module cannot be made.
+    fn queue(&self, generation: u64, spirv: &[&[u8]]) -> Result<()> {
+        let mut jobs = Vec::with_capacity(self.need.len());
+        for &slot in &self.need {
+            let entry = &self.entries[self.slots.entry(slot)];
+            jobs.push(crate::compile::Job {
                 generation,
-                slot: index,
-                label: self.entries[index].label,
-                entry: self.entries[index].name,
-                workgroup: self.entries[index].workgroup,
-                spirv: spirv[index].to_vec(),
-            }));
+                slot,
+                label: entry.label,
+                entry: entry.name,
+                workgroup: entry.workgroup,
+                spirv: self.slots.module(slot, spirv[self.slots.entry(slot)])?,
+            });
+        }
+        self.compiler.submit(jobs);
+        Ok(())
     }
 
     /// Set `set`'s layout.
@@ -629,7 +681,17 @@ impl Program {
     /// built. A dispatch whose pipeline is not here yet is not recorded: the
     /// host skips the work that needs it and does it when it lands.
     pub fn pipeline(&self, index: usize) -> Option<&wgpu::ComputePipeline> {
-        match &self.live[index] {
+        self.ready(self.slots.find(index, None)?)
+    }
+
+    /// The pipeline of the entry at `index` built for `value`, once it is
+    /// built: for an entry [`Program::new_specialised`] built per value.
+    pub fn variant(&self, index: usize, value: u32) -> Option<&wgpu::ComputePipeline> {
+        self.ready(self.slots.find(index, Some(value))?)
+    }
+
+    fn ready(&self, slot: usize) -> Option<&wgpu::ComputePipeline> {
+        match &self.live[slot] {
             Slot::Ready(pipeline) => Some(pipeline),
             Slot::Pending => None,
         }
@@ -637,9 +699,7 @@ impl Program {
 
     /// Whether every one of these entries' pipelines is built.
     pub fn has(&self, indices: &[usize]) -> bool {
-        indices
-            .iter()
-            .all(|&index| matches!(self.live[index], Slot::Ready(_)))
+        indices.iter().all(|&index| self.pipeline(index).is_some())
     }
 
     /// Whether a pipeline is being warmed on the device's queue
@@ -709,11 +769,11 @@ impl Program {
         }
         self.issued += 1;
         let generation = self.issued;
+        self.queue(generation, spirv).map_err(Refused::Pipelines)?;
         self.staged = Some(Staged {
             generation,
-            pipelines: self.entries.iter().map(|_| None).collect(),
+            pipelines: (0..self.slots.len()).map(|_| None).collect(),
         });
-        self.queue(generation, spirv);
         Ok(generation)
     }
 
@@ -763,36 +823,36 @@ impl Program {
     }
 
     fn land(&mut self, built: crate::compile::Built) -> Option<Landed> {
-        let entry = &self.entries[built.slot];
+        let (entry, name) = (
+            self.slots.entry(built.slot),
+            self.slots.name(built.slot).to_owned(),
+        );
         let took = crate::compile::human(built.took);
         if built.generation == self.generation {
             return match built.result {
                 Ok(pipeline) => {
-                    tracing::info!("pipeline {}: built in {took}", entry.name);
+                    tracing::info!("pipeline {}: built in {took}", name);
                     self.live[built.slot] = Slot::Ready(pipeline);
                     let all = self.whole();
                     if all {
                         tracing::info!(
                             "pipelines: all {} built, {} after they were queued",
-                            self.entries.len(),
+                            self.slots.len(),
                             crate::compile::human(self.queued_at.elapsed())
                         );
                     }
-                    Some(Landed::Live {
-                        entry: built.slot,
-                        all,
-                    })
+                    Some(Landed::Live { entry, all })
                 }
                 Err(err) => Some(Landed::Broken(format!(
                     "pipeline {} was refused: {err}",
-                    entry.name
+                    name
                 ))),
             };
         }
         let Some(staged) = self.staged.as_mut() else {
             tracing::debug!(
                 "pipeline {}: generation {} landed after it stopped mattering",
-                entry.name,
+                name,
                 built.generation
             );
             return None;
@@ -800,7 +860,7 @@ impl Program {
         if staged.generation != built.generation {
             tracing::debug!(
                 "pipeline {}: generation {} landed after it stopped mattering",
-                entry.name,
+                name,
                 built.generation
             );
             return None;
@@ -808,10 +868,7 @@ impl Program {
         let generation = staged.generation;
         match built.result {
             Ok(pipeline) => {
-                tracing::info!(
-                    "pipeline {}: built in {took} (reload {generation})",
-                    entry.name
-                );
+                tracing::info!("pipeline {}: built in {took} (reload {generation})", name);
                 staged.pipelines[built.slot] = Some(pipeline);
                 if staged.pipelines.iter().any(Option::is_none) {
                     return None;
@@ -835,7 +892,7 @@ impl Program {
                     generation,
                     error: Refused::Pipelines(anyhow::anyhow!(
                         "pipeline creation rejected for {}: {err}",
-                        entry.name
+                        name
                     )),
                 })
             }
