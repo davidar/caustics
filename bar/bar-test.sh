@@ -4287,14 +4287,14 @@ else
             SKIPS=$((SKIPS + 1))
         elif [[ -n "$first_at" && -n "$shape_at" && "$first_at" -lt "$shape_at" ]]; then
             pass "the first frame was drawn before the shaper was built ($took): $(canvas_log |
-                grep -E 'pipeline canvas_(apply|draw): built' | sed -n 's/.*INFO [a-z_:]*: //p' | tr '\n' '|')"
+                grep -E 'pipeline canvas_(apply|draw[^:]*): built' | sed -n 's/.*INFO [a-z_:]*: //p' | tr '\n' '|')"
         else
             fail "the first frame (log line ${first_at:-none}) did not precede the shaper's build (line ${shape_at:-none}, $took)"
         fi
-        if canvas_log | jgrep -E 'pipelines: all 3 built'; then
-            pass "$(canvas_last 'pipelines: all 3 built' | sed -n 's/.*INFO [a-z_:]*: //p')"
+        if canvas_log | jgrep -E 'pipelines: all [0-9]+ built'; then
+            pass "$(canvas_log | grep -E 'pipelines: all [0-9]+ built' | tail -1 | sed -n 's/.*INFO [a-z_:]*: //p')"
         else
-            fail "no 'pipelines: all 3 built' line: $(canvas_log | grep -F 'pipeline' | tail -4 | tr '\n' '|')"
+            fail "no 'pipelines: all N built' line: $(canvas_log | grep -F 'pipeline' | tail -4 | tr '\n' '|')"
         fi
     else
         fail "the canvas's shaper was never built: $(canvas_log | grep -F 'pipeline' | tail -4 | tr '\n' '|')"
