@@ -200,6 +200,44 @@ in the same drop-in, and so is the fingerprint reader,
 `CAUSTICS_LOCK_FINGERPRINT=0` to leave it out (lock/README.md,
 *Settings*).
 
+#### Trying it first
+
+`bar/lock-try.sh` tries the lock with the real password and the real
+fingerprint reader without locking the session. It builds the workspace,
+opens a nested niri as a 1280x800 window on the desktop, starts this
+checkout's canvas inside it with the set above, shows a picture (the path
+given as its argument, else a gradient), and locks the window. Click into
+the window, then type the password and press Return, or touch the reader;
+Escape starts a fresh attempt. The terminal shows the host's `lock:`,
+`prompt:` and `seat:` lines and the sidecar's `caustics-lock:` lines as they
+come, then `unlocked by password after N attempts` or `unlocked by
+fingerprint`. Then `l` and Return on the terminal locks again and `q` and
+Return quits. Closing the window, or Ctrl-C, ends it at any moment, and
+everything it started is stopped by pid.
+
+```sh
+bar/lock-try.sh [picture]                # real PAM, the reader on
+bar/lock-try.sh --dry-run <secret>       # no PAM: <secret> unlocks
+bar/lock-try.sh --fingerprint off        # CAUSTICS_LOCK_FINGERPRINT=0
+bar/lock-try.sh --pam-service <name>     # CAUSTICS_LOCK_PAM_SERVICE
+```
+
+The run's sockets are under a private runtime directory, so they never meet
+the live set's, but the buses are the real ones, so that logind, PAM and
+fprintd behave as they will for the real lock. The sidecar is the real
+session's locker while it runs, which has two side effects:
+
+- **`LockedHint`**: while the window is locked the sidecar sets the real
+  session's `LockedHint`, a hint only, and clears it on the unlock. A run
+  that ends while locked would leave it set, so the script clears a hint
+  its own run left behind.
+- **The `Lock` signal**: a real `loginctl lock-session` (or the idle timer,
+  or the lid) locks the window too, since the sidecar hears the real
+  session's signal; the session's own locker locks the session as before.
+
+A `LockedHint` already set when the run starts locks the window at once,
+as it would a restarted canvas.
+
 ## The journal lines worth knowing
 
 ```

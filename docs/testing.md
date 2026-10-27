@@ -51,6 +51,20 @@ frame a second. And niri's own headless backend is not selectable from its
 command line. A headless wlroots compositor is the smallest host that keeps
 the timings real.
 
+**The lock by eye.** `bar/lock-try.sh` is the gate's companion for what the
+steps cannot do: lock and unlock with the developer's real password and real
+fingerprint reader. It builds the workspace, starts the same nested niri as
+a window on the desktop and the canvas inside it with `caustics-lock` in its
+set, under a private runtime directory but on the real session and system
+buses, and locks the window. The developer types into it while the terminal
+shows the lock's witness lines and a verdict at each unlock; closing the
+window ends it, and nothing in the session was ever locked. Its options and
+its two side effects on the real session (the session's `LockedHint`, and a
+real `loginctl lock-session` locking the window too) are in
+canvas/README.md, *Trying it first*. `--headless --dry-run <secret>` runs the
+same machinery on the gate's headless sway with no system bus, which is how
+the script itself is checked.
+
 ### What one run does
 
 1. **Independent of any other run.** Each run has its own run directory,
