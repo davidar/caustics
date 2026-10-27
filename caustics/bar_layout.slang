@@ -172,11 +172,10 @@ public void witness_departures()
         // `count` is not kept: the gone literal reads the same leading words
         // the layout literal did, so all three are pushed and the format takes
         // what it names.
-        Args a = args_new();
+        Args a = witness_begin(WITNESS_DEBUG, gone_literal(nm.slot));
         arg(a, nm.a0);
         arg(a, nm.a1);
         arg(a, nm.a2);
-        witness(WITNESS_DEBUG, gone_literal(nm.slot), a);
         private[0].elements[i].said_present = 0u;
     }
 }
@@ -672,13 +671,12 @@ public void witness_body(uint elem, Item it, bool open, bool toast)
     {
         return;
     }
-    Args a = args_new();
+    Args a = witness_begin(toast ? WITNESS_INFO : WITNESS_DEBUG,
+                           getStringHash("body: slot={0} row={1} lines={2} cut={3}"));
     arg(a, id_aux(it.id));
     arg(a, id_payload(it.id));
     arg(a, shown);
     arg(a, cut ? 1u : 0u);
-    witness(toast ? WITNESS_INFO : WITNESS_DEBUG,
-            getStringHash("body: slot={0} row={1} lines={2} cut={3}"), a);
 }
 
 /// How many ordering passes one kind takes on a wing. Applets order among

@@ -719,33 +719,51 @@ public void ensure_private()
 // ring would be a race with itself.
 // ===========================================================================
 
-/// Operands under construction. Slang has no varargs, so a record is built by
-/// appending; past ten words the appends are dropped, which is a `?` in the
-/// printed line rather than a corrupt one.
+/// The operands of a record that is being written: where its slot is, and how
+/// many words are in it so far.
+///
+/// A record is written straight into its ring. `witness_begin` or
+/// `action_begin` takes the next slot, writes the head and zeroes the ten
+/// words; each `arg` then stores one word into the slot itself. Slang has no
+/// varargs, so this is how a record of any length is spelled, and past ten
+/// words the appends are dropped, which is a `?` in the printed line rather
+/// than a corrupt one. A full ring hands out no slot (`at` is NO_INDEX), and
+/// every append to that record is dropped with it.
+///
+/// **Why the words go straight into the slot.** Every call site is inlined
+/// into its pass, a few hundred of them in `bar_apply`, and the driver
+/// compiles each copy. A ten-word value built by appends and then copied
+/// into the ring left each copy with two ten-step loops of constant length,
+/// which the driver unrolls one at a time, and every unroll rewrites the
+/// whole function first. Here a record costs one loop, kept rolled
+/// (`[loop]`), and one store per word. For the same reason a full ring is
+/// an `else`, not an early `return`: the driver wraps each copy of a
+/// branch that leaves early in a loop of its own and then unrolls that.
+/// docs/testing.md, *Known behaviour the steps account for*, has the times.
 public struct Args
 {
-    public uint w[10];
+    public uint ring;
+    public uint at;
     public uint n;
 };
 
-public Args args_new()
-{
-    Args a;
-    for (uint i = 0u; i < 10u; ++i)
-    {
-        a.w[i] = 0u;
-    }
-    a.n = 0u;
-    return a;
-}
+static const uint RING_WITNESS = 0u;
+static const uint RING_ACTION = 1u;
 
 public void arg(inout Args a, uint value)
 {
-    if (a.n < 10u)
+    if (a.at != NO_INDEX && a.n < 10u)
     {
-        a.w[a.n] = value;
-        a.n += 1u;
+        if (a.ring == RING_WITNESS)
+        {
+            state[0].witnesses[a.at].arg[a.n] = value;
+        }
+        else
+        {
+            state[0].actions[a.at].arg[a.n] = value;
+        }
     }
+    a.n += 1u;
 }
 
 /// A float travels as its bit pattern; the printer reads it back with
@@ -758,10 +776,15 @@ public void argf(inout Args a, float value)
 public void arg2(inout Args a, float2 v) { argf(a, v.x); argf(a, v.y); }
 public void arg4(inout Args a, float4 v) { arg2(a, v.xy); arg2(a, v.zw); }
 
-/// One decision, with its operands. *The action ring*'s table is the contract; nothing here
-/// is an index into anything the embassy keeps.
-public void push_action(uint kind, Args a)
+/// One decision, with its operands to follow as `arg`s. *The action ring*'s
+/// table is the contract; nothing here is an index into anything the embassy
+/// keeps.
+public Args action_begin(uint kind)
 {
+    Args a;
+    a.ring = RING_ACTION;
+    a.at = NO_INDEX;
+    a.n = 0u;
     if (state[0].surface.action_frame != inputs.frame)
     {
         state[0].surface.action_frame = inputs.frame;
@@ -774,28 +797,42 @@ public void push_action(uint kind, Args a)
         // A lost action beats a repeated one, and the embassy warns once per
         // frame it sees this.
         state[0].surface.action_lost += 1u;
-        return;
     }
-    state[0].actions[n].head = kind;
-    state[0].actions[n].aux = 0u;
-    for (uint i = 0u; i < 10u; ++i)
+    else
     {
-        state[0].actions[n].arg[i] = a.w[i];
+        state[0].actions[n].head = kind;
+        state[0].actions[n].aux = 0u;
+        [loop]
+        for (uint i = 0u; i < 10u; ++i)
+        {
+            state[0].actions[n].arg[i] = 0u;
+        }
+        state[0].surface.action_count = n + 1u;
+        a.at = n;
     }
-    state[0].surface.action_count = n + 1u;
+    return a;
 }
 
-/// One line of the journal, as a format literal and its words (docs/abi.md, *The witness ring*).
+/// One line of the journal, as a format literal, with its words to follow as
+/// `arg`s (docs/abi.md, *The witness ring*).
 ///
 /// `head` is `getStringHash("…")` of the literal; Slang records the text in
 /// its reflection and the embassy resolves it there. There is no per-witness
 /// Rust: a new line is one call here.
 ///
+/// The slot is taken here, before the words are worked out, so a word's
+/// expression must not push a witness of its own: that one would land after
+/// this one in the ring. None does; the words are reads.
+///
 /// **Once per change is this file's duty.** The embassy prints every
 /// record it reads, in order, and dedups nothing — so every caller compares
 /// against what it persisted in `private` before pushing.
-public void witness(uint level, uint head, Args a)
+public Args witness_begin(uint level, uint head)
 {
+    Args a;
+    a.ring = RING_WITNESS;
+    a.at = NO_INDEX;
+    a.n = 0u;
     if (state[0].surface.witness_frame != inputs.frame)
     {
         state[0].surface.witness_frame = inputs.frame;
@@ -806,48 +843,50 @@ public void witness(uint level, uint head, Args a)
     if (n >= MAX_WITNESSES)
     {
         state[0].surface.witness_lost += 1u;
-        return;
     }
-    state[0].witnesses[n].head = head;
-    state[0].witnesses[n].aux = level;
-    for (uint i = 0u; i < 10u; ++i)
+    else
     {
-        state[0].witnesses[n].arg[i] = a.w[i];
+        state[0].witnesses[n].head = head;
+        state[0].witnesses[n].aux = level;
+        [loop]
+        for (uint i = 0u; i < 10u; ++i)
+        {
+            state[0].witnesses[n].arg[i] = 0u;
+        }
+        state[0].surface.witness_count = n + 1u;
+        a.at = n;
     }
-    state[0].surface.witness_count = n + 1u;
+    return a;
 }
 
 /// A witness with no words at all, which most of the edges are.
 public void witness0(uint level, uint head)
 {
-    witness(level, head, args_new());
+    witness_begin(level, head);
 }
 
 /// A witness of one number.
 public void witness1(uint level, uint head, uint v0)
 {
-    Args a = args_new();
+    Args a = witness_begin(level, head);
     arg(a, v0);
-    witness(level, head, a);
 }
 
 /// A witness of two.
 public void witness2(uint level, uint head, uint v0, uint v1)
 {
-    Args a = args_new();
+    Args a = witness_begin(level, head);
     arg(a, v0);
     arg(a, v1);
-    witness(level, head, a);
 }
 
 /// A witness of three.
 public void witness3(uint level, uint head, uint v0, uint v1, uint v2)
 {
-    Args a = args_new();
+    Args a = witness_begin(level, head);
     arg(a, v0);
     arg(a, v1);
     arg(a, v2);
-    witness(level, head, a);
 }
 
 // -- the action kinds, spelled once -----------------------------------------
@@ -856,39 +895,36 @@ public void witness3(uint level, uint head, uint v0, uint v1, uint v2)
 /// `ACT_POPUP_CLOSE`.
 public void act(uint kind)
 {
-    push_action(kind, args_new());
+    action_begin(kind);
 }
 
 /// An action of two words: a window's id, a string range, an anchor's pair, a
 /// popup's size.
 public void act2(uint kind, uint v0, uint v1)
 {
-    Args a = args_new();
+    Args a = action_begin(kind);
     arg(a, v0);
     arg(a, v1);
-    push_action(kind, a);
 }
 
 /// An action of three.
 public void act3(uint kind, uint v0, uint v1, uint v2)
 {
-    Args a = args_new();
+    Args a = action_begin(kind);
     arg(a, v0);
     arg(a, v1);
     arg(a, v2);
-    push_action(kind, a);
 }
 
 /// An action of four: `ACT_WANT_ICON` — a range, the wire's `REQ_*`, and the
 /// buffer the name's bytes are in (docs/abi.md, *The action ring*).
 public void act4(uint kind, uint v0, uint v1, uint v2, uint v3)
 {
-    Args a = args_new();
+    Args a = action_begin(kind);
     arg(a, v0);
     arg(a, v1);
     arg(a, v2);
     arg(a, v3);
-    push_action(kind, a);
 }
 
 // ===========================================================================
@@ -1126,14 +1162,13 @@ public uint stall_literal(uint slot)
     }
 }
 
-/// The name's words, ready for a format's tail to be appended.
-public Args name_args(NameRef nm)
+/// The name's words, the first of a record's, ready for a format's tail to be
+/// appended.
+public void name_args(inout Args a, NameRef nm)
 {
-    Args a = args_new();
     if (nm.count > 0u) { arg(a, nm.a0); }
     if (nm.count > 1u) { arg(a, nm.a1); }
     if (nm.count > 2u) { arg(a, nm.a2); }
-    return a;
 }
 
 /// The `{n:s}` a `target=` reads.
@@ -1789,7 +1824,7 @@ public void act_sidecar(Item it, uint kind, uint button, float2 pos, float value
     bool token = kind == ACTION_ACTIVATE
         && ((it.flags & IFLAG_ACTIVATION) != 0u
             || (item_row(it).flags & RFLAG_ACTIVATION) != 0u);
-    Args a = args_new();
+    Args a = action_begin(ACT_SIDECAR);
     arg(a, id_aux(id));      // the sidecar slot
     arg(a, id_payload(id));  // the row
     arg(a, kind);
@@ -1797,7 +1832,6 @@ public void act_sidecar(Item it, uint kind, uint button, float2 pos, float value
     arg2(a, pos);
     argf(a, value);
     arg(a, token ? 1u : 0u);
-    push_action(ACT_SIDECAR, a);
 }
 
 /// The surface this file wants: the tunables' edge and height.

@@ -177,7 +177,7 @@ void say_toast_shown()
     uint count = min(private[0].notify.toast_count, TOAST_ROWS_CAP);
     for (uint k = 0u; k < count; ++k)
     {
-        Args a = args_new();
+        Args a = action_begin(ACT_SIDECAR);
         arg(a, slot);
         arg(a, private[0].notify.toast_ids[k]);
         arg(a, ACTION_TOAST_SHOWN);
@@ -185,7 +185,6 @@ void say_toast_shown()
         arg2(a, float2(0.0, 0.0));
         argf(a, 0.0);
         arg(a, 0u);              // no token
-        push_action(ACT_SIDECAR, a);
     }
     witness2(WITNESS_INFO, getStringHash("toast: shown slot={0} rows={1}"), slot, count);
 }
@@ -253,13 +252,6 @@ public uint bar_element_of(uint item)
 /// compile-time string.
 public void witness_toast_open(uint slot, uint count)
 {
-    Args a = args_new();
-    arg(a, slot);
-    arg(a, count);
-    for (uint k = 0u; k < count && k < TOAST_ROWS_CAP; ++k)
-    {
-        arg(a, private[0].notify.toast_ids[k]);
-    }
     uint head;
     switch (count)
     {
@@ -279,7 +271,13 @@ public void witness_toast_open(uint slot, uint count)
             "toast: open slot={0} rows={1} ids={2},{3},{4},{5},{6},{7},{8},{9}");
         break;
     }
-    witness(WITNESS_INFO, head, a);
+    Args a = witness_begin(WITNESS_INFO, head);
+    arg(a, slot);
+    arg(a, count);
+    for (uint k = 0u; k < count && k < TOAST_ROWS_CAP; ++k)
+    {
+        arg(a, private[0].notify.toast_ids[k]);
+    }
 }
 
 /// A toast asked for and not open yet: open it once its rows are built,

@@ -86,14 +86,14 @@ public void witness_calendar()
 {
     uint month = (inputs.clock_date >> 8) & 0xffu;
     uint first = min((inputs.clock_month >> 8) & 0xffu, 6u);
-    Args a = args_new();
+    Args a = witness_begin(
+        WITNESS_INFO,
+        getStringHash("calendar: open {0:s} {1} ({2} days, the 1st a {3:s}, {4} weeks)"));
     arg(a, (month >= 1u && month <= 12u) ? MONTHS[month - 1u] : getStringHash("?"));
     arg(a, inputs.clock_month >> 16);
     arg(a, calendar_days());
     arg(a, WEEKDAYS[first]);
     arg(a, calendar_rows());
-    witness(WITNESS_INFO,
-            getStringHash("calendar: open {0:s} {1} ({2} days, the 1st a {3:s}, {4} weeks)"), a);
 }
 
 /// The clock: the calendar, a menu whose level is the clock.

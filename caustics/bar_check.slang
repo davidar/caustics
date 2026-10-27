@@ -301,10 +301,10 @@ void bar_check(uint3 gid: SV_DispatchThreadID)
     {
         Item it = private[0].items[i];
         NameRef nm = item_name(i);
-        Args a = name_args(nm);
+        Args a = witness_begin(WITNESS_DEBUG, check_item_literal(nm.slot));
+        name_args(a, nm);
         arg(a, it.kind);
         arg(a, it.parent);
-        witness(WITNESS_DEBUG, check_item_literal(nm.slot), a);
     }
     for (uint b = 0u; b < nblocks; ++b)
     {
@@ -323,7 +323,9 @@ void bar_check(uint3 gid: SV_DispatchThreadID)
                 break;
             }
         }
-        Args a = args_new();
+        Args a = witness_begin(
+            WITNESS_DEBUG,
+            getStringHash("check: block {0} kind={1} px={2:f} icon={3} run={4}+{5} runflags={6}"));
         arg(a, b);
         arg(a, blk.kind);
         argf(a, blk.px);
@@ -339,9 +341,5 @@ void bar_check(uint3 gid: SV_DispatchThreadID)
         arg(a, blk.first_glyph);
         arg(a, blk.glyph_count);
         arg(a, blk.flags);
-        witness(WITNESS_DEBUG,
-                getStringHash(
-                    "check: block {0} kind={1} px={2:f} icon={3} run={4}+{5} runflags={6}"),
-                a);
     }
 }

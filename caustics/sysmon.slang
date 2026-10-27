@@ -153,11 +153,11 @@ public void open_numbers(uint kind, uint chart, float4 strip)
     private[0].sysmon.numbers_dwell = 0.0;
     request_popup(kind, strip, item_of(chart).id, numbers_want());
     bool repeat;
-    Args a = args_new();
+    Args a = witness_begin(WITNESS_INFO,
+                           getStringHash("numbers: open kind={0:s} chart={1:s} lines={2}"));
     arg(a, kind == POPUP_MENU ? getStringHash("menu") : getStringHash("preview"));
     arg(a, chart_name(item_chart_row(item_of(chart)), repeat));
     arg(a, numbers_count());
-    witness(WITNESS_INFO, getStringHash("numbers: open kind={0:s} chart={1:s} lines={2}"), a);
 }
 
 /// End the numbers popup for `why`, held until the pointer leaves the strip

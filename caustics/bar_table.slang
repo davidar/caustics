@@ -927,12 +927,11 @@ public void build_publish(Build b, Id level)
     // serves a want that may take a slot from something else. Every build
     // says it, an empty mask included: a picture no longer drawn is then one
     // the slots may let go.
-    Args drawn = args_new();
+    Args drawn = action_begin(ACT_IMAGES_DRAWN);
     for (uint w = 0u; w < DRAWN_WORDS; ++w)
     {
         arg(drawn, b.drawn[w]);
     }
-    push_action(ACT_IMAGES_DRAWN, drawn);
 
     // ---- the names this build wants resolved ----
     //

@@ -121,7 +121,7 @@ lockfile. Please do not run `cargo update` as part of an unrelated change.
 ## Logging
 
 Every decision is one line, once per change, never per frame. In the caustic
-a witness is one line of Slang (`witness(WITNESS_INFO,
+a witness is one line of Slang (`witness2(WITNESS_INFO,
 getStringHash("…{0}…"), …)`, docs/abi.md, *The witness ring*) and needs no Rust. In a
 sidecar, write each line to stderr in a single `write_all` (the
 `caustics_sidecar::Witness` helper does), never with `eprintln!`, whose several

@@ -78,14 +78,13 @@ public void request_popup(uint kind, float4 anchor, Id id, float2 want)
     private[0].popup_want = want;
     private[0].popup_sent = float2(float(w), float(h));
 
-    Args a = args_new();
+    Args a = action_begin(ACT_POPUP_OPEN);
     arg(a, kind);
     arg(a, slot);
     arg(a, row);
     arg4(a, anchor);
     arg(a, w);
     arg(a, h);
-    push_action(ACT_POPUP_OPEN, a);
 }
 
 /// End the popup: one `ACT_POPUP_CLOSE`, and the `CMD_POPUP_DONE` that comes
@@ -173,14 +172,13 @@ public void push_popup_move()
 /// The popup's line of a `CMD_DUMP_STALL` answer: its state and the dwell.
 public void witness_popup_stall()
 {
-    Args dwell = args_new();
+    Args dwell = witness_begin(
+        WITNESS_WARN,
+        getStringHash("stall: popup dwell(state,secs,candidate,owner)={0:f},{1:f},{2:f},{3:f}"));
     argf(dwell, float(private[0].popup_state));
     argf(dwell, private[0].dwell_secs);
     argf(dwell, private[0].dwell_candidate);
     argf(dwell, private[0].preview_owner);
-    witness(WITNESS_WARN,
-            getStringHash("stall: popup dwell(state,secs,candidate,owner)={0:f},{1:f},{2:f},{3:f}"),
-            dwell);
 }
 
 /// The compositor mapped the popup, `size` px (`CMD_POPUP_MAPPED`).

@@ -201,10 +201,10 @@ void witness_placed()
             continue;
         }
         NameRef nm = element_name(idx, e.item);
-        Args a = name_args(nm);
+        Args a = witness_begin(WITNESS_DEBUG, layout_literal(nm.slot));
+        name_args(a, nm);
         arg(a, target_literal(e.target));
         arg4(a, e.rect);
-        witness(WITNESS_DEBUG, layout_literal(nm.slot), a);
 
         private[0].elements[idx].said_present = 1u;
         private[0].elements[idx].said_id = id;
@@ -248,15 +248,14 @@ void witness_hover()
     float2 at = float2(round(private[0].pointer.x), round(private[0].pointer.y));
     if (hover >= live_elements())
     {
-        Args a = args_new();
+        Args a = witness_begin(WITNESS_INFO, getStringHash("hover: none at={0:f},{1:f}"));
         arg2(a, at);
-        witness(WITNESS_INFO, getStringHash("hover: none at={0:f},{1:f}"), a);
         return;
     }
     NameRef nm = element_name(hover, private[0].elements[hover].item);
-    Args a = name_args(nm);
+    Args a = witness_begin(WITNESS_INFO, hover_literal(nm.slot));
+    name_args(a, nm);
     arg2(a, at);
-    witness(WITNESS_INFO, hover_literal(nm.slot), a);
 }
 
 // ===========================================================================
@@ -650,9 +649,9 @@ void witness_stall()
             continue;
         }
         NameRef nm = element_name(i, private[0].elements[i].item);
-        Args a = name_args(nm);
+        Args a = witness_begin(WITNESS_WARN, stall_literal(nm.slot));
+        name_args(a, nm);
         arg4(a, anim);
-        witness(WITNESS_WARN, stall_literal(nm.slot), a);
         said += 1u;
     }
     witness_popup_stall();

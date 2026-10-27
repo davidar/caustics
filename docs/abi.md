@@ -428,7 +428,7 @@ debug-printf, which wgpu cannot reach.)
 A witness is a **format literal** in the caustic and up to ten words:
 
 ```slang
-witness(WITNESS_INFO, getStringHash("dock: {0} entries ({1} running)"), count, running);
+witness2(WITNESS_INFO, getStringHash("dock: {0} entries ({1} running)"), count, running);
 ```
 
 Slang records the literal in the reflection's string table. The process

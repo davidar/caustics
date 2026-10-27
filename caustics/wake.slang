@@ -186,9 +186,9 @@ public bool step_wake(float dt)
         }
         else
         {
-            Args a = args_new();
+            Args a = witness_begin(WITNESS_INFO,
+                                   getStringHash("wake: still, {0:f} s after its last source"));
             argf(a, t.w);
-            witness(WITNESS_INFO, getStringHash("wake: still, {0:f} s after its last source"), a);
         }
     }
     return alive;
@@ -241,10 +241,9 @@ public void wake_stall()
             oldest = max(oldest, private[0].wake.sources[w].z);
         }
     }
-    Args o = args_new();
+    Args o = witness_begin(
+        WITNESS_WARN, getStringHash("stall: wake(sources,oldest s,since last s)={0},{1:f},{2:f}"));
     arg(o, sources);
     argf(o, oldest);
     argf(o, private[0].wake.track.w);
-    witness(WITNESS_WARN,
-            getStringHash("stall: wake(sources,oldest s,since last s)={0},{1:f},{2:f}"), o);
 }

@@ -305,7 +305,7 @@ geometry and the surface's edge and height are messages too: the caustic has
 the "have" side in its inputs and compares for itself.
 
 **Witnesses are the caustic's `printf`.** A witness is a format literal in
-Slang (`witness(WITNESS_INFO, getStringHash("dock: {0} entries ({1}
+Slang (`witness2(WITNESS_INFO, getStringHash("dock: {0} entries ({1}
 running)"), count, running)`) and up to ten words. Slang's reflection maps
 each literal's hash to its text, and the process substitutes and prints. A
 new log line is one line of Slang and no Rust. The caustic logs once per
