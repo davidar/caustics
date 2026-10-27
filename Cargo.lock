@@ -1868,7 +1868,7 @@ checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
 [[package]]
 name = "punchcutter-core"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
+source = "git+https://github.com/davidar/punchcutter?rev=fa7d3e6593ccb812bd024a91751b54d29814ad63#fa7d3e6593ccb812bd024a91751b54d29814ad63"
 dependencies = [
  "ash",
  "pollster",
@@ -1879,7 +1879,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-fonts"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
+source = "git+https://github.com/davidar/punchcutter?rev=fa7d3e6593ccb812bd024a91751b54d29814ad63#fa7d3e6593ccb812bd024a91751b54d29814ad63"
 dependencies = [
  "punchcutter-core",
  "punchcutter-shape",
@@ -1890,7 +1890,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-shape"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
+source = "git+https://github.com/davidar/punchcutter?rev=fa7d3e6593ccb812bd024a91751b54d29814ad63#fa7d3e6593ccb812bd024a91751b54d29814ad63"
 dependencies = [
  "punchcutter-core",
  "ttf-parser",
@@ -1899,7 +1899,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-slang"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
+source = "git+https://github.com/davidar/punchcutter?rev=fa7d3e6593ccb812bd024a91751b54d29814ad63#fa7d3e6593ccb812bd024a91751b54d29814ad63"
 dependencies = [
  "serde",
  "serde_json",
@@ -1910,7 +1910,7 @@ dependencies = [
 [[package]]
 name = "punchcutter-text"
 version = "0.1.0"
-source = "git+https://github.com/davidar/punchcutter?rev=ef8507e6815a57c4452d57c76323c721ecdcb851#ef8507e6815a57c4452d57c76323c721ecdcb851"
+source = "git+https://github.com/davidar/punchcutter?rev=fa7d3e6593ccb812bd024a91751b54d29814ad63#fa7d3e6593ccb812bd024a91751b54d29814ad63"
 dependencies = [
  "anyhow",
  "punchcutter-core",
