@@ -221,6 +221,9 @@ impl Surface {
             view_formats: vec![],
         };
         if let Some(surface) = &surface {
+            let _quiet = crate::compile::SUBMIT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             surface.configure(device, &config);
         }
         Surface {
@@ -254,6 +257,9 @@ impl Surface {
         self.config.width = width.max(1);
         self.config.height = height.max(1);
         if let Some(surface) = &self.surface {
+            let _quiet = crate::compile::SUBMIT
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             surface.configure(device, &self.config);
         }
         // A new configuration; the next suboptimal acquire deserves an answer.
@@ -289,6 +295,9 @@ impl Surface {
             height = self.config.height,
             "reconfiguring a suboptimal swapchain"
         );
+        let _quiet = crate::compile::SUBMIT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         surface.configure(device, &self.config);
     }
 }

@@ -63,6 +63,13 @@ pub struct Warm {
     pub groups: Vec<wgpu::BindGroup>,
 }
 
+/// Held around every submission a worker makes, and around every surface
+/// configure (`crate::surface`): wgpu waits for the queue to go idle before it
+/// reconfigures a surface and fails the configure, which is an exit, if
+/// another thread submitted while it waited. One per process, as the device
+/// is. A worker holds it for the submit alone, never for the wait after.
+pub(crate) static SUBMIT: Mutex<()> = Mutex::new(());
+
 /// The warming dispatches submitted and not yet waited out.
 struct InFlight(AtomicUsize);
 
@@ -269,7 +276,12 @@ fn warm_up(device: &wgpu::Device, warm: &Warm, pipeline: &wgpu::ComputePipeline,
         pass.set_pipeline(pipeline);
         pass.dispatch_workgroups(1, 1, 1);
     }
-    let index = warm.queue.submit(Some(encoder.finish()));
+    let index = {
+        let _quiet = SUBMIT
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        warm.queue.submit(Some(encoder.finish()))
+    };
     if let Err(err) = device.poll(wgpu::PollType::Wait {
         submission_index: Some(index),
         timeout: None,
