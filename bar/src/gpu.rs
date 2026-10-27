@@ -1026,13 +1026,17 @@ impl Gpu {
             frame: self.frame,
             ..*inputs
         };
-        // The caller's check (`can_render`); a frame asked for before the
-        // pipelines are built is an error rather than an image acquired and
-        // presented unwritten.
+        // The caller's check (`can_render`) less its warming half: a frame
+        // asked for before the pipelines are built is an error rather than an
+        // image acquired and presented unwritten, but a warming dispatch
+        // begins on a compile worker at any moment, so a frame that passed
+        // the caller's check and races one is submitted behind it, which is
+        // slow on a driver that compiles late and nothing worse. Read here
+        // again, that race was an exit.
         let apply = self
             .program
             .pipeline(APPLY)
-            .filter(|_| self.can_render())
+            .filter(|_| self.program.has(&FRAME_PIPELINES))
             .context("a frame was asked for before its pipelines were built")?
             .clone();
         self.shape_if_pending(inputs);
