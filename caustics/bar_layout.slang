@@ -748,6 +748,7 @@ public float center_span(uint keep)
     float total = 0.0;
     uint charts = 0u;
     uint prev = ITEM_NONE;
+    [loop]
     for (uint k = 0u; k < uint(CENTER_ORDER.getCount()); ++k)
     {
         uint kind = CENTER_ORDER[k];
@@ -946,9 +947,16 @@ public uint layout_strip()
     // named in no array is simply never placed on the bar, which is how
     // ITEM_WINDOW and ITEM_MENU_ROW stay off it, and how a kind can be named
     // in an order array before anything publishes one.
+    //
+    // The walks over an order array stay rolled (`[loop]`): the array's
+    // length is a constant, so the driver would otherwise unroll each walk
+    // into one copy of the item loop and its `place` per kind, which made
+    // the layout a large part of what `bar_apply` cost to compile and buys
+    // nothing in a pass that runs on one thread.
 
     // Left wing: left to right from the edge padding.
     float x = pad;
+    [loop]
     for (uint k = 0u; k < uint(LEFT_ORDER.getCount()); ++k)
     {
         uint kind = LEFT_ORDER[k];
@@ -979,6 +987,7 @@ public uint layout_strip()
     // Right wing: right to left from the far edge, so the array's *first*
     // entry ends up outermost on screen.
     x = bar.x - pad;
+    [loop]
     for (uint k = 0u; k < uint(RIGHT_ORDER.getCount()); ++k)
     {
         uint kind = RIGHT_ORDER[k];
@@ -1034,6 +1043,7 @@ public uint layout_strip()
 
     uint charts_placed = 0u;
     uint prev_kind = ITEM_NONE;
+    [loop]
     for (uint k = 0u; k < uint(CENTER_ORDER.getCount()); ++k)
     {
         uint kind = CENTER_ORDER[k];
