@@ -4785,7 +4785,11 @@ print(f'{t - $2 / 1e6:.2f}')" 2>/dev/null
         DBUS_SYSTEM_BUS_ADDRESS="unix:path=$1/no-system-bus" \
         RUST_LOG=info "$2/caustics-canvas" 2>>"$1/canvas.log"'"'"' wake "$T_HOME" "$T_BIN" '"$wake_secret"
     WAKE_RUN=1
-    if wait_until "the wake's canvas" 60 'canvas_more "canvas: no picture yet" 0' &&
+    # The canvas's first frame is the dim colour, unless the wallpaper sidecar's
+    # re-show of its last picture lands first: its pipelines are warm from
+    # the earlier steps and the show is in the pipe before the first frame.
+    # Either line is the canvas up.
+    if wait_until "the wake's canvas" 60 'canvas_more "canvas: no picture yet" 0 || canvas_more "canvas: show " 0' &&
         wait_until "the wake's lock sidecar" 30 'canvas_log | jgrep -F "caustics-lock: listening on"'; then
         pass "the canvas is up, its lock sidecar in its dry run"
     else
