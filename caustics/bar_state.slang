@@ -1453,17 +1453,19 @@ public uint answer_byte(uint offset)
 }
 
 /// One word of a slot's region of the rows arena, bounded by the region.
+///
+/// One condition and no early `return`: this is inlined at hundreds of call
+/// sites, and the driver wraps each copy of a branch that leaves a function
+/// early in a loop of its own, then unrolls it (see `Args`). The `?:` is a
+/// branch in Slang, so the read happens only inside the bounds.
 public uint rows_word(uint slot, uint byte_offset)
 {
-    if (slot >= MAX_SLOTS || byte_offset + 4u > ROWS_ARENA_BYTES)
-    {
-        return 0u;
-    }
     uint words;
     uint stride;
     rows.GetDimensions(words, stride);
     uint w = (rows_region(slot) + byte_offset) >> 2;
-    return w < words ? rows[w] : 0u;
+    bool inside = slot < MAX_SLOTS && byte_offset + 4u <= ROWS_ARENA_BYTES && w < words;
+    return inside ? rows[w] : 0u;
 }
 
 /// One byte of a slot's region.
