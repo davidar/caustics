@@ -4271,6 +4271,34 @@ else
     else
         fail "the canvas never drew its first frame: $(canvas_log | tail -5 | tr '\n' '|' | cut -c1-500)"
     fi
+    # The pipelines are built off the loop, in the order a frame needs them
+    # (docs/architecture.md, *The caustic*): the wallpaper's two first and
+    # the shaper, most of the compile, last. On the run's cold shader cache
+    # the first frame is drawn while the shaper is still building, so its
+    # witness comes first in the log. A shaper built in under a second was in
+    # some cache after all, and then the order proves nothing.
+    if wait_until "canvas: the shaper built" 180 'canvas_more "pipeline canvas_shape: built in" 0'; then
+        shaped=$(canvas_last "pipeline canvas_shape: built in")
+        took=$(sed -n 's/.*built in \([0-9.]*\) \(m\?s\).*/\1 \2/p' <<<"$shaped")
+        first_at=$(canvas_log | grep -nF "canvas: no picture yet" | head -1 | cut -d: -f1)
+        shape_at=$(canvas_log | grep -nF "pipeline canvas_shape: built in" | head -1 | cut -d: -f1)
+        if [[ "$took" != *" s" ]] || python3 -c "import sys; sys.exit(0 if float('${took%% *}') < 1 else 1)"; then
+            printf '  SKIP  %s  %s\n' "$(stamp)" "the shaper was built in $took, from a warm cache; the order proves nothing"
+            SKIPS=$((SKIPS + 1))
+        elif [[ -n "$first_at" && -n "$shape_at" && "$first_at" -lt "$shape_at" ]]; then
+            pass "the first frame was drawn before the shaper was built ($took): $(canvas_log |
+                grep -E 'pipeline canvas_(apply|draw): built' | sed -n 's/.*INFO [a-z_:]*: //p' | tr '\n' '|')"
+        else
+            fail "the first frame (log line ${first_at:-none}) did not precede the shaper's build (line ${shape_at:-none}, $took)"
+        fi
+        if canvas_log | jgrep -E 'pipelines: all 3 built'; then
+            pass "$(canvas_last 'pipelines: all 3 built' | sed -n 's/.*INFO [a-z_:]*: //p')"
+        else
+            fail "no 'pipelines: all 3 built' line: $(canvas_log | grep -F 'pipeline' | tail -4 | tr '\n' '|')"
+        fi
+    else
+        fail "the canvas's shaper was never built: $(canvas_log | grep -F 'pipeline' | tail -4 | tr '\n' '|')"
+    fi
     surfaces=$(canvas_count "a background surface")
     if [[ "$surfaces" -eq 1 ]] && canvas_log | jgrep -F "background surface configured"; then
         pass "one background surface, on the one output, configured"
