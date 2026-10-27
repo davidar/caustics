@@ -180,6 +180,12 @@ is one `SKIP` line, counted as skipped and never as passed:
   `$XDG_CACHE_HOME`), so the gate pays it at every swap; a user pays it once
   after a driver or caustic change. Moving the swap off the loop is an open
   item (docs/roadmap.md).
+  Each pipeline build is one journal line, `pipeline <entry>: built in N s`,
+  so a slow start says which pipeline it waited on; and
+  `host/examples/pipeline_times.rs` times a program's pipelines on the
+  headless device from its baked reflection and modules (its header has the
+  command), cold or warm, with a first dispatch for a driver that compiles
+  on first use, as llvmpipe does.
 - **A layout witness can name a row's departure after its arrival in the
   same frame** when the row changes element slot (both lines carry the same
   frame, microseconds apart, in slot order). The steps therefore read
