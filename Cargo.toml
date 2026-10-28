@@ -22,11 +22,11 @@ rust-version = "1.88"
 # The text engine, one revision for every crate that takes it. A bump is the
 # same commit on all five lines, then `cargo fetch`.
 [workspace.dependencies]
-punchcutter-slang = { git = "https://github.com/davidar/punchcutter", rev = "fa7d3e6593ccb812bd024a91751b54d29814ad63" }
-punchcutter-core = { git = "https://github.com/davidar/punchcutter", rev = "fa7d3e6593ccb812bd024a91751b54d29814ad63" }
-punchcutter-fonts = { git = "https://github.com/davidar/punchcutter", rev = "fa7d3e6593ccb812bd024a91751b54d29814ad63" }
-punchcutter-shape = { git = "https://github.com/davidar/punchcutter", rev = "fa7d3e6593ccb812bd024a91751b54d29814ad63" }
-punchcutter-text = { git = "https://github.com/davidar/punchcutter", rev = "fa7d3e6593ccb812bd024a91751b54d29814ad63" }
+punchcutter-slang = { git = "https://github.com/davidar/punchcutter", rev = "f7645c8b46a1b862ea0d0d8cdb2f0b46ea42ba3e" }
+punchcutter-core = { git = "https://github.com/davidar/punchcutter", rev = "f7645c8b46a1b862ea0d0d8cdb2f0b46ea42ba3e" }
+punchcutter-fonts = { git = "https://github.com/davidar/punchcutter", rev = "f7645c8b46a1b862ea0d0d8cdb2f0b46ea42ba3e" }
+punchcutter-shape = { git = "https://github.com/davidar/punchcutter", rev = "f7645c8b46a1b862ea0d0d8cdb2f0b46ea42ba3e" }
+punchcutter-text = { git = "https://github.com/davidar/punchcutter", rev = "f7645c8b46a1b862ea0d0d8cdb2f0b46ea42ba3e" }
 
 [profile.dev]
 # The debug build is what the tests, the oracle and the nested gate run, so it
