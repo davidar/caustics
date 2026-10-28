@@ -23,7 +23,9 @@
 //                          alpha, premultiplied; on the prompt's pane, the
 //                          wallpaper darkened by `PROMPT_DARKEN` and the
 //                          panel on it; on a lock surface, the prompt's
-//                          look, seen through the wake.
+//                          look, seen through the wake, its darkening
+//                          ramping from the dim's at the lock to
+//                          `PROMPT_DARKEN` over `LOCK_DARKEN_MS`.
 //
 // **The secret never enters the caustic** (docs/canvas.md, *Why a caustic*).
 // What an echo-off ask has typed reaches here as a count, and the panel draws
@@ -83,6 +85,18 @@ float fade_curve(float t)
         return smoothstep(0.0, 1.0, t);
     }
     return t;
+}
+
+/// How far the lock surfaces' darkening has ramped, 0..1: the time since
+/// the compositor locked over `LOCK_DARKEN_MS`; 1 when there is no lock.
+float lock_ramp(CanvasFacts f)
+{
+    if (f.lock_start_lo == 0u && f.lock_start_hi == 0u)
+    {
+        return 1.0;
+    }
+    float t = elapsed_ms(params.now_lo, params.now_hi, f.lock_start_lo, f.lock_start_hi);
+    return saturate(t / float(max(LOCK_DARKEN_MS, 1u)));
 }
 
 /// How much of the dim colour the overlay is now: the last dim's depth,
@@ -179,6 +193,16 @@ void canvas_apply()
 
     private[0].progress = t;
     private[0].alpha = fade_curve(t);
+    // A lock that just came continues from the dim as it was drawn last
+    // frame (the host ends the dim in the same write), and ramps to the
+    // prompt's darkening from there.
+    if (f.lock_start_lo != private[0].lock_seen_lo)
+    {
+        private[0].lock_seen_lo = f.lock_start_lo;
+        private[0].lock_from = f.lock_start_lo == 0u ? 0.0 : saturate(private[0].dim) * DIM_DARKEN;
+    }
+    float ramp = lock_ramp(f);
+    private[0].lock_darken = lerp(private[0].lock_from, PROMPT_DARKEN, smoothstep(0.0, 1.0, ramp));
     private[0].dim = dim_now(f.dim);
     // Another frame for the surface being drawn, and only for it: the
     // background while its fade runs, the overlay while its alpha moves. A
@@ -197,7 +221,7 @@ void canvas_apply()
     }
     else if (surface_target() == TARGET_LOCK)
     {
-        more = stirred;
+        more = stirred || ramp < 1.0;
     }
     state[0].wants_redraw = more ? 1u : 0u;
     state[0].wants_pointer = wake_alpha() > 0.0 ? 1u : 0u;
@@ -408,33 +432,33 @@ float rounded(float4 r, float radius, float2 p)
     return saturate(0.5 - d);
 }
 
-/// The wallpaper's `colour` as the prompt's pane and the lock show it:
-/// darkened towards `DIM_COLOUR` by `PROMPT_DARKEN`.
-float3 prompt_floor(float3 colour)
+/// The wallpaper's `colour` darkened towards `DIM_COLOUR` by `darken`, 0..1:
+/// `PROMPT_DARKEN` on the prompt's pane, `private.lock_darken` on a lock
+/// surface (the dim's darkness ramping to the prompt's), 0 is the colour.
+float3 floor_darkened(float3 colour, float darken)
 {
-    return lerp(colour, DIM_COLOUR, saturate(PROMPT_DARKEN));
+    return lerp(colour, DIM_COLOUR, saturate(darken));
 }
 
 /// The wallpaper at `p` seen through the wake, each channel at its own
-/// shift along the surface's slope, as `prompt_floor` darkens it when
-/// `darkened`, and lit by the water; the plain one where the water is flat.
-float3 through_water(float2 p, bool darkened)
+/// shift along the surface's slope, darkened by `darken` (`floor_darkened`)
+/// and lit by the water; the plain one where the water is flat.
+float3 through_water(float2 p, float darken)
 {
     float2 slope;
     float3 shift;
     float3 light;
     if (!wake_at(p, slope, shift, light))
     {
-        float3 plain = wallpaper(p);
-        return darkened ? prompt_floor(plain) : plain;
+        return floor_darkened(wallpaper(p), darken);
     }
     float3 bent = float3(wallpaper(p + shift.r * slope).r, wallpaper(p + shift.g * slope).g,
                          wallpaper(p + shift.b * slope).b);
-    return wake_lit(darkened ? prompt_floor(bent) : bent, light);
+    return wake_lit(floor_darkened(bent, darken), light);
 }
 
 /// The prompt's pane at `p`, over `floor`, the darkened wallpaper there
-/// (`prompt_floor`): the panel, its four rows. Held (no ask yet) the panel
+/// (`floor_darkened`): the panel, its four rows. Held (no ask yet) the panel
 /// has its title and line and no field: the same size, so nothing moves when
 /// the ask comes.
 float3 draw_prompt(CanvasPrompt pr, float3 floor, float2 p)
@@ -516,20 +540,21 @@ void canvas_draw(uint3 gid: SV_DispatchThreadID)
     if (surface_target() == TARGET_LOCK)
     {
         // The prompt's look, the water over its floor and the panel over
-        // the water.
-        dst.Store(gid.xy, float4(draw_prompt(pr, through_water(p, true), p), 1.0));
+        // the water; the floor darkened as far as the lock's ramp has come.
+        dst.Store(gid.xy,
+                  float4(draw_prompt(pr, through_water(p, private[0].lock_darken), p), 1.0));
         return;
     }
     if (surface_target() == TARGET_BACKGROUND)
     {
         // Opaque: the background layer is the bottom of the output.
-        dst.Store(gid.xy, float4(through_water(p, false), 1.0));
+        dst.Store(gid.xy, float4(through_water(p, 0.0), 1.0));
         return;
     }
     float3 colour = wallpaper(p);
     if (surface_target() == TARGET_PROMPT)
     {
-        dst.Store(gid.xy, float4(draw_prompt(pr, prompt_floor(colour), p), 1.0));
+        dst.Store(gid.xy, float4(draw_prompt(pr, floor_darkened(colour, PROMPT_DARKEN), p), 1.0));
         return;
     }
     if (surface_target() == TARGET_OVERLAY && pr.state != PROMPT_IDLE)

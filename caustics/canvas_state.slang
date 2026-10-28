@@ -292,6 +292,16 @@ public struct CanvasPrivate
     public uint said_prompt_attempts;
     /// How many runs had a missing glyph as of the last witness.
     public uint said_notdef;
+    /// `facts.lock_start_lo` as of the last apply: a new value is a new lock
+    /// (or the unlock, 0).
+    public uint lock_seen_lo;
+    /// How far the wallpaper was darkened when the lock came: the dim's
+    /// darkness on the frame before, 0 when there was none. Where the lock
+    /// surfaces' darkening ramps from.
+    public float lock_from;
+    /// How far the lock surfaces darken the wallpaper this frame, 0..1:
+    /// `lock_from` easing to `PROMPT_DARKEN` over `LOCK_DARKEN_MS`.
+    public float lock_darken;
     /// The text blocks, as `canvas_shape` last shaped them.
     public CanvasRun text[CANVAS_TEXT_BLOCKS];
     /// The prompt's layout on the surface this frame draws.

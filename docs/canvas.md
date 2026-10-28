@@ -170,7 +170,11 @@ that is up when the lock is asked for stays up until the compositor says
 `locked`, then is ended (its overlays go, unseen, since a locked compositor
 shows no layer surface; its sidecar is told nothing, as with an undim it
 sent itself): ended at the request, the overlays would leave the windows on
-screen for the frame before the lock surfaces' first. The prompt
+screen for the frame before the lock surfaces' first. The lock surface
+then darkens the wallpaper from where the dim had it (the host writes the
+lock's moment into `facts`, the caustic keeps the dim's depth from its last
+frame) to the prompt's darkening over `LOCK_DARKEN_MS`, so the fade's last
+frame runs into the lock's first with no step. The prompt
 core is reserved for the lock's sidecar: another sink's conversation up at
 the lock is dismissed, and another sink's ask while locked is cancelled at
 once, so the lock screen's panel is only ever the lock's. So there is one

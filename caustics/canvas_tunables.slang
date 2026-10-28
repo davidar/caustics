@@ -62,6 +62,12 @@ public static const float DIM_DARKEN = 0.3;
 /// one thing on the screen.
 public static const float PROMPT_DARKEN = 0.45;
 
+/// How long a lock surface takes to reach `PROMPT_DARKEN`, ms, from the dim
+/// it continues from (a lock that follows the idle fade starts at the dim's
+/// darkness, so the fade's last frame runs into the lock's first with no
+/// step) or from the plain wallpaper when there was no dim.
+public static const uint LOCK_DARKEN_MS = 400u;
+
 /// The panel's width; it is narrower only on an output narrower than it.
 public static const float PROMPT_WIDTH = 440.0;
 /// The space inside the panel's edge, and between its rows.

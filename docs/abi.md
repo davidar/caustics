@@ -649,7 +649,7 @@ again from the same Rust declarations, and `CanvasBody` is the wire's
 | binding (by name) | struct / bytes | writer | reader |
 |---|---|---|---|
 | `params` | `CanvasParams`, 32 B, one per surface (an output's background, its overlay while a dim is up, its prompt pane while a prompt is, its lock surface while the session is locked) | the host, before every frame it draws on that surface | the entries |
-| `facts` | `CanvasFacts`, 160 B | the host, whole, whenever the picture, the dim, the literal pool or the prompt changes, and the pointer's words over the last facts once per dispatch the pointer moved in | the entries |
+| `facts` | `CanvasFacts`, 176 B | the host, whole, whenever the picture, the dim, the literal pool or the prompt changes, and the pointer's words over the last facts once per dispatch the pointer moved in | the entries |
 | `state` | `CanvasState`: `wants_redraw`, `wants_pointer`, the dim's depth, the shape pass's threshold, the runs to cover and a witness ring, 1664 B | the caustic | the host, after every frame (the only readback) |
 | `private` | the caustic's own, stride from reflection | the caustic | the caustic; tests by reflection |
 | `runs` | `CANVAS_GLYPHS` (512) shaped glyphs, 32 B each | `canvas_shape` | `canvas_draw` |
@@ -687,7 +687,7 @@ struct CanvasPrompt {   // 64 B — the prompt up now
     uint echo_off, echo_len;     // 52  what was typed, for an echo-on ask only
     uint _pad0;                  // 60
 }
-struct CanvasFacts {    // 160 B — what the host knows
+struct CanvasFacts {    // 176 B — what the host knows
     CanvasBody show;    // 0   the last CANVAS_SHOW, as it crossed the wire; zero before one
     CanvasBody dim;     // 32  the last CANVAS_DIM or CANVAS_UNDIM; zero before one
     uint from_slot;     // 64  SLOT_A / SLOT_B: the picture the show fades from; NO_INDEX for none
@@ -698,6 +698,8 @@ struct CanvasFacts {    // 160 B — what the host knows
     uint pointer_pane;  // 144 the pane the pointer is on, a background or a lock; 0 for neither
     float pointer_x, pointer_y; // 148 where on it, its buffer's px
     uint presses;       // 156 buttons pressed on those panes, ever: a new value is a press
+    uint lock_start_lo, lock_start_hi; // 160 CLOCK_BOOTTIME ms the compositor locked at; 0 unlocked
+    uint _pad0, _pad1;  // 168
 }
 struct CanvasCover {    // 16 B — a run the font could not draw
     uint source;        // 0   TEXT_LITERALS 0 (the strings buffer) or TEXT_PROMPT 1

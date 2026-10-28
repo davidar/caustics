@@ -228,6 +228,14 @@ abi_struct! {
         /// Buttons pressed on those panes since the host started: a new
         /// value is a press, where the pointer is.
         pub presses: u32,
+        /// `CLOCK_BOOTTIME` ms when the compositor locked the session, low
+        /// and high words; 0 while it is not locked. The lock surface's
+        /// darkening continues from the dim's as of this moment and eases
+        /// to the prompt's over `LOCK_DARKEN_MS`.
+        pub lock_start_lo: u32,
+        pub lock_start_hi: u32,
+        pub _pad0: u32,
+        pub _pad1: u32,
     }
 }
 

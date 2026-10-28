@@ -1198,6 +1198,8 @@ impl Canvas {
                         session_lock.unlock();
                     }
                     self.drop_locks();
+                    self.slots.lock_ended();
+                    self.push_facts();
                     // The unlock is told when the compositor has read it.
                     self.conn.display().sync(&self.qh, UnlockSync);
                     // A conversation still up goes back to the top layer.
@@ -1571,8 +1573,13 @@ impl Canvas {
 
 impl SessionLockHandler for Canvas {
     fn locked(&mut self, _: &Connection, _: &QueueHandle<Self>, _: SessionLock) {
+        // The moment goes into `facts` before the dim is ended by the
+        // effects, so the caustic sees both in one write: the dim it
+        // continues from is the one it drew last frame.
+        self.slots.lock_began(crate::clock::boottime_ms());
         let effects = self.locks.locked();
         self.apply_lock(effects);
+        self.push_facts();
     }
 
     fn finished(&mut self, _: &Connection, _: &QueueHandle<Self>, _: SessionLock) {

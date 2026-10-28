@@ -89,6 +89,19 @@ impl Slots {
         self.facts.dim = Canvas::Undim.body();
     }
 
+    /// The compositor locked the session at `now` (`CLOCK_BOOTTIME` ms): the
+    /// lock surfaces' darkening starts from the dim's as of this frame.
+    pub fn lock_began(&mut self, now: u64) {
+        self.facts.lock_start_lo = now as u32;
+        self.facts.lock_start_hi = (now >> 32) as u32;
+    }
+
+    /// The session is unlocked: no lock moment, so the next lock ramps anew.
+    pub fn lock_ended(&mut self) {
+        self.facts.lock_start_lo = 0;
+        self.facts.lock_start_hi = 0;
+    }
+
     /// A command. A show of the waiting image places it; a show of the
     /// picture already on screen restarts nothing and moves nothing; a show
     /// of anything else is refused, and the reason is the caller's witness.

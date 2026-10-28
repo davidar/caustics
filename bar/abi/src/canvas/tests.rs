@@ -20,7 +20,7 @@ fn canvas_params_layout() {
 
 #[test]
 fn canvas_facts_layout() {
-    assert_eq!(size_of::<CanvasFacts>(), 160);
+    assert_eq!(size_of::<CanvasFacts>(), 176);
     assert_eq!(offset_of!(CanvasFacts, show), 0);
     assert_eq!(offset_of!(CanvasFacts, dim), 32);
     assert_eq!(offset_of!(CanvasFacts, from_slot), 64);
@@ -32,6 +32,9 @@ fn canvas_facts_layout() {
     assert_eq!(offset_of!(CanvasFacts, pointer_x), 148);
     assert_eq!(offset_of!(CanvasFacts, pointer_y), 152);
     assert_eq!(offset_of!(CanvasFacts, presses), 156);
+    assert_eq!(offset_of!(CanvasFacts, lock_start_lo), 160);
+    assert_eq!(offset_of!(CanvasFacts, lock_start_hi), 164);
+    assert_eq!(offset_of!(CanvasFacts, _pad0), 168);
 }
 
 #[test]
