@@ -107,12 +107,15 @@ const SHAPED_GLYPH: u64 = 32;
 /// Workgroup edge of `canvas_draw` (`[numthreads(8, 8, 1)]`).
 const TILE: u32 = 8;
 
-/// Threads per workgroup in `canvas_shape` (`[numthreads(128, 1, 1)]`): one
-/// block per thread, two waves per group, for the reason beside that
-/// attribute in `caustics/canvas.slang`. The text's five blocks fit one group;
+/// Threads per workgroup in `canvas_shape` (`[numthreads(128, 1, 1)]`): two
+/// waves, one lane of each shaping a block, for the reasons beside that
+/// attribute in `caustics/canvas.slang`.
 /// `the_shape_dispatch_matches_the_caustics_group` in `canvas/src/gpu/tests.rs`
-/// checks this against the attribute.
-const SHAPE_GROUP: u32 = 128;
+/// checks these two against the attribute.
+const SHAPE_THREADS: u32 = 128;
+
+/// Blocks shaped per workgroup: one per wave of 64 lanes.
+const SHAPE_BLOCKS_PER_GROUP: u32 = SHAPE_THREADS / 64;
 
 /// The three entry points, in `CANVAS_ENTRIES` order: each one's name, its
 /// pipeline's label and its `[numthreads]`.
@@ -120,7 +123,7 @@ pub static CANVAS_ENTRY_TABLE: [Entry; CANVAS_ENTRIES.len()] = [
     Entry {
         name: CANVAS_ENTRIES[SHAPE],
         label: "caustics-canvas-shape",
-        workgroup: (SHAPE_GROUP, 1, 1),
+        workgroup: (SHAPE_THREADS, 1, 1),
     },
     Entry {
         name: CANVAS_ENTRIES[APPLY],
@@ -766,7 +769,11 @@ impl Gpu {
             pass.set_bind_group(SET_TEXT, &self.text_group, &[]);
             pass.set_bind_group(SET_SHAPE, &self.shape_group, &[]);
             pass.set_pipeline(&shape);
-            pass.dispatch_workgroups((CANVAS_TEXT_BLOCKS as u32).div_ceil(SHAPE_GROUP), 1, 1);
+            pass.dispatch_workgroups(
+                (CANVAS_TEXT_BLOCKS as u32).div_ceil(SHAPE_BLOCKS_PER_GROUP),
+                1,
+                1,
+            );
         }
         self.watchdog.resolve(&mut encoder);
         self.queue.submit(Some(encoder.finish()));

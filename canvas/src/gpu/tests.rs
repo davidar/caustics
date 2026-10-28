@@ -1149,10 +1149,9 @@ fn a_reload_builds_beside_the_running_canvas() {
     assert!(after > before, "and the swapped one draws");
 }
 
-/// `SHAPE_GROUP` is `canvas_shape`'s `[numthreads]`, read off the source, and
-/// more than one wave: the rule beside the attribute in `caustics/bar.slang`
-/// (a single-wave group puts the shaper's spills on a Mesa path that reorders
-/// them) holds for every entry point that shapes.
+/// `SHAPE_THREADS` is `canvas_shape`'s `[numthreads]`, read off the source,
+/// more than one wave, and one block is shaped per wave: the rules beside the
+/// attribute in `caustics/bar.slang` hold for every entry point that shapes.
 #[test]
 fn the_shape_dispatch_matches_the_caustics_group() {
     let source = std::fs::read_to_string(caustics_dir().join("canvas.slang"))
@@ -1174,11 +1173,16 @@ fn the_shape_dispatch_matches_the_caustics_group() {
         .parse()
         .expect("a workgroup axis literal");
     assert_eq!(
-        SHAPE_GROUP, width,
-        "canvas_shape is [numthreads({width}, 1, 1)] and SHAPE_GROUP is {SHAPE_GROUP}"
+        SHAPE_THREADS, width,
+        "canvas_shape is [numthreads({width}, 1, 1)] and SHAPE_THREADS is {SHAPE_THREADS}"
     );
     assert!(
         width > 64,
         "canvas_shape's workgroup of {width} is a single wave on AMD hardware"
+    );
+    assert_eq!(
+        SHAPE_BLOCKS_PER_GROUP,
+        width / 64,
+        "one block per wave of 64 lanes"
     );
 }

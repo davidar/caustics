@@ -1043,28 +1043,33 @@ fn numthreads_of(name: &str) -> (u32, u32, u32) {
     (axis(), axis(), axis())
 }
 
-/// The `bar_shape` dispatch divides the block table by the caustic's own
-/// group width, and that width is more than one wave.
+/// The `bar_shape` dispatch covers the block table at one block per wave
+/// of the caustic's own group, and that group is more than one wave.
 ///
-/// The host dispatches `SHAPE_BLOCKS / SHAPE_GROUP` groups, so a constant
-/// that drifted from the attribute would over- or under-cover the table.
-/// The width itself is a rule and not a tuning (the note beside the
-/// attribute in `caustics/bar.slang`): a workgroup of 64 or fewer threads is
-/// one wave on AMD hardware, and that is the path on which Mesa's ACO
-/// compiler spills the shaper's registers into shared memory and, through
-/// Mesa 26.2, reorders the spills.
+/// The host dispatches `SHAPE_BLOCKS / SHAPE_BLOCKS_PER_GROUP` groups of
+/// `SHAPE_THREADS`, so a constant that drifted from the attribute would
+/// over- or under-cover the table. The width itself is a rule and not a
+/// tuning (the note beside the attribute in `caustics/bar.slang`): a
+/// workgroup of 64 or fewer threads is one wave on AMD hardware, and that is
+/// the path on which Mesa's ACO compiler spills the shaper's registers into
+/// shared memory and, through Mesa 26.2, reorders the spills.
 #[test]
 fn the_shape_dispatch_matches_the_caustics_group() {
     let (width, _, _) = numthreads_of("bar_shape");
     assert_eq!(
-        crate::gpu::SHAPE_GROUP,
+        crate::gpu::SHAPE_THREADS,
         width,
-        "bar_shape is [numthreads({width}, 1, 1)] and SHAPE_GROUP is {}",
-        crate::gpu::SHAPE_GROUP
+        "bar_shape is [numthreads({width}, 1, 1)] and SHAPE_THREADS is {}",
+        crate::gpu::SHAPE_THREADS
     );
     assert!(
         width > 64,
         "bar_shape's workgroup of {width} is a single wave on AMD hardware"
+    );
+    assert_eq!(
+        crate::gpu::SHAPE_BLOCKS_PER_GROUP,
+        width / 64,
+        "one block per wave of 64 lanes"
     );
 }
 

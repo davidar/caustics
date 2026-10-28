@@ -4,7 +4,7 @@
 // canvas's own, and the text engine's two (docs/abi.md, *The canvas's
 // buffer*):
 //
-//   canvas_shape  128x1x1, one thread per text block — the prompt's text, shaped
+//   canvas_shape  128x1x1, one text block a wave — the prompt's text, shaped
 //                          (canvas_text.slang). Its own submission, before a
 //                          frame, whenever the text or the font changed.
 //   canvas_apply  1x1x1  — the fade's alpha and the dim from the last show,
@@ -58,15 +58,21 @@ import canvas_state;
 import canvas_text;
 import canvas_wake;
 
-/// One text block a thread, in a group of two waves: as the bar's `bar_shape`
-/// walks its blocks, and for the same reason (the note beside its attribute in
-/// `bar.slang`: a single-wave group puts the shaper's spills on a Mesa path
-/// that reorders them). `SHAPE_GROUP` in `canvas/src/gpu.rs` mirrors the 128.
+/// One text block a wave, two waves a group, one lane of each working: as
+/// the bar's `bar_shape` walks its blocks, and for the same reasons (the note
+/// beside its attribute in `bar.slang`: a single-wave group puts the shaper's
+/// spills on a Mesa path that reorders them, and a wave of shapers runs the
+/// union of their branches). `SHAPE_THREADS` and `SHAPE_BLOCKS_PER_GROUP` in
+/// `canvas/src/gpu.rs` mirror the 128 and the 2.
 [shader("compute")]
 [numthreads(128, 1, 1)]
-void canvas_shape(uint3 gid: SV_DispatchThreadID)
+void canvas_shape(uint3 group: SV_GroupID, uint3 thread: SV_GroupThreadID)
 {
-    shape_block(gid.x);
+    if (thread.x % 64u != 0u)
+    {
+        return;
+    }
+    shape_block(group.x * 2u + thread.x / 64u);
 }
 
 /// The fade's curve, from its progress (canvas_tunables.slang, `FADE_CURVE`).

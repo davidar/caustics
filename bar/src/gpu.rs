@@ -78,16 +78,21 @@ const IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Workgroup edge of the two full-target entries (`[numthreads(8, 8, 1)]`).
 const TILE: u32 = 8;
 
-/// Threads per workgroup in `bar_shape` (`[numthreads(128, 1, 1)]`): one block
-/// per thread, two waves per group. The note beside that attribute in
-/// `caustics/bar.slang` says why it is more than 64 and never one: a
-/// single-wave group puts the shaper's spills on a Mesa path that reorders
-/// them. `the_shape_dispatch_matches_the_caustics_group` in
-/// `bar/src/abi/tests.rs` reads the attribute and checks this against it.
-pub(crate) const SHAPE_GROUP: u32 = 128;
+/// Threads per workgroup in `bar_shape` (`[numthreads(128, 1, 1)]`): two
+/// waves, and one lane of each shapes a block. The note beside that
+/// attribute in `caustics/bar.slang` says why the group is more than 64 and
+/// never one (a single-wave group puts the shaper's spills on a Mesa path
+/// that reorders them) and why the other lanes idle (64 shapers in lockstep
+/// run the union of their branches).
+/// `the_shape_dispatch_matches_the_caustics_group` in `bar/src/abi/tests.rs`
+/// reads the attribute and checks these two against it.
+pub(crate) const SHAPE_THREADS: u32 = 128;
 
-/// How many `bar_shape` threads a submission dispatches: one per slot of the
-/// caustic's own block table.
+/// Blocks shaped per workgroup: one per wave of 64 lanes.
+pub(crate) const SHAPE_BLOCKS_PER_GROUP: u32 = SHAPE_THREADS / 64;
+
+/// How many blocks a submission's `bar_shape` dispatch covers: one per slot
+/// of the caustic's own block table.
 ///
 /// The cap is `caustics/bar_model.slang`'s `MAX_BLOCKS`, and the ABI describes no word of the caustic's memory (docs/abi.md, *The private buffer*) — so
 /// this is a number the embassy has to *cover* rather than know. A thread past
@@ -143,7 +148,7 @@ static ENTRY_POINTS: [Entry; abi::BAR_ENTRIES.len()] = [
     Entry {
         name: abi::BAR_ENTRIES[SHAPE],
         label: "caustics-bar-shape",
-        workgroup: (SHAPE_GROUP, 1, 1),
+        workgroup: (SHAPE_THREADS, 1, 1),
     },
     Entry {
         name: abi::BAR_ENTRIES[APPLY],
@@ -1314,7 +1319,7 @@ impl Gpu {
             pass.set_bind_group(1, &self.text_group, &[]);
             pass.set_bind_group(2, &self.shape_group, &[]);
             pass.set_pipeline(shape);
-            pass.dispatch_workgroups(SHAPE_BLOCKS.div_ceil(SHAPE_GROUP), 1, 1);
+            pass.dispatch_workgroups(SHAPE_BLOCKS.div_ceil(SHAPE_BLOCKS_PER_GROUP), 1, 1);
         }
         // The watchdog times the shape pass and nothing else, so a
         // submission without one has nothing for it to read.

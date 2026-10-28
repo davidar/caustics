@@ -387,20 +387,28 @@ void bar_compose(uint3 gid: SV_DispatchThreadID)
 // ===========================================================================
 
 [shader("compute")]
-// **Two waves per workgroup, never one.**
+// **One block a wave, two waves a group.**
 //
 // The pass is at most MAX_BLOCKS tiny jobs that run when a string changes
-// rather than per frame, so the group's width buys no speed; it is chosen for
-// the driver. Mesa's ACO compiler spills the shaper's registers into shared
-// memory when a workgroup is a single wave, and up to Mesa 26.2 its scheduler
-// can reorder those spills, which gives wrong glyph classes with no error. A
-// group wider than 64 threads keeps the spills in scratch on every AMD GPU
-// (punchcutter/docs/arena.md, *Workgroup size*); a group of one would be a
-// single wave too. `SHAPE_GROUP` in `bar/src/gpu.rs` mirrors the 128 below.
+// rather than per frame, and each is a program of its own: 64 of them in one
+// wave run the union of their branches in lockstep, which put the pass past
+// its watchdog. So one lane in each wave of 64 works and the rest return at
+// once. The group is still two waves, never one, and that is for the driver:
+// Mesa's ACO compiler spills the shaper's registers into shared memory when a
+// workgroup is a single wave, and up to Mesa 26.2 its scheduler can reorder
+// those spills, which gives wrong glyph classes with no error
+// (punchcutter/docs/arena.md, *Workgroup size*). A group of one thread would
+// be a single wave too. `SHAPE_THREADS` and `SHAPE_BLOCKS_PER_GROUP` in
+// `bar/src/gpu.rs` mirror the 128 and the 2.
 [numthreads(128, 1, 1)]
-void bar_shape(uint3 gid: SV_DispatchThreadID)
+void bar_shape(uint3 group: SV_GroupID, uint3 thread: SV_GroupThreadID)
 {
-    shape_block(gid.x);
+    // Lane 0 of each wave: the blocks `2 * group` and `2 * group + 1`.
+    if (thread.x % 64u != 0u)
+    {
+        return;
+    }
+    shape_block(group.x * 2u + thread.x / 64u);
 }
 
 // ===========================================================================
