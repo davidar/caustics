@@ -31,12 +31,17 @@
 //!   it, or it is going away) is fatal: one line and exit 1, so the unit
 //!   restarts the host, and the lock sidecar learns of it by its pipe
 //!   closing (docs/canvas.md, *Failure model*).
-//! - **At the lock**, a dim that is up is ended (its overlays go; its
-//!   sidecar is told nothing, as with an undim it sent), and the prompt core
-//!   is **reserved** for the owner: a conversation of another sink that is up
-//!   is dismissed, and another sink's ask while locked is answered cancelled,
-//!   so the lock screen's prompt is only ever the lock's. The reservation
-//!   ends with the unlock.
+//! - **At the lock**, the prompt core is **reserved** for the owner: a
+//!   conversation of another sink that is up is dismissed, and another
+//!   sink's ask while locked is answered cancelled, so the lock screen's
+//!   prompt is only ever the lock's. The reservation ends with the unlock.
+//! - **At `locked`**, a dim that is up is ended (its overlays go; its sidecar
+//!   is told nothing, as with an undim it sent). Not at the lock request:
+//!   the overlays taken down then would leave the windows on screen for the
+//!   frame before the lock surfaces' first, and the design has the lock
+//!   continue from the fade (docs/canvas.md, *The model*). Once the
+//!   compositor has locked, it shows no layer surface, so the overlays go
+//!   unseen.
 //!
 //! This module owns no Wayland object and no pipe. [`Effect`]s say what to
 //! do, and `wayland.rs` does it, as with the prompt core.
@@ -155,14 +160,13 @@ impl Locks {
         }
     }
 
-    /// Unlocked to locking, for `sidecar`: the dim goes, the prompt is the
-    /// owner's, and the lock is asked for.
+    /// Unlocked to locking, for `sidecar`: the prompt is the owner's, and the
+    /// lock is asked for. A dim up stays up until `locked`.
     fn take(&mut self, sidecar: &str) -> Vec<Effect> {
         self.phase = Phase::Locking;
         self.owner = Some(sidecar.to_owned());
         vec![
             Effect::Note(format!("lock: {sidecar} asked to lock; locking")),
-            Effect::EndDim,
             Effect::Reserve(Some(sidecar.to_owned())),
             Effect::Lock,
         ]
@@ -228,6 +232,7 @@ impl Locks {
             Effect::Note(format!(
                 "lock: the compositor locked the session; told to {owner}"
             )),
+            Effect::EndDim,
             Effect::Tell {
                 sidecar: owner,
                 event: CANVAS_EVENT_LOCKED,

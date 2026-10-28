@@ -166,8 +166,11 @@ The prompt panel is drawn on whichever per-output surface is up at the
 time: the top layer for polkit, the lock surface when locked. While the
 session is locked no top pane is made: a conversation's raise and lower
 redraw the lock surfaces, and the compositor gives them the keyboard. A dim
-that is up when the lock is asked for is ended (its overlays go, and its
-sidecar is told nothing, as with an undim it sent itself), and the prompt
+that is up when the lock is asked for stays up until the compositor says
+`locked`, then is ended (its overlays go, unseen, since a locked compositor
+shows no layer surface; its sidecar is told nothing, as with an undim it
+sent itself): ended at the request, the overlays would leave the windows on
+screen for the frame before the lock surfaces' first. The prompt
 core is reserved for the lock's sidecar: another sink's conversation up at
 the lock is dismissed, and another sink's ask while locked is cancelled at
 once, so the lock screen's panel is only ever the lock's. So there is one

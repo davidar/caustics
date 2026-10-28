@@ -216,17 +216,29 @@ fn finished_is_fatal() {
     }
 }
 
-/// A dim up when the lock is asked for is ended, and nobody is told.
+/// A dim up when the lock is asked for stays up until the compositor has
+/// locked (the frame between would show the windows), then is ended, and
+/// nobody is told of it.
 #[test]
-fn a_dim_up_at_lock_time_is_ended() {
+fn a_dim_up_at_lock_time_is_ended_once_locked() {
     let mut locks = Locks::new();
     let mut fake = Fake {
         dim_up: true,
         ..Fake::new()
     };
     fake.ask(&mut locks, LOCKER, LOCK_LOCK);
+    assert!(
+        fake.dim_up,
+        "the overlays stay until the lock surfaces show"
+    );
+    assert!(fake.told.is_empty());
+    fake.compositor_locks(&mut locks);
     assert!(!fake.dim_up);
-    assert!(fake.told.is_empty(), "the dim's sidecar is told nothing");
+    assert_eq!(
+        fake.told.len(),
+        1,
+        "the owner hears locked; the dim's sidecar nothing"
+    );
 }
 
 /// A lock asked for while unlocking waits for the unlock's sync, then locks
