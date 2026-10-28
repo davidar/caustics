@@ -1014,6 +1014,60 @@ fn the_shape_dispatch_covers_the_caustics_block_table() {
     );
 }
 
+/// `[numthreads]` of the entry point `name` in `bar.slang`, read off the
+/// source: the attribute directly above its declaration.
+fn numthreads_of(name: &str) -> (u32, u32, u32) {
+    let source = std::fs::read_to_string(bar_slang())
+        .unwrap_or_else(|err| panic!("could not read bar.slang: {err}"));
+    let decl = format!("void {name}(");
+    let above = source
+        .split(&decl)
+        .next()
+        .filter(|above| above.len() < source.len())
+        .unwrap_or_else(|| panic!("bar.slang declares no {name}"));
+    let attr = above
+        .rsplit("[numthreads(")
+        .next()
+        .unwrap_or_else(|| panic!("no [numthreads] above {name}"));
+    let mut axes = attr
+        .split(')')
+        .next()
+        .expect("a closing parenthesis")
+        .split(',')
+        .map(|axis| {
+            axis.trim()
+                .parse::<u32>()
+                .expect("a workgroup axis literal")
+        });
+    let mut axis = || axes.next().expect("three workgroup axes");
+    (axis(), axis(), axis())
+}
+
+/// The `bar_shape` dispatch divides the block table by the caustic's own
+/// group width, and that width is more than one wave.
+///
+/// The host dispatches `SHAPE_BLOCKS / SHAPE_GROUP` groups, so a constant
+/// that drifted from the attribute would over- or under-cover the table.
+/// The width itself is a rule and not a tuning (the note beside the
+/// attribute in `caustics/bar.slang`): a workgroup of 64 or fewer threads is
+/// one wave on AMD hardware, and that is the path on which Mesa's ACO
+/// compiler spills the shaper's registers into shared memory and, through
+/// Mesa 26.2, reorders the spills.
+#[test]
+fn the_shape_dispatch_matches_the_caustics_group() {
+    let (width, _, _) = numthreads_of("bar_shape");
+    assert_eq!(
+        crate::gpu::SHAPE_GROUP,
+        width,
+        "bar_shape is [numthreads({width}, 1, 1)] and SHAPE_GROUP is {}",
+        crate::gpu::SHAPE_GROUP
+    );
+    assert!(
+        width > 64,
+        "bar_shape's workgroup of {width} is a single wave on AMD hardware"
+    );
+}
+
 /// The three snap constants out of `caustics/bar_state.slang`, so this moves
 /// with them rather than asserting yesterday's numbers.
 fn snap_constants() -> (i32, f32, u32) {

@@ -1148,3 +1148,37 @@ fn a_reload_builds_beside_the_running_canvas() {
     let (after, _) = frame_at(&mut gpu, 500);
     assert!(after > before, "and the swapped one draws");
 }
+
+/// `SHAPE_GROUP` is `canvas_shape`'s `[numthreads]`, read off the source, and
+/// more than one wave: the rule beside the attribute in `caustics/bar.slang`
+/// (a single-wave group puts the shaper's spills on a Mesa path that reorders
+/// them) holds for every entry point that shapes.
+#[test]
+fn the_shape_dispatch_matches_the_caustics_group() {
+    let source = std::fs::read_to_string(caustics_dir().join("canvas.slang"))
+        .unwrap_or_else(|err| panic!("could not read canvas.slang: {err}"));
+    let above = source
+        .split("void canvas_shape(")
+        .next()
+        .filter(|above| above.len() < source.len())
+        .expect("canvas.slang declares canvas_shape");
+    let attr = above
+        .rsplit("[numthreads(")
+        .next()
+        .expect("a [numthreads] above canvas_shape");
+    let width: u32 = attr
+        .split(',')
+        .next()
+        .expect("a first axis")
+        .trim()
+        .parse()
+        .expect("a workgroup axis literal");
+    assert_eq!(
+        SHAPE_GROUP, width,
+        "canvas_shape is [numthreads({width}, 1, 1)] and SHAPE_GROUP is {SHAPE_GROUP}"
+    );
+    assert!(
+        width > 64,
+        "canvas_shape's workgroup of {width} is a single wave on AMD hardware"
+    );
+}

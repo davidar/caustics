@@ -387,13 +387,17 @@ void bar_compose(uint3 gid: SV_DispatchThreadID)
 // ===========================================================================
 
 [shader("compute")]
-// **One thread per workgroup, not `shape`'s own 64.**
+// **Two waves per workgroup, never one.**
 //
 // The pass is at most MAX_BLOCKS tiny jobs that run when a string changes
-// rather than per frame, so a wider group gains nothing measurable, and a
-// group of one is a free margin against driver trouble with the shaper's
-// wider dispatch. `SHAPE_GROUP` in `bar/src/gpu.rs` mirrors the 1 below.
-[numthreads(1, 1, 1)]
+// rather than per frame, so the group's width buys no speed; it is chosen for
+// the driver. Mesa's ACO compiler spills the shaper's registers into shared
+// memory when a workgroup is a single wave, and up to Mesa 26.2 its scheduler
+// can reorder those spills, which gives wrong glyph classes with no error. A
+// group wider than 64 threads keeps the spills in scratch on every AMD GPU
+// (punchcutter/docs/arena.md, *Workgroup size*); a group of one would be a
+// single wave too. `SHAPE_GROUP` in `bar/src/gpu.rs` mirrors the 128 below.
+[numthreads(128, 1, 1)]
 void bar_shape(uint3 gid: SV_DispatchThreadID)
 {
     shape_block(gid.x);

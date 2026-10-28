@@ -78,10 +78,13 @@ const IMAGE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 /// Workgroup edge of the two full-target entries (`[numthreads(8, 8, 1)]`).
 const TILE: u32 = 8;
 
-/// Threads per workgroup in `bar_shape` (`[numthreads(1, 1, 1)]`) — one block
-/// per *group*, and the note beside that attribute in `caustics/bar.slang` says
-/// why it is not 64: the pass is small, and a group of one is a free margin against driver trouble.
-const SHAPE_GROUP: u32 = 1;
+/// Threads per workgroup in `bar_shape` (`[numthreads(128, 1, 1)]`): one block
+/// per thread, two waves per group. The note beside that attribute in
+/// `caustics/bar.slang` says why it is more than 64 and never one: a
+/// single-wave group puts the shaper's spills on a Mesa path that reorders
+/// them. `the_shape_dispatch_matches_the_caustics_group` in
+/// `bar/src/abi/tests.rs` reads the attribute and checks this against it.
+pub(crate) const SHAPE_GROUP: u32 = 128;
 
 /// How many `bar_shape` threads a submission dispatches: one per slot of the
 /// caustic's own block table.

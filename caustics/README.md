@@ -146,6 +146,16 @@ dispatch*).
   charged against a budget before its first iteration
   (punchcutter/docs/arena.md, *Bounded in time*). A loop never uses a budget
   charge as its exit condition: one driver miscompiled exactly that shape.
+- **An entry point that shapes is two waves wide.** `bar_shape` and
+  `canvas_shape` declare `[numthreads(128, 1, 1)]`, one block per thread, and
+  each host divides its block count by the same constant. The width is not a
+  tuning: the shaper spills hundreds of registers, Mesa's ACO compiler spills
+  them into shared memory only when a workgroup is a single wave (64 threads
+  or fewer on AMD hardware), and through Mesa 26.2 its scheduler can reorder
+  those spills, which gives wrong glyph classes with no error. A wider group
+  keeps the spills in scratch on every AMD GPU and every Mesa version
+  (punchcutter/docs/arena.md, *Workgroup size*). A test in each host reads
+  the attribute off the source and checks the host's constant against it.
 - **The canvas's draw is specialised per surface.** Which surface a
   canvas dispatch draws is `surface_target()`, never `params.target` read
   directly: it answers the specialisation constant `SPECIALISED_TARGET`
