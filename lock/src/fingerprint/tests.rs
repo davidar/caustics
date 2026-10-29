@@ -298,3 +298,28 @@ async fn fprintd_leaving_mid_verify_is_gone_and_its_return_is_claimed() {
     rig.stop().await;
     assert_eq!(log.lines().last().map(String::as_str), Some("Release"));
 }
+
+/// The proxy reads the properties under fprintd's own names, so the witness
+/// names the reader rather than saying `(unnamed)`.
+#[tokio::test]
+async fn the_reader_is_named_from_fprintd_s_lowercase_properties() {
+    let Some(rig) = Rig::start("", "swipe", fake::Mode::Normal).await else {
+        return;
+    };
+    let conn = zbus::connection::Builder::address(rig._bus.address.as_str())
+        .expect("the bus address parses")
+        .build()
+        .await
+        .expect("a client connection");
+    let device = DeviceProxy::builder(&conn)
+        .path(fake::DEVICE)
+        .expect("the device path")
+        .cache_properties(CacheProperties::No)
+        .build()
+        .await
+        .expect("the device proxy");
+    assert_eq!(reader_name(&device).await, "Fake Fingerprint Reader");
+    assert_eq!(device.scan_type().await.expect("scan-type"), "swipe");
+    let mut rig = rig;
+    rig.stop().await;
+}

@@ -239,7 +239,8 @@ impl Device {
         Ok(())
     }
 
-    #[zbus(property)]
+    /// fprintd's own name for it, lowercase as its introspection has it.
+    #[zbus(property, name = "name")]
     fn name(&self) -> String {
         "Fake Fingerprint Reader".to_owned()
     }

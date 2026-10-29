@@ -76,7 +76,10 @@ pub trait Device {
     #[zbus(signal)]
     fn verify_status(&self, result: &str, done: bool) -> zbus::Result<()>;
 
-    #[zbus(property)]
+    /// fprintd's properties are named in lowercase, hyphenated
+    /// (`name`, `scan-type`, `num-enroll-stages`, `finger-present`,
+    /// `finger-needed`), not in zbus's default case.
+    #[zbus(property, name = "name")]
     fn name(&self) -> zbus::Result<String>;
 
     /// `press` or `swipe`.
@@ -487,12 +490,11 @@ async fn claim(
             };
         }
     }
-    let name = stop.or(device.name()).await;
+    let name = stop.or(reader_name(&device)).await;
     let scan_type = stop.or(device.scan_type()).await;
     let (Some(name), Some(scan_type)) = (name, scan_type) else {
         return End::Stopped;
     };
-    let name = name.unwrap_or_else(|_| "(unnamed)".to_owned());
     let how = how(&scan_type.unwrap_or_default());
     verify(
         &device,
@@ -506,6 +508,14 @@ async fn claim(
         timings,
     )
     .await
+}
+
+/// The reader's name for the witness; `(unnamed)` when fprintd gives none.
+async fn reader_name(device: &DeviceProxy<'_>) -> String {
+    device
+        .name()
+        .await
+        .unwrap_or_else(|_| "(unnamed)".to_owned())
 }
 
 /// Not a result fprintd sends: fprintd's name changed owner.
