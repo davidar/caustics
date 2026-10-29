@@ -1,20 +1,22 @@
 //! logind on the **system** bus: the session's `Lock` and `Unlock` signals in,
-//! its `LockedHint` read once at start and set on the host's word.
+//! the Manager's `PrepareForSleep(false)` in as a resume (the person is back,
+//! and the lock opens a fingerprint window), its `LockedHint` read once at
+//! start and set on the host's word.
 //!
 //! The session is the one `caustics_sidecar::session` finds, as the polkit
-//! sink finds its own. The two signal streams are subscribed **before** the
+//! sink finds its own. The signal streams are subscribed **before** the
 //! hint is read, so a `Lock` raised between the two is not lost, and each is
 //! forwarded the moment it exists (docs/architecture.md, *Rules*).
 //! `SetLockedHint` is called on a task of its own, in the order the
 //! conductor asked, so the conductor never waits on the bus.
 //!
 //! Without a system bus, or without a session there, there is **no logind**:
-//! one witness, no signals, no hint, and the socket's `lock` is the only
-//! trigger. That is the tests' case: they point `DBUS_SYSTEM_BUS_ADDRESS` at
+//! one witness, no signals (and so no resume), no hint, and the socket's
+//! `lock` is the only trigger. That is the tests' case: they point `DBUS_SYSTEM_BUS_ADDRESS` at
 //! a socket that does not exist.
 
 use caustics_sidecar::Drain;
-use caustics_sidecar::session::{self, SessionProxy};
+use caustics_sidecar::session::{self, ManagerProxy, PrepareForSleep, SessionProxy};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use zbus::Connection;
 
@@ -27,7 +29,7 @@ pub struct Logind {
     pub hint: UnboundedSender<bool>,
     /// `LockedHint` when this process started.
     pub locked: bool,
-    _streams: [Drain; 2],
+    _streams: [Drain; 3],
     _hint_task: tokio::task::JoinHandle<()>,
 }
 
@@ -61,12 +63,12 @@ pub async fn connect(events: &UnboundedSender<Event>) -> Option<Logind> {
             return None;
         }
     };
-    let streams = match subscribe(&proxy, events).await {
+    let streams = match subscribe(&conn, &proxy, events).await {
         Ok(streams) => streams,
         Err(e) => {
             witness(&format!(
-                "logind's Lock and Unlock for session {id}: {e}; the socket's lock is the \
-                 only trigger"
+                "logind's Lock, Unlock and PrepareForSleep for session {id}: {e}; the \
+                 socket's lock is the only trigger"
             ));
             return None;
         }
@@ -120,13 +122,27 @@ impl Logind {
 }
 
 async fn subscribe(
+    conn: &Connection,
     proxy: &SessionProxy<'static>,
     events: &UnboundedSender<Event>,
-) -> zbus::Result<[Drain; 2]> {
+) -> zbus::Result<[Drain; 3]> {
     let locks = proxy.receive_lock().await?;
     let unlocks = proxy.receive_unlock().await?;
+    let sleeps = ManagerProxy::new(conn)
+        .await?
+        .receive_prepare_for_sleep()
+        .await?;
     Ok([
         caustics_sidecar::forward(locks, events.clone(), |_| Some(Event::LogindLock)),
         caustics_sidecar::forward(unlocks, events.clone(), |_| Some(Event::LogindUnlock)),
+        // Only the resume: the lock is up before the sleep already (the
+        // before-sleep hold is `lock --wait`).
+        caustics_sidecar::forward(sleeps, events.clone(), |signal: PrepareForSleep| {
+            signal
+                .args()
+                .ok()
+                .filter(|args| !*args.start())
+                .map(|_| Event::Resume)
+        }),
     ])
 }

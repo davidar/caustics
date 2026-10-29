@@ -24,6 +24,10 @@ pub trait Manager {
     fn get_session_by_pid(&self, pid: u32) -> zbus::Result<OwnedObjectPath>;
     fn get_session(&self, session_id: &str) -> zbus::Result<OwnedObjectPath>;
     fn get_user(&self, uid: u32) -> zbus::Result<OwnedObjectPath>;
+
+    /// `start` true before the machine sleeps, false once it has resumed.
+    #[zbus(signal)]
+    fn prepare_for_sleep(&self, start: bool) -> zbus::Result<()>;
 }
 
 #[zbus::proxy(
