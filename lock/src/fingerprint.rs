@@ -124,6 +124,13 @@ pub fn how(scan_type: &str) -> &'static str {
 /// The error line after a finger that did not match.
 pub const NOT_RECOGNISED: &str = "Fingerprint not recognised; try again";
 
+/// The line once a window has closed: the reader is let go, and input at
+/// the lock opens another.
+pub const WAKE_READER: &str = "Press a key to wake the fingerprint reader";
+
+/// The line while a run claims the reader again after it went.
+pub const READER_NOT_AVAILABLE: &str = "Fingerprint reader not available";
+
 /// The line for a `VerifyStatus` that is not done: the scan is to be tried
 /// again.
 pub fn retry_line(result: &str) -> &'static str {

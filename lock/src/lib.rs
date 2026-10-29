@@ -32,7 +32,7 @@
 //!   interface ([`fingerprint`]), while the conversation runs: PAM asks one
 //!   thing at a time, so the reader is not in the PAM stack. It is held in
 //!   windows while someone is at the lock (the lock going up, input on a
-//!   lock surface, a resume) and rests otherwise ([`conductor::Windows`]). A
+//!   lock surface, a resume) and let go otherwise ([`conductor::Windows`]). A
 //!   match is a success; the password keeps working throughout; the reader
 //!   is released when a window closes and when the lock is over.
 //! - **Nothing typed is ever written anywhere but to PAM**, and no witness
@@ -50,9 +50,9 @@
 //!   unlock path, or PAM waits on the reader too.
 //! - `CAUSTICS_LOCK_FINGERPRINT`: `0` is no reader; unset or anything else
 //!   is the reader verifying while locked.
-//! - `CAUSTICS_LOCK_FINGERPRINT_WINDOW`: the reader's windows, `idle,cap,rest`
-//!   in seconds, default `30,90,120`; a malformed value is one witness and
-//!   the default.
+//! - `CAUSTICS_LOCK_FINGERPRINT_WINDOW`: the reader's windows, `idle,cap` in
+//!   seconds, default `30,90`; a malformed value is one witness and the
+//!   default.
 //! - `CAUSTICS_LOCK_DRY_RUN_SECRET`: the **dry run**. PAM is not touched: a
 //!   conversation is one echo-off ask, `Password: `, compared with these
 //!   bytes. logind is still spoken to if a system bus answers, so a test
@@ -112,7 +112,7 @@ pub struct Settings {
     /// `CAUSTICS_LOCK_FINGERPRINT` is not `0`.
     pub fingerprint: bool,
     /// `CAUSTICS_LOCK_FINGERPRINT_WINDOW`, or the default; `Err` holds a
-    /// value that is not `idle,cap,rest`, for the witness.
+    /// value that is not `idle,cap`, for the witness.
     pub windows: Result<Windows, String>,
 }
 
@@ -302,11 +302,10 @@ pub async fn serve(
         let windows = settings.windows.unwrap_or_else(|text| {
             let windows = Windows::default();
             witness(&format!(
-                "fingerprint: CAUSTICS_LOCK_FINGERPRINT_WINDOW={text} is not idle,cap,rest in \
-                 seconds; {},{},{}",
+                "fingerprint: CAUSTICS_LOCK_FINGERPRINT_WINDOW={text} is not idle,cap in \
+                 seconds; {},{}",
                 windows.idle.as_secs(),
-                windows.cap.as_secs(),
-                windows.rest.as_secs()
+                windows.cap.as_secs()
             ));
             windows
         });
