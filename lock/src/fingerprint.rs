@@ -24,7 +24,13 @@
 //!   the device re-enumerates under fprintd; or fprintd itself leaves the
 //!   bus, taking the claim with it), releases what it held and claims again
 //!   with a doubling backoff, for as long as the session stays locked; no
-//!   reader, or no fprintd, after one that went is one on its way back;
+//!   reader, or no fprintd, after one that went is one on its way back. The
+//!   backoff starts again from its first pause only after a verify that
+//!   lived ([`Timings::settled`]): fprintd reports a sensor that libfprint
+//!   has disabled for heat as `verify-disconnected`, the same status as a
+//!   reader unplugged, and the lock cannot tell the two apart, so a
+//!   disconnect soon after a start is a reader that needs time, and the
+//!   pause before the next claim doubles rather than hammering it;
 //! - on a reader that cannot ever verify for this lock (no reader, no
 //!   enrolled prints, no permission, no system bus) says so once and does
 //!   nothing more until the next lock;
@@ -169,6 +175,10 @@ pub struct Timings {
     pub retry_pause: Duration,
     /// The release at the end of a run, at most.
     pub release_bound: Duration,
+    /// How long a claim's verify must have been live for its end to reset
+    /// the backoff: a reader that goes sooner (a sensor too hot, which
+    /// fprintd says as `verify-disconnected`) waits twice as long each time.
+    pub settled: Duration,
 }
 
 impl Default for Timings {
@@ -178,6 +188,7 @@ impl Default for Timings {
             last_backoff: Duration::from_secs(30),
             retry_pause: Duration::from_millis(500),
             release_bound: Duration::from_secs(2),
+            settled: Duration::from_secs(60),
         }
     }
 }
@@ -272,9 +283,9 @@ enum End {
     Stopped,
     /// Never for this lock.
     Unavailable(String),
-    /// Gone; claim again after the backoff. `verified` when the claim got
-    /// as far as a live verify, which resets the backoff.
-    Gone { why: String, verified: bool },
+    /// Gone; claim again after the backoff. `lived` when the claim's verify
+    /// had been live for [`Timings::settled`], which resets the backoff.
+    Gone { why: String, lived: bool },
 }
 
 /// What a claim holds, released at its end.
@@ -345,8 +356,8 @@ async fn verify_run(
                 stop.wait().await;
                 return;
             }
-            End::Gone { why, verified } => {
-                if verified {
+            End::Gone { why, lived } => {
+                if lived {
                     backoff = timings.first_backoff;
                 }
                 witness(&format!(
@@ -403,10 +414,7 @@ async fn claim(
     first: bool,
     timings: Timings,
 ) -> End {
-    let gone = |why: String| End::Gone {
-        why,
-        verified: false,
-    };
+    let gone = |why: String| End::Gone { why, lived: false };
     let conn = match stop.or(connect(address)).await {
         None => return End::Stopped,
         Some(Ok(conn)) => conn,
@@ -542,7 +550,13 @@ async fn verify(
     status: &mut UnboundedReceiver<(String, bool)>,
     timings: Timings,
 ) -> End {
-    let mut verified = false;
+    // When this claim's first verify went live: the claim has lived once it
+    // has been verifying for `settled`, through every no-match since.
+    let mut live_since: Option<tokio::time::Instant> = None;
+    let gone = |why: String, live_since: Option<tokio::time::Instant>| End::Gone {
+        why,
+        lived: live_since.is_some_and(|at| at.elapsed() >= timings.settled),
+    };
     loop {
         // Statuses of a verify that is over are no business of the next.
         while status.try_recv().is_ok() {}
@@ -555,15 +569,12 @@ async fn verify(
                     Some("PermissionDenied") => {
                         End::Unavailable("not permitted to verify".to_owned())
                     }
-                    _ => End::Gone {
-                        why: format!("verify: {e}"),
-                        verified,
-                    },
+                    _ => gone(format!("verify: {e}"), live_since),
                 };
             }
         }
-        if !verified {
-            verified = true;
+        if live_since.is_none() {
+            live_since = Some(tokio::time::Instant::now());
             witness(&format!(
                 "fingerprint: reader {name} claimed for {}; verifying",
                 shown_user(user)
@@ -577,19 +588,13 @@ async fn verify(
                 return End::Stopped;
             };
             let Some((result, done)) = next else {
-                return End::Gone {
-                    why: "its signals ended".to_owned(),
-                    verified,
-                };
+                return gone("its signals ended".to_owned(), live_since);
             };
             match result.as_str() {
                 FPRINTD_LEFT => {
                     // Nothing is held any more to release.
                     *held = Held::default();
-                    return End::Gone {
-                        why: "fprintd left the bus".to_owned(),
-                        verified,
-                    };
+                    return gone("fprintd left the bus".to_owned(), live_since);
                 }
                 "verify-match" => {
                     report.send(Finger::Match);
@@ -603,10 +608,7 @@ async fn verify(
                         None => return End::Stopped,
                         Some(Ok(())) => held.verifying = false,
                         Some(Err(e)) => {
-                            return End::Gone {
-                                why: format!("stop: {e}"),
-                                verified,
-                            };
+                            return gone(format!("stop: {e}"), live_since);
                         }
                     }
                     if stop
@@ -618,23 +620,17 @@ async fn verify(
                     }
                     break;
                 }
+                // A reader unplugged or re-enumerated, and a sensor libfprint
+                // disabled for heat: fprintd says both this way.
                 "verify-disconnected" => {
-                    return End::Gone {
-                        why: "disconnected".to_owned(),
-                        verified,
-                    };
+                    return gone("disconnected".to_owned(), live_since);
                 }
                 other if !done => {
                     let line = retry_line(other);
                     witness(&format!("fingerprint: {line}"));
                     report.send(Finger::Retry(line.to_owned()));
                 }
-                other => {
-                    return End::Gone {
-                        why: other.to_owned(),
-                        verified,
-                    };
-                }
+                other => return gone(other.to_owned(), live_since),
             }
         }
     }

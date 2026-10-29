@@ -20,6 +20,7 @@ const TIMINGS: Timings = Timings {
     last_backoff: Duration::from_millis(400),
     retry_pause: Duration::from_millis(50),
     release_bound: Duration::from_secs(2),
+    settled: Duration::from_millis(300),
 };
 
 /// A bus with the fake on it, and a run of the reader against it.
@@ -321,5 +322,81 @@ async fn the_reader_is_named_from_fprintd_s_lowercase_properties() {
     assert_eq!(reader_name(&device).await, "Fake Fingerprint Reader");
     assert_eq!(device.scan_type().await.expect("scan-type"), "swipe");
     let mut rig = rig;
+    rig.stop().await;
+}
+
+/// The next finding that is not a scan to try again, and when it came.
+async fn next_gone(rig: &mut Rig) -> tokio::time::Instant {
+    loop {
+        match rig.finger().await {
+            Finger::Retry(_) | Finger::Ready { .. } => continue,
+            Finger::Gone(why) => {
+                assert_eq!(why, "disconnected");
+                return tokio::time::Instant::now();
+            }
+            other => panic!("not the reader gone: {other:?}"),
+        }
+    }
+}
+
+/// A verify that is disconnected moments after it started (fprintd's word
+/// for a sensor too hot, as for one unplugged) did not live: the next claim
+/// waits the doubled backoff, never the first pause again.
+#[tokio::test]
+async fn a_disconnect_right_after_the_start_doubles_the_backoff() {
+    let Some(mut rig) = Rig::start(
+        "disconnected,disconnected,disconnected",
+        "press",
+        fake::Mode::Normal,
+    )
+    .await
+    else {
+        return;
+    };
+    let first = next_gone(&mut rig).await;
+    let second = next_gone(&mut rig).await;
+    let third = next_gone(&mut rig).await;
+    // Each gap is the backoff, a claim and the fake's 50 ms to the status.
+    assert!(
+        second - first >= TIMINGS.first_backoff,
+        "the first pause: {:?}",
+        second - first
+    );
+    assert!(
+        third - second >= TIMINGS.first_backoff * 2,
+        "the second claim came after {:?}, not the doubled backoff",
+        third - second
+    );
+    rig.stop().await;
+    assert_eq!(rig.log.count("Claim tester"), 3, "{:?}", rig.log.lines());
+}
+
+/// A verify that was live past `settled` before it was disconnected resets
+/// the backoff: the reader really went, and is claimed again at the first
+/// pause.
+#[tokio::test]
+async fn a_verify_that_lived_resets_the_backoff() {
+    // Two quick disconnects take the backoff to its longest; then a verify
+    // that lives eight retries (400 ms, past the 300 ms of `settled`)
+    // before it goes; then a quick one again.
+    let lived = ["retry-scan"; 8].join("+") + "+disconnected";
+    let script = format!("disconnected,disconnected,{lived},disconnected");
+    let Some(mut rig) = Rig::start(&script, "press", fake::Mode::Normal).await else {
+        return;
+    };
+    next_gone(&mut rig).await;
+    let second = next_gone(&mut rig).await;
+    let third = next_gone(&mut rig).await;
+    let fourth = next_gone(&mut rig).await;
+    assert!(
+        third - second >= TIMINGS.first_backoff * 2 + Duration::from_millis(400),
+        "the verify that lived: {:?}",
+        third - second
+    );
+    assert!(
+        fourth - third < TIMINGS.last_backoff,
+        "the claim after a verify that lived came after {:?}, not the first pause",
+        fourth - third
+    );
     rig.stop().await;
 }
