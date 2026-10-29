@@ -52,15 +52,20 @@ adds it (*In the canvas's set*).
   at the lock. A window opens when the lock goes up, when input reaches a
   lock surface (a key, the pointer moving, a button, a touch: the host's
   `CANVAS_EVENT_INPUT`, said at most once in five seconds) and on a resume
-  from suspend (logind's `PrepareForSleep`). It stays open 30 s past its
-  last trigger, and 90 s at most; after it closes the reader **rests** for
-  120 s, and a trigger then opens nothing. libfprint disables a sensor that
-  has run continuously for a few minutes and lets it cool for minutes, so a
-  reader held for the whole of a lock would be dead for most of it. While a
-  window's verify is live the conversation on screen says so under its
-  title (`Touch the fingerprint reader`, or `Swipe a finger across the
-  reader`), and every fresh conversation in that window says it again; a
-  window closing says nothing on screen. A finger that does not match
+  from suspend (logind's `PrepareForSleep`), at once whenever none is open.
+  It stays open 30 s past its last trigger, and 90 s at most. libfprint
+  disables a sensor that has run continuously for a few minutes and lets
+  it cool for minutes, so a reader held for the whole of a lock would be
+  dead for most of it; a window that short does not heat it that far, so
+  there is no rest between windows. A sensor that does go hot is a reader
+  gone, which the sidecar claims again with a doubling pause. The panel's
+  one line under the ask says what the reader is doing, and every fresh
+  conversation says it again after its title: `Touch the fingerprint
+  reader` (or `Swipe a finger across the reader`) while a window's verify
+  is live; `Press a key to wake the fingerprint reader` once a window has
+  closed; `Fingerprint reader not available` while the sidecar claims a
+  reader that went. A reader that can never verify for this lock puts no
+  line up, and the unlock says nothing. A finger that does not match
   is an error line (`Fingerprint not recognised; try again`) and a fresh
   verify after half a second, never a counted failure; a scan to try again
   (too short, off centre) is a line and the same verify. **A match is a
@@ -124,7 +129,7 @@ From the sidecar's own environment:
 |---|---|---|
 | `CAUSTICS_LOCK_PAM_SERVICE` | `swaylock` | the PAM service (`/etc/pam.d/<service>`); `swaylock` is the one a session built on the sway tools already has. Keeping the fingerprint module off the unlock path is that service file's business, and this is how a different one is chosen: the reader is spoken to directly, so a stack that also waits on it only delays the password ask by its timeout |
 | `CAUSTICS_LOCK_FINGERPRINT` | `1` | `0` is no reader: no claim, the password alone. Unset or anything else is the reader verifying while locked |
-| `CAUSTICS_LOCK_FINGERPRINT_WINDOW` | `30,90,120` | the reader's windows, `idle,cap,rest` in whole seconds: a window stays open `idle` past its last trigger and never longer than `cap` since it opened, and none opens for `rest` after one closes. `idle` and `cap` are not 0; anything else is one witness and the default |
+| `CAUSTICS_LOCK_FINGERPRINT_WINDOW` | `30,90` | the reader's windows, `idle,cap` in whole seconds: a window stays open `idle` past its last trigger and never longer than `cap` since it opened. Neither is 0; anything else is one witness and the default |
 | `CAUSTICS_LOCK_DRY_RUN_SECRET` | unset | the **dry run**: PAM is not touched, and a conversation is one echo-off ask, `Password: `, compared with these bytes (not in constant time: they are in the environment, which is no secret). Empty is no dry run |
 
 The dry run still speaks to logind and fprintd if a system bus answers, so
@@ -154,7 +159,7 @@ fingerprint: no reader; password only           or no enrolled prints for <user>
 fingerprint: window closed (idle|cap); released  nobody there, or the cap; `released` if a claim was held
 fingerprint: released                           the lock is over, the reader let go
 fingerprint: off (CAUSTICS_LOCK_FINGERPRINT=0)
-fingerprint: CAUSTICS_LOCK_FINGERPRINT_WINDOW=<value> is not idle,cap,rest in seconds; 30,90,120
+fingerprint: CAUSTICS_LOCK_FINGERPRINT_WINDOW=<value> is not idle,cap in seconds; 30,90
 ```
 
 ## In the canvas's set

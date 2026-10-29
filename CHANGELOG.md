@@ -141,8 +141,10 @@ fresh verify, a reader that goes is claimed again with a backoff, and the
 reader is released at the unlock; `CAUSTICS_LOCK_FINGERPRINT=0` turns it
 off. The reader is held in windows while someone is at the lock (the lock
 going up, input on a lock surface, which the canvas tells the sidecar as
-`CANVAS_EVENT_INPUT`, and a resume from suspend) and rests between them,
-since libfprint disables a sensor that has run for a few minutes; a reader
+`CANVAS_EVENT_INPUT`, and a resume from suspend) and let go between them,
+since libfprint disables a sensor that has run for a few minutes; the
+panel's line says whether the reader is live, waits for a key, or is not
+available; a reader
 that goes right after its verify started is claimed again after a doubling
 pause rather than every second (`CAUSTICS_LOCK_FINGERPRINT_WINDOW`). The
 canvas journals a line shown beside an ask, without its words.

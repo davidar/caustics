@@ -345,16 +345,18 @@ lock sidecar's system bus a private `dbus-daemon` on which
 verify with a finger that does not match and the second with one that
 does; logind is not on that bus, so the socket is still the only trigger,
 and the real fprintd is never reached. The reader's windows are short
-(`CAUSTICS_LOCK_FINGERPRINT_WINDOW=8,60,1`). Nothing is typed in the first
+(`CAUSTICS_LOCK_FINGERPRINT_WINDOW=8,60`). Nothing is typed in the first
 lock. It checks: the sidecar's lines in order (a window open at the lock,
 the reader claimed, not recognised, matched, unlocked); the host's in order (the ready line, the no-match's error line
 beside the ask and not counted as an attempt, success, the unlock asked,
 `unlocked` told); fprintd's calls in order (claim, verify, no-match, stop,
 verify, match, stop, release). Then a second lock, whose verify waits for
 a finger that never comes: its conversation carries the ready line; with
-nobody there its window closes on idle and the reader is released while
-the session is still locked; past the rest, the first key typed is told to
-the sidecar as input at the lock and a window opens and verifies again;
+nobody there its window closes on idle, the reader is released while the
+session is still locked, and the panel's line becomes the wake line;
+straight after, the first key typed is told to the sidecar as input at the
+lock, a window opens at once and verifies again, and the ready line
+replaces the wake line;
 the right secret unlocks, and the reader is released all the same, three
 claims in two locks.
 The bus and the fake are stopped by PID with the canvas.

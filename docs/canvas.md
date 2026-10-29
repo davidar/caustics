@@ -319,8 +319,9 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   reader and verifies beside the conversation, in **windows**: one opens as
   the lock goes up, when input reaches a lock surface (the host tells the
   sidecar, at most once in five seconds) and on a resume from suspend, and
-  closes after half a minute without one, or a minute and a half at most,
-  with two minutes' rest after. The reason is libfprint's temperature
+  closes after half a minute without one, or a minute and a half at most;
+  the panel's line then says a key wakes the reader, and the next trigger
+  opens a window at once. The reason is libfprint's temperature
   model: a sensor that is not always-on is taken to heat while it runs and
   to cool while idle, and once hot it is disabled for minutes, so a
   verification kept going for a whole lock leaves the reader dead for most
