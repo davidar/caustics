@@ -157,7 +157,10 @@ host tells the sidecar `locked` when the compositor confirms and
 `unlocked` once the compositor has read the unlock. Only the sidecar that
 locked unlocks. While locked the prompt is drawn on the lock surfaces and
 is the lock's alone (another sink is told no at once), and a dim up at the
-lock is ended. The compositor ending or refusing the lock is fatal, so the
+lock is ended. The lock is the deepest dim: a dim asked while locked is
+reached at once with nothing drawn, so a `dim --wait` is done straight
+away, and one still up at the unlock ends with it, so the unlock never
+lands on a dimmed desktop. The compositor ending or refusing the lock is fatal, so the
 unit restarts the host; a host that dies locked leaves the session locked,
 and a restarted host sends its lock before its device is up. The lock
 sidecar stays out of the canvas's default set: canvas/README.md says how

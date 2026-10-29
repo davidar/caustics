@@ -180,6 +180,18 @@ the lock is dismissed, and another sink's ask while locked is cancelled at
 once, so the lock screen's panel is only ever the lock's. So there is one
 dim and one owner of it.
 
+The lock is the deepest dim. A dim asked for while the session is locked
+(after the compositor's `locked`, before the unlock is asked) is reached at
+once: its sidecar hears `dimmed` straight away, and no overlay is made and
+nothing drawn. The idle daemon's timer keeps running under the lock, since a
+key at the lock's prompt restarts it, and its `dim --wait && lock` then
+finds the dark screen it asked for and a session already locked. A dim made
+there would be unseen, and the prompt's keys cancel no dim, so it would
+outlive the lock and the unlock would land on a dimmed desktop. A dim still
+up when the unlock is asked for (one that got in while locking) ends with
+it, before the lock surfaces go, and as at `locked` its sidecar is told
+nothing: it heard `dimmed` long ago, and a waiting client has had its answer.
+
 ### The wake
 
 The bar's wake (`caustics/wake.slang`), over the wallpaper: the pointer's
@@ -362,7 +374,9 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   it (the user came back, and the stage should not suspend or lock), **1**
   when it could not run or the canvas went away mid-dim, so a broken fade
   still fails toward a locked screen. A newer dim, or an undim, ends a waited
-  one with 2 as well. A completed dim stays at its depth until undim or
+  one with 2 as well. While the session is locked the dim is reached at
+  once, so the client exits 0 straight away (*Surfaces*). A completed dim
+  stays at its depth until undim or
   input, which is what a suspend hook wants: the screen stays dark while the
   machine goes down. Underneath, the wallpaper sidecar sends a `CANVAS_DIM`
   under an id of its own, and the host answers on the sidecar's stdin with a

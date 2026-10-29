@@ -330,10 +330,13 @@ screen's look is the caustic's witness here and the oracle's. They check:
 lock, `locked` and the sidecar's word in that order; no screenshot; the
 caustic drawing conversation 1 asking on the lock and no top-layer pane;
 the keyboard on the lock surface; a wrong secret, an error line counted as
-an attempt and conversation 2 asking, still locked; the right secret, the
+an attempt and conversation 2 asking, still locked; a `dim 1 over 30
+--wait` while locked exiting 0 well inside the dim's time, the sidecar's
+`dim=dimmed`, the host's line that the dim was reached at once, and no
+overlay made; the right secret, the
 unlock in order (success, the unlock asked, the lock surface gone,
 `unlocked` told); a screenshot again, the output what it was before the
-lock; `status`'s `locked=no attempts=1`; neither secret in any log. Then the
+lock, so nothing dimmed stayed under it; `status`'s `locked=no attempts=1`; neither secret in any log. Then the
 host is killed while locked: niri stays locked, and a restarted host's lock
 (driven through the socket, as `LockedHint` would drive it with logind)
 is given `locked` at once in place of the dead one, with no `finished`;

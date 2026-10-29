@@ -88,6 +88,10 @@ reached its depth stays there until one of those. `status` begins with
 | 2 | was cancelled by input (the user is back), or ended first by an `undim` or a newer `dim` |
 | 1 | could not be asked for, or the canvas went away before it was over |
 
+While the session is locked, a dim is reached at once: the lock is darker
+than any dim, so `dim … --wait` is `done` straight away, exits 0, and
+nothing is drawn, and the unlock never lands on a dimmed desktop.
+
 Before any picture
 the canvas is the dim colour; the path last shown is kept in
 `$XDG_RUNTIME_DIR/caustics-canvas.last`, so a restarted canvas shows it

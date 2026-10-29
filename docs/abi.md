@@ -1591,7 +1591,7 @@ struct CanvasEventBody { // 16 B
 | `CANVAS_EVENT_*` | | means |
 |---|---|---|
 | 1 | `CANVAS_EVENT_INPUT` | to the dim's sidecar: input cancelled the dim: the pointer moved over an overlay, a button, a scroll or a touch on one, or a key. The host has taken the overlays down already; the sidecar answers with a `CANVAS_UNDIM`, so the two ends agree the dim is over. To the lock sidecar, with `id` 0, while the session is locked: input reached a lock surface (a key, the pointer moving, a button, a touch), said at most once in five seconds; someone is at the lock, and the sidecar answers nothing |
-| 2 | `CANVAS_EVENT_DIMMED` | the dim reached its depth, said once a dim; it stays there until an undim or input |
+| 2 | `CANVAS_EVENT_DIMMED` | the dim reached its depth, said once a dim; it stays there until an undim or input. A dim asked while the session is locked is reached at once: this comes straight back, and no overlay is made (the lock is the deepest dim) |
 | 3 | `CANVAS_EVENT_LOCKED` | to the lock sidecar, after its `LOCK_LOCK`: the compositor confirmed the lock and every output has its lock surface (*Lock*) |
 | 4 | `CANVAS_EVENT_UNLOCKED` | to the lock sidecar, after its `LOCK_UNLOCK`: the session is unlocked and the lock surfaces are gone |
 
