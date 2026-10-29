@@ -21,6 +21,8 @@ struct Fake {
     calls: Vec<&'static str>,
     told: Vec<(String, u32)>,
     dim_up: bool,
+    /// Dims answered reached at once, with nothing raised.
+    dimmed_at_once: u32,
     reserved: Option<String>,
     refused: Vec<String>,
     fatal: Option<String>,
@@ -59,7 +61,7 @@ impl Fake {
                     self.sync_out = true;
                 }
                 Effect::Tell { sidecar, event } => self.told.push((sidecar, event)),
-                Effect::EndDim => self.dim_up = false,
+                Effect::EndDim(_) => self.dim_up = false,
                 Effect::Reserve(who) => self.reserved = who,
                 Effect::Note(_) => {}
                 Effect::Refused(why) => self.refused.push(why),
@@ -82,6 +84,16 @@ impl Fake {
         self.sync_out = false;
         let effects = locks.synced();
         self.apply(locks, effects);
+    }
+
+    /// A `CANVAS_DIM` arrives, answered as `wayland.rs` answers it: reached
+    /// at once while the lock says so, an overlay up otherwise.
+    fn dim(&mut self, locks: &Locks) {
+        if locks.dims_at_once() {
+            self.dimmed_at_once += 1;
+        } else {
+            self.dim_up = true;
+        }
     }
 
     fn ask(&mut self, locks: &mut Locks, sidecar: &str, command: u32) {
@@ -355,4 +367,64 @@ fn input_on_a_lock_surface_is_told_to_the_owner_once_in_five_seconds() {
     fake.compositor_locks(&mut locks);
     input(&mut fake, &mut locks, Duration::from_secs(31));
     assert_eq!(fake.told[5], (LOCKER.to_owned(), CANVAS_EVENT_INPUT));
+}
+
+/// The lock is the deepest dim: once the compositor has locked, a dim asked
+/// for is reached at once and raises nothing, so no key at the lock prompt
+/// has a dim to cancel and none outlives the unlock. Before `locked` and
+/// once the unlock is asked for, a dim is a dim.
+#[test]
+fn a_dim_while_locked_is_reached_at_once() {
+    let mut locks = Locks::new();
+    let mut fake = Fake::new();
+    assert!(!locks.dims_at_once());
+    fake.ask(&mut locks, LOCKER, LOCK_LOCK);
+    assert!(!locks.dims_at_once(), "locking: the windows may still show");
+    fake.compositor_locks(&mut locks);
+    fake.dim(&locks);
+    assert_eq!(fake.dimmed_at_once, 1);
+    assert!(!fake.dim_up, "no overlay under the lock");
+    fake.ask(&mut locks, LOCKER, LOCK_UNLOCK);
+    assert!(
+        !locks.dims_at_once(),
+        "unlocking: the desktop is coming back"
+    );
+    fake.sync_answers(&mut locks);
+    assert!(!locks.dims_at_once());
+    fake.dim(&locks);
+    assert!(fake.dim_up, "unlocked, a dim is made");
+    assert_eq!(fake.dimmed_at_once, 1);
+}
+
+/// A dim still up when the session unlocks (one that got in while locking)
+/// ends with the unlock, before the lock surfaces go, and its sidecar is
+/// told nothing: it heard dimmed long ago, or its dim was ended at locked.
+#[test]
+fn a_dim_up_at_the_unlock_is_ended_silently() {
+    let mut locks = Locks::new();
+    let mut fake = Fake::new();
+    fake.ask(&mut locks, LOCKER, LOCK_LOCK);
+    fake.compositor_locks(&mut locks);
+    fake.dim_up = true;
+    let effects = locks.request(LOCKER, LOCK_UNLOCK);
+    let end = effects
+        .iter()
+        .position(|effect| matches!(effect, Effect::EndDim(_)))
+        .expect("the unlock ends a dim up");
+    let unlock = effects
+        .iter()
+        .position(|effect| *effect == Effect::Unlock)
+        .expect("the unlock");
+    assert!(end < unlock, "the overlays go before the lock surfaces");
+    fake.apply(&mut locks, effects);
+    assert!(!fake.dim_up);
+    fake.sync_answers(&mut locks);
+    assert_eq!(
+        fake.told,
+        [
+            (LOCKER.to_owned(), CANVAS_EVENT_LOCKED),
+            (LOCKER.to_owned(), CANVAS_EVENT_UNLOCKED)
+        ],
+        "the dim's sidecar hears nothing"
+    );
 }

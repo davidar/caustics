@@ -140,7 +140,7 @@ use wayland_client::{
     protocol::{wl_callback, wl_keyboard, wl_output, wl_pointer, wl_seat, wl_surface, wl_touch},
 };
 
-use crate::dim::Dims;
+use crate::dim::{Asked, Dims};
 use crate::gpu::{self, Gpu};
 use crate::keys::{self, xkb::Xkb};
 use crate::lock::{self, Locks};
@@ -1229,10 +1229,10 @@ impl Canvas {
                 lock::Effect::Tell { sidecar, event } => {
                     self.tell(&sidecar, event, 0, "the lock");
                 }
-                lock::Effect::EndDim => {
+                lock::Effect::EndDim(when) => {
                     if let Some(dim) = self.dims.end() {
                         tracing::info!(
-                            "dim {}: ended by the lock; {} is told nothing, the overlays go",
+                            "dim {}: ended by the lock {when}; {} is told nothing, the overlays go",
                             dim.id,
                             dim.sidecar
                         );
@@ -1359,6 +1359,24 @@ impl Canvas {
     }
 
     fn apply_command(&mut self, sidecar: &str, command: &Command) {
+        // The lock is the deepest dim (`dim.rs`): a dim asked while locked
+        // is reached at once, and never reaches `facts` or an overlay.
+        if let Command::Dim { id, .. } = command {
+            let replaced = match self.dims.ask(sidecar, *id, self.locks.dims_at_once()) {
+                Asked::Reached { sidecar, id } => {
+                    self.tell(&sidecar, CANVAS_EVENT_DIMMED, id, &format!("dim {id}"));
+                    tracing::info!(
+                        "dim {id}: the session is locked, so it is reached at once; told to \
+                         {sidecar}"
+                    );
+                    return;
+                }
+                Asked::Raise { replaced } => replaced,
+            };
+            if let Some(replaced) = replaced {
+                tracing::info!("dim {}: replaced by dim {id}", replaced.id);
+            }
+        }
         match self.slots.apply(command) {
             Ok(Applied::Upload { slot, image }) => {
                 let body = command.body();
@@ -1392,10 +1410,7 @@ impl Canvas {
         self.push_facts();
         match command {
             Command::Show { .. } => self.mark_dirty(Role::Background),
-            Command::Dim { id, .. } => {
-                if let Some(replaced) = self.dims.begin(sidecar, *id) {
-                    tracing::info!("dim {}: replaced by dim {id}", replaced.id);
-                }
+            Command::Dim { .. } => {
                 self.raise_overlays();
                 self.mark_dirty(Role::Overlay);
             }

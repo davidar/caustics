@@ -42,6 +42,17 @@
 //!   continue from the fade (docs/canvas.md, *The model*). Once the
 //!   compositor has locked, it shows no layer surface, so the overlays go
 //!   unseen.
+//! - **The lock is the deepest dim.** While locked ([`Locks::dims_at_once`]),
+//!   a dim asked for is reached at once: its sidecar hears
+//!   `CANVAS_EVENT_DIMMED` straight away, and no overlay is made. A dim
+//!   made under the lock would be unseen, and the keys at the lock are the
+//!   prompt's and cancel no dim, so it would outlive the lock and the unlock
+//!   would land on a dimmed desktop.
+//! - **At the unlock**, a dim still up is ended as at `locked`, without a
+//!   word to its sidecar: that sidecar was told `dimmed` long ago (or its
+//!   dim was ended at `locked` already), and a `dim --wait` client behind it
+//!   has had its answer and gone. It ends with the `unlock_and_destroy`, not
+//!   at the sync's answer, so no frame of the unlocked desktop is dimmed.
 //!
 //! - **Input on a lock surface** while locked (a key, the pointer moving, a
 //!   button, a touch) is told to the owner as `CANVAS_EVENT_INPUT` with `id`
@@ -85,8 +96,9 @@ pub enum Effect {
     Unlock,
     /// One `CanvasEvent` down `sidecar`'s stdin.
     Tell { sidecar: String, event: u32 },
-    /// End the dim that is up, if one is, without a word to its sidecar.
-    EndDim,
+    /// End the dim that is up, if one is, without a word to its sidecar;
+    /// the words say when (`at locked`, `at the unlock`), for the journal.
+    EndDim(&'static str),
     /// Reserve the prompt core for this sidecar, or end the reservation.
     Reserve(Option<String>),
     /// One line for the journal.
@@ -136,6 +148,13 @@ impl Locks {
     /// the lock panes and never on the top layer.
     pub fn held(&self) -> bool {
         matches!(self.phase, Phase::Locking | Phase::Locked)
+    }
+
+    /// Whether a dim asked for now is reached at once, with nothing drawn:
+    /// the compositor has said `locked` and no unlock is asked yet, so every
+    /// output shows a lock surface, darker than any dim.
+    pub fn dims_at_once(&self) -> bool {
+        self.phase == Phase::Locked
     }
 
     /// A `Lock` frame from `sidecar`.
@@ -214,6 +233,7 @@ impl Locks {
                 self.relock = None;
                 vec![
                     Effect::Note(format!("lock: {sidecar} asked to unlock; unlocking")),
+                    Effect::EndDim("at the unlock"),
                     Effect::Unlock,
                 ]
             }
@@ -250,7 +270,7 @@ impl Locks {
             Effect::Note(format!(
                 "lock: the compositor locked the session; told to {owner}"
             )),
-            Effect::EndDim,
+            Effect::EndDim("at locked"),
             Effect::Tell {
                 sidecar: owner,
                 event: CANVAS_EVENT_LOCKED,

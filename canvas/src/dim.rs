@@ -11,6 +11,14 @@
 //! because a dim without its owner is undone: a crashed sidecar never leaves
 //! a dark screen.
 //!
+//! **The lock is the deepest dim.** A `CANVAS_DIM` asked while the session
+//! is locked ([`Dims::ask`] with `locked`) is reached at once: its sidecar is
+//! told `CANVAS_EVENT_DIMMED` there and then, no overlay is made and nothing
+//! is drawn. The screen is already as dark as a dim would make it, and the
+//! keys typed at the lock are the lock prompt's, which cancel no dim: a dim
+//! made under the lock would outlive it and greet the unlock with a dimmed
+//! desktop (docs/canvas.md, *Surfaces*).
+//!
 //! What a dim looks like and when it is at its depth are the caustic's; this
 //! is routing, and it decides nothing.
 
@@ -23,6 +31,17 @@ pub struct Dim {
     pub id: u32,
     /// Whether `CANVAS_EVENT_DIMMED` has been written.
     pub said_dimmed: bool,
+}
+
+/// What a `CANVAS_DIM` comes to ([`Dims::ask`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Asked {
+    /// It is the dim now: its overlays go up. `replaced` is the dim it
+    /// replaced, which nobody is told about.
+    Raise { replaced: Option<Dim> },
+    /// The session is locked: the dim is reached already. Its sidecar is to
+    /// be written `CANVAS_EVENT_DIMMED` under its id now; nothing is up.
+    Reached { sidecar: String, id: u32 },
 }
 
 /// Whether a dim is up, and whose.
@@ -38,6 +57,21 @@ impl Dims {
 
     pub fn is_up(&self) -> bool {
         self.up.is_some()
+    }
+
+    /// A `CANVAS_DIM` from `sidecar` under `id`, with `locked` the lock's
+    /// word on whether the session is locked: reached at once if it is, the
+    /// dim up now otherwise.
+    pub fn ask(&mut self, sidecar: &str, id: u32, locked: bool) -> Asked {
+        if locked {
+            return Asked::Reached {
+                sidecar: sidecar.to_owned(),
+                id,
+            };
+        }
+        Asked::Raise {
+            replaced: self.begin(sidecar, id),
+        }
     }
 
     /// A `CANVAS_DIM` from `sidecar`: it is the dim now, whatever was before.

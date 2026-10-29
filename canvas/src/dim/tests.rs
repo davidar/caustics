@@ -53,3 +53,44 @@ fn a_gone_sidecar_takes_its_dim() {
     assert_eq!(dims.gone("caustics-wallpaper").map(|dim| dim.id), Some(2));
     assert!(!dims.is_up());
 }
+
+/// The lock is the deepest dim: a dim asked while locked is reached at once,
+/// under its own id, and nothing goes up; a dim up already is left as it
+/// was. Unlocked, the same ask is the dim up now.
+#[test]
+fn a_dim_asked_while_locked_is_reached_at_once() {
+    let mut dims = Dims::new();
+    assert_eq!(
+        dims.ask("caustics-wallpaper", 5, true),
+        Asked::Reached {
+            sidecar: "caustics-wallpaper".to_owned(),
+            id: 5
+        }
+    );
+    assert!(!dims.is_up(), "no overlay under the lock");
+    assert_eq!(dims.reached(1, 5), None, "told once, by the ask");
+    assert_eq!(dims.cancel(), None, "nothing for a key to cancel");
+
+    assert_eq!(
+        dims.ask("caustics-wallpaper", 6, false),
+        Asked::Raise { replaced: None }
+    );
+    assert!(dims.is_up());
+    assert_eq!(
+        dims.ask("caustics-wallpaper", 7, true),
+        Asked::Reached {
+            sidecar: "caustics-wallpaper".to_owned(),
+            id: 7
+        }
+    );
+    assert_eq!(
+        dims.end().map(|dim| dim.id),
+        Some(6),
+        "a locked ask replaces nothing"
+    );
+    dims.ask("caustics-wallpaper", 8, false);
+    let Asked::Raise { replaced } = dims.ask("caustics-wallpaper", 9, false) else {
+        panic!("unlocked, a dim is raised");
+    };
+    assert_eq!(replaced.map(|dim| dim.id), Some(8));
+}
