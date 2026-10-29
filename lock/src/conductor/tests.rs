@@ -41,11 +41,7 @@ impl Lock {
         Lock::with_reader(pam, locked_at_start, None)
     }
 
-    fn with_reader(
-        pam: Arc<dyn Pam>,
-        locked_at_start: bool,
-        reader: Option<Box<dyn Reader>>,
-    ) -> Lock {
+    fn with_reader(pam: Arc<dyn Pam>, locked_at_start: bool, sensor: Option<Sensor>) -> Lock {
         let (events, inbox) = unbounded_channel();
         let (frames_tx, frames) = unbounded_channel();
         let (hint, hints) = unbounded_channel();
@@ -60,7 +56,7 @@ impl Lock {
             sink,
             events.clone(),
             Some(hint),
-            reader,
+            sensor,
         );
         let task = tokio::spawn(conductor.run(inbox, locked_at_start));
         Lock {
@@ -412,21 +408,21 @@ struct FakeReader {
     runs: UnboundedSender<FakeRun>,
 }
 
-/// One run of the [`FakeReader`]: its id, and a channel that closes when it
-/// was stopped.
+/// One run of the [`FakeReader`]: its id, and a channel that says, when it
+/// was stopped, what the stop said.
 struct FakeRun {
     id: u32,
     user: String,
-    stopped: tokio::sync::oneshot::Receiver<()>,
+    stopped: tokio::sync::oneshot::Receiver<Option<String>>,
 }
 
 impl Reader for FakeReader {
     fn start(&mut self, user: &str, run: u32, _events: UnboundedSender<Event>) -> Run {
-        let (stop, stop_rx) = tokio::sync::oneshot::channel::<()>();
+        let (stop, stop_rx) = tokio::sync::oneshot::channel::<Option<String>>();
         let (stopped_tx, stopped) = tokio::sync::oneshot::channel();
         let task = tokio::spawn(async move {
-            let _ = stop_rx.await;
-            let _ = stopped_tx.send(());
+            let why = stop_rx.await.unwrap_or(None);
+            let _ = stopped_tx.send(why);
         });
         let _ = self.runs.send(FakeRun {
             id: run,
@@ -439,10 +435,17 @@ impl Reader for FakeReader {
 
 const READY: &str = "Touch the fingerprint reader";
 
-/// A conductor with a fake reader, and where its runs are announced.
+/// A conductor with a fake reader, and where its runs are announced. Its
+/// windows are the default: none closes within a test.
 fn with_fake_reader(pam: Arc<dyn Pam>) -> (Lock, UnboundedReceiver<FakeRun>) {
+    with_windows(pam, Windows::default())
+}
+
+/// A conductor with a fake reader held in `windows`.
+fn with_windows(pam: Arc<dyn Pam>, windows: Windows) -> (Lock, UnboundedReceiver<FakeRun>) {
     let (runs, announced) = unbounded_channel();
-    let lock = Lock::with_reader(pam, false, Some(Box::new(FakeReader { runs })));
+    let reader: Box<dyn Reader> = Box::new(FakeReader { runs });
+    let lock = Lock::with_reader(pam, false, Some(Sensor { reader, windows }));
     (lock, announced)
 }
 
@@ -453,11 +456,12 @@ async fn next_run(runs: &mut UnboundedReceiver<FakeRun>) -> FakeRun {
         .expect("the reader's channel")
 }
 
-async fn stopped(run: FakeRun) {
+/// Wait for `run` to be stopped; what its stop said.
+async fn stopped(run: FakeRun) -> Option<String> {
     tokio::time::timeout(WAIT, run.stopped)
         .await
         .expect("the run is stopped in time")
-        .expect("the run's task said so");
+        .expect("the run's task said so")
 }
 
 impl Lock {
@@ -635,5 +639,209 @@ async fn no_reader_starts_no_run() {
     lock.expect_ask().await;
     lock.finger(1, Finger::Match);
     lock.silent(Duration::from_millis(200)).await;
+    assert_eq!(lock.close().await, 0);
+}
+
+/// Windows short enough for a test, apart enough to tell.
+const SHORT: Windows = Windows {
+    idle: Duration::from_millis(300),
+    cap: Duration::from_millis(900),
+    rest: Duration::from_millis(500),
+};
+
+fn dry_run_pam() -> Arc<dyn Pam> {
+    Arc::new(DryRun::new(Secret::new(RIGHT.to_vec())))
+}
+
+impl Lock {
+    fn input(&self) {
+        self.canvas(CANVAS_EVENT_INPUT);
+    }
+}
+
+/// Nothing announced within `quiet`: no window opened.
+async fn no_run(runs: &mut UnboundedReceiver<FakeRun>, quiet: Duration) {
+    if let Ok(Some(run)) = tokio::time::timeout(quiet, runs.recv()).await {
+        panic!("a run {} opened", run.id);
+    }
+}
+
+/// `locked` opens a window; with no trigger it closes after `idle`, its run
+/// stopped with the close's reason, the ready line goes from a fresh
+/// conversation, and a finding of the stopped run is dropped.
+#[tokio::test]
+async fn locked_opens_a_window_that_closes_when_idle() {
+    let (mut lock, mut runs) = with_windows(dry_run_pam(), SHORT);
+    lock.locked().await;
+    let opened = tokio::time::Instant::now();
+    let run = next_run(&mut runs).await;
+    let id = lock.expect_ask().await;
+    lock.finger(
+        run.id,
+        Finger::Ready {
+            how: READY.to_owned(),
+        },
+    );
+    lock.expect(PROMPT_INFO, 0, READY).await;
+    let run_id = run.id;
+    assert_eq!(stopped(run).await.as_deref(), Some("window closed (idle)"));
+    assert!(opened.elapsed() >= SHORT.idle, "closed before idle");
+    assert!(opened.elapsed() < SHORT.cap, "closed only at the cap");
+    lock.finger(run_id, Finger::Match);
+    lock.silent(Duration::from_millis(200)).await;
+    // A fresh conversation no longer says the reader is live.
+    lock.dismiss(id);
+    lock.expect(PROMPT_DONE, 0, "").await;
+    lock.expect_ask().await;
+    assert_eq!(lock.status().await, "ok locked=yes attempts=0");
+    assert_eq!(lock.close().await, 0);
+}
+
+/// Input reaching a lock surface opens a window during the lock, and an
+/// input while one is open moves its close out.
+#[tokio::test]
+async fn input_opens_a_window_and_refreshes_an_open_one() {
+    let windows = Windows {
+        rest: Duration::ZERO,
+        ..SHORT
+    };
+    let (mut lock, mut runs) = with_windows(dry_run_pam(), windows);
+    // Input before the lock opens nothing.
+    lock.input();
+    no_run(&mut runs, Duration::from_millis(100)).await;
+    lock.locked().await;
+    let first = next_run(&mut runs).await;
+    lock.expect_ask().await;
+    assert_eq!(
+        stopped(first).await.as_deref(),
+        Some("window closed (idle)")
+    );
+    lock.input();
+    let second = next_run(&mut runs).await;
+    let opened = tokio::time::Instant::now();
+    // Two refreshes, each before the idle runs out.
+    for _ in 0..2 {
+        tokio::time::sleep(SHORT.idle * 2 / 3).await;
+        lock.input();
+    }
+    assert_eq!(
+        stopped(second).await.as_deref(),
+        Some("window closed (idle)")
+    );
+    assert!(
+        opened.elapsed() >= SHORT.idle * 4 / 3 + SHORT.idle,
+        "the refreshes did not move the close out: {:?}",
+        opened.elapsed()
+    );
+    no_run(&mut runs, Duration::from_millis(100)).await;
+    assert_eq!(lock.close().await, 0);
+}
+
+/// However often it is refreshed, a window closes at its cap.
+#[tokio::test]
+async fn a_window_closes_at_its_cap_however_often_refreshed() {
+    let (mut lock, mut runs) = with_windows(dry_run_pam(), SHORT);
+    lock.locked().await;
+    let opened = tokio::time::Instant::now();
+    let run = next_run(&mut runs).await;
+    lock.expect_ask().await;
+    let refreshing = {
+        let events = lock.events.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(SHORT.idle / 3).await;
+                let event = Event::Canvas(CanvasEventBody {
+                    event: CANVAS_EVENT_INPUT,
+                    ..CanvasEventBody::default()
+                });
+                if events.send(event).is_err() {
+                    return;
+                }
+            }
+        })
+    };
+    assert_eq!(stopped(run).await.as_deref(), Some("window closed (cap)"));
+    assert!(opened.elapsed() >= SHORT.cap, "closed before the cap");
+    // Still refreshing: the rest holds the next window off.
+    no_run(&mut runs, SHORT.rest / 2).await;
+    refreshing.abort();
+    assert_eq!(lock.close().await, 0);
+}
+
+/// A trigger during the rest after a window opens nothing; one after the
+/// rest does.
+#[tokio::test]
+async fn a_trigger_in_the_rest_opens_nothing_and_one_after_it_does() {
+    let (mut lock, mut runs) = with_windows(dry_run_pam(), SHORT);
+    lock.locked().await;
+    let run = next_run(&mut runs).await;
+    lock.expect_ask().await;
+    stopped(run).await;
+    let closed = tokio::time::Instant::now();
+    lock.input();
+    lock.send(Event::Resume);
+    no_run(&mut runs, SHORT.rest / 2).await;
+    tokio::time::sleep(
+        (closed + SHORT.rest).saturating_duration_since(tokio::time::Instant::now()),
+    )
+    .await;
+    lock.input();
+    let after = next_run(&mut runs).await;
+    lock.finger(after.id, Finger::Match);
+    lock.expect(PROMPT_DONE, 1, "").await;
+    lock.expect_lock(LOCK_UNLOCK).await;
+    assert_eq!(stopped(after).await, None, "the unlock's stop says nothing");
+    assert_eq!(lock.close().await, 0);
+}
+
+/// A resume from suspend opens a window: the person is back. Not while
+/// unlocked.
+#[tokio::test]
+async fn a_resume_opens_a_window() {
+    let (mut lock, mut runs) = with_windows(dry_run_pam(), SHORT);
+    lock.send(Event::Resume);
+    no_run(&mut runs, Duration::from_millis(100)).await;
+    lock.locked().await;
+    let first = next_run(&mut runs).await;
+    lock.expect_ask().await;
+    // The rest after the first window, then the resume.
+    stopped(first).await;
+    tokio::time::sleep(SHORT.rest + Duration::from_millis(50)).await;
+    lock.send(Event::Resume);
+    let resumed = next_run(&mut runs).await;
+    lock.finger(
+        resumed.id,
+        Finger::Ready {
+            how: READY.to_owned(),
+        },
+    );
+    lock.expect(PROMPT_INFO, 0, READY).await;
+    assert_eq!(lock.close().await, 0);
+    assert_eq!(stopped(resumed).await, None);
+}
+
+/// A reader that cannot verify for this lock opens no window again until
+/// the next lock.
+#[tokio::test]
+async fn an_unavailable_reader_opens_no_window_until_the_next_lock() {
+    let windows = Windows {
+        rest: Duration::ZERO,
+        ..SHORT
+    };
+    let (mut lock, mut runs) = with_windows(dry_run_pam(), windows);
+    lock.locked().await;
+    let run = next_run(&mut runs).await;
+    let id = lock.expect_ask().await;
+    lock.finger(run.id, Finger::Unavailable("no reader".to_owned()));
+    assert_eq!(stopped(run).await, None);
+    lock.input();
+    no_run(&mut runs, Duration::from_millis(200)).await;
+    lock.type_in(id, RIGHT);
+    lock.expect(PROMPT_DONE, 1, "").await;
+    lock.expect_lock(LOCK_UNLOCK).await;
+    lock.canvas(CANVAS_EVENT_UNLOCKED);
+    assert!(!lock.hint().await);
+    lock.locked().await;
+    next_run(&mut runs).await;
     assert_eq!(lock.close().await, 0);
 }

@@ -27,11 +27,19 @@
 //! `PROMPT_ERROR` before it when PAM said no.
 //!
 //! **The fingerprint reader** is a second way in, beside the conversation
-//! ([`crate::fingerprint`]). A run starts when the session is locked and
-//! stops when it is not. Its lines go to the host under the conversation on
-//! screen: the reader's ready line after every conversation's title, so the
-//! panel always says the reader is live, and a no-match or a scan to retry
-//! as it comes. A line with no conversation to carry it (a pause between
+//! ([`crate::fingerprint`]). It is held in **windows**, while someone is at
+//! the lock, and rests otherwise ([`Windows`]): libfprint disables a sensor
+//! that has run for a few minutes and lets it cool for minutes, so a reader
+//! held for the whole of a long lock is dead for most of it. A window opens
+//! on the host's `locked`, on input reaching a lock surface (the host's
+//! `CANVAS_EVENT_INPUT`, at most one in five seconds) and on a resume from
+//! suspend; it stays open [`Windows::idle`] past its last trigger, never
+//! longer than [`Windows::cap`], and after it closes no window opens for
+//! [`Windows::rest`]. Each window is one run of the reader; the unlock, or
+//! the host going, ends it as it ends everything. Its lines go to the host
+//! under the conversation on screen: the reader's ready line after every
+//! conversation's title while a window's verify is live, and a no-match or
+//! a scan to retry as it comes. A line with no conversation to carry it (a pause between
 //! two) or while an answer is with PAM (an error line then would read as a
 //! failed answer) waits for the next frame it can follow. A match is a
 //! verdict as PAM's success is: the conversation on screen ends with
@@ -42,11 +50,12 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use caustics_bar_abi::wire::{
-    Answer, CANVAS_EVENT_LOCKED, CANVAS_EVENT_UNLOCKED, CanvasEventBody, Frame, LOCK_LOCK,
-    LOCK_UNLOCK, LockBody, MAX_NAME_LEN, PROMPT_DONE, PROMPT_ECHO, PROMPT_ERROR, PROMPT_INFO,
-    PROMPT_INFO_TITLE, PROMPT_SECRET, Prompt,
+    Answer, CANVAS_EVENT_INPUT, CANVAS_EVENT_LOCKED, CANVAS_EVENT_UNLOCKED, CanvasEventBody, Frame,
+    LOCK_LOCK, LOCK_UNLOCK, LockBody, MAX_NAME_LEN, PROMPT_DONE, PROMPT_ECHO, PROMPT_ERROR,
+    PROMPT_INFO, PROMPT_INFO_TITLE, PROMPT_SECRET, Prompt,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::time::Instant;
 
 use crate::fingerprint::{Finger, NOT_RECOGNISED, Reader, Run};
 use crate::pam::{Conversation, Pam, Reply, Step, Verdict};
@@ -63,6 +72,98 @@ pub type Sink = Box<dyn FnMut(&Frame) -> std::io::Result<()> + Send>;
 /// one asks.
 pub const FIRST_PAUSE: Duration = Duration::from_secs(1);
 pub const LAST_PAUSE: Duration = Duration::from_secs(30);
+
+/// How long the reader is held, and rested, while the session is locked:
+/// `CAUSTICS_LOCK_FINGERPRINT_WINDOW`, `idle,cap,rest` in seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Windows {
+    /// A window stays open this long past its last trigger.
+    pub idle: Duration,
+    /// And never longer than this since it opened, however often it is
+    /// triggered: a sensor run continuously for a few minutes is disabled.
+    pub cap: Duration,
+    /// After a window closes, no window opens for this long. The sensor
+    /// heats about twice as fast as it cools in the band where it may still
+    /// run, so it rests longer than it ran.
+    pub rest: Duration,
+}
+
+impl Default for Windows {
+    fn default() -> Windows {
+        Windows {
+            idle: Duration::from_secs(30),
+            cap: Duration::from_secs(90),
+            rest: Duration::from_secs(120),
+        }
+    }
+}
+
+impl Windows {
+    /// `idle,cap,rest`, each a whole number of seconds, `idle` and `cap`
+    /// not 0; `None` for anything else.
+    pub fn parse(text: &str) -> Option<Windows> {
+        let secs = |part: &str| part.trim().parse::<u64>().ok().map(Duration::from_secs);
+        let mut parts = text.split(',');
+        let windows = Windows {
+            idle: secs(parts.next()?)?,
+            cap: secs(parts.next()?)?,
+            rest: secs(parts.next()?)?,
+        };
+        if parts.next().is_some() || windows.idle.is_zero() || windows.cap.is_zero() {
+            return None;
+        }
+        Some(windows)
+    }
+}
+
+/// What opened a window, for its witness.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Trigger {
+    /// The host said `locked`: the lock just went up.
+    Locked,
+    /// Input reached a lock surface (the host's `CANVAS_EVENT_INPUT`).
+    Input,
+    /// A resume from suspend: the person is back.
+    Resume,
+}
+
+impl Trigger {
+    fn name(self) -> &'static str {
+        match self {
+            Trigger::Locked => "locked",
+            Trigger::Input => "input",
+            Trigger::Resume => "resume",
+        }
+    }
+}
+
+/// A window open now.
+#[derive(Clone, Copy, Debug)]
+struct Window {
+    opened: Instant,
+    /// Its last trigger.
+    last: Instant,
+}
+
+impl Window {
+    /// When it closes, and why: `idle` since the last trigger, or `cap`
+    /// since it opened, whichever is first.
+    fn due(&self, windows: Windows) -> (Instant, &'static str) {
+        let idle = self.last + windows.idle;
+        let cap = self.opened + windows.cap;
+        if cap <= idle {
+            (cap, "cap")
+        } else {
+            (idle, "idle")
+        }
+    }
+}
+
+/// The fingerprint reader, and the windows it is held in.
+pub struct Sensor {
+    pub reader: Box<dyn Reader>,
+    pub windows: Windows,
+}
 
 /// Everything the conductor wakes up for.
 pub enum Event {
@@ -82,6 +183,10 @@ pub enum Event {
     Retry,
     /// What the fingerprint reader's run `run` found.
     Finger { run: u32, finger: Finger },
+    /// logind's `PrepareForSleep(false)`: the machine has resumed.
+    Resume,
+    /// The window of run `run` may be due to close.
+    WindowDue { run: u32 },
     /// The host closed stdin.
     Closed,
 }
@@ -128,7 +233,15 @@ const RELEASE_WAIT: Duration = Duration::from_millis(2500);
 /// The fingerprint reader, when it is on.
 struct Fingerprint {
     reader: Box<dyn Reader>,
-    /// The run of the lock now held.
+    windows: Windows,
+    /// The window open now, whose run is `run`.
+    window: Option<Window>,
+    /// No window opens before this: the rest after the last one closed.
+    resting_until: Option<Instant>,
+    /// The reader said it cannot verify for this lock: no window opens
+    /// until the next.
+    unavailable: bool,
+    /// The run of the window open now.
     run: Option<Run>,
     /// The id the next run is given.
     run_id: u32,
@@ -172,7 +285,7 @@ pub struct Conductor {
 impl Conductor {
     /// A conductor whose PAM threads and fingerprint runs report back on
     /// `events`. `user` is who PAM authenticates and whose finger the reader
-    /// verifies; `title` heads every conversation. `reader` is `None` when
+    /// verifies; `title` heads every conversation. `sensor` is `None` when
     /// the fingerprint is off.
     pub fn new(
         pam: Arc<dyn Pam>,
@@ -181,7 +294,7 @@ impl Conductor {
         sink: Sink,
         events: UnboundedSender<Event>,
         hint: Option<UnboundedSender<bool>>,
-        reader: Option<Box<dyn Reader>>,
+        sensor: Option<Sensor>,
     ) -> Self {
         Conductor {
             pam,
@@ -197,8 +310,12 @@ impl Conductor {
             waiters: Vec::new(),
             pause: FIRST_PAUSE,
             retrying: false,
-            finger: reader.map(|reader| Fingerprint {
+            finger: sensor.map(|Sensor { reader, windows }| Fingerprint {
                 reader,
+                windows,
+                window: None,
+                resting_until: None,
+                unavailable: false,
                 run: None,
                 run_id: 1,
                 current: 0,
@@ -237,6 +354,14 @@ impl Conductor {
                     self.begin()
                 }
                 Event::Finger { run, finger } => self.finger(run, finger),
+                Event::Resume => {
+                    self.trigger(Trigger::Resume);
+                    true
+                }
+                Event::WindowDue { run } => {
+                    self.window_due(run);
+                    true
+                }
                 Event::Closed => {
                     witness("stdin closed; exiting");
                     false
@@ -270,42 +395,101 @@ impl Conductor {
         0
     }
 
-    /// Enter `phase`: a run begins as the session becomes locked, and ends
-    /// as it stops being so.
+    /// Enter `phase`: a lock begins with the reader not yet given up on, and
+    /// the window open as it stops being locked ends.
     fn set_phase(&mut self, phase: Phase) {
         let was = self.phase;
         self.phase = phase;
-        if was != Phase::Locked && phase == Phase::Locked {
-            self.start_reader();
+        if was != Phase::Locked
+            && phase == Phase::Locked
+            && let Some(finger) = self.finger.as_mut()
+        {
+            finger.unavailable = false;
         } else if was == Phase::Locked && phase != Phase::Locked {
             self.stop_reader();
         }
     }
 
-    fn start_reader(&mut self) {
+    /// Someone is at the lock: open a window, or keep the open one open
+    /// longer. Nothing while resting, nor for a reader that cannot verify
+    /// for this lock.
+    fn trigger(&mut self, trigger: Trigger) {
+        if self.phase != Phase::Locked {
+            return;
+        }
         let user = self.user.clone();
         let events = self.events.clone();
         let Some(finger) = self.finger.as_mut() else {
             return;
         };
-        if finger.run.is_some() {
+        if finger.unavailable {
             return;
         }
+        let now = Instant::now();
+        if let Some(window) = finger.window.as_mut() {
+            window.last = now;
+            let (due, _) = window.due(finger.windows);
+            due_at(events, finger.current, due);
+            return;
+        }
+        if finger.resting_until.is_some_and(|until| now < until) {
+            return;
+        }
+        finger.resting_until = None;
+        witness(&format!("fingerprint: window open ({})", trigger.name()));
         let id = finger.run_id;
         finger.run_id = finger.run_id.checked_add(1).unwrap_or(1);
         finger.current = id;
-        finger.run = Some(finger.reader.start(&user, id, events));
+        finger.run = Some(finger.reader.start(&user, id, events.clone()));
+        let window = Window {
+            opened: now,
+            last: now,
+        };
+        finger.window = Some(window);
+        due_at(events, id, window.due(finger.windows).0);
     }
 
-    fn stop_reader(&mut self) {
+    /// Run `run`'s window may be due: closed, and the rest begun, if it is.
+    /// A trigger since its timer was set moved the close out, and set
+    /// another.
+    fn window_due(&mut self, run: u32) {
         let Some(finger) = self.finger.as_mut() else {
             return;
         };
+        let Some(window) = finger.window.filter(|_| finger.current == run) else {
+            return;
+        };
+        let now = Instant::now();
+        let (due, why) = window.due(finger.windows);
+        if now < due {
+            return;
+        }
+        finger.resting_until = Some(now + finger.windows.rest);
+        self.end_window(Some(format!("window closed ({why})")));
+    }
+
+    /// The lock is over, or the host went: the window open ends, and no
+    /// rest follows.
+    fn stop_reader(&mut self) {
+        self.end_window(None);
+    }
+
+    /// The window open, if any, closes: its run is stopped (the run's
+    /// witness says `why` ahead of its release) and the panel no longer says
+    /// the reader is live.
+    fn end_window(&mut self, why: Option<String>) {
+        let Some(finger) = self.finger.as_mut() else {
+            return;
+        };
+        finger.window = None;
         finger.ready = None;
         finger.pending = None;
         finger.releasing.retain(|run| !run.is_finished());
         if let Some(run) = finger.run.take() {
-            finger.releasing.push(run.stop());
+            finger.releasing.push(match why {
+                Some(why) => run.close(why),
+                None => run.stop(),
+            });
         }
     }
 
@@ -391,7 +575,13 @@ impl Conductor {
                 for waiter in self.waiters.drain(..) {
                     let _ = waiter.send(LOCKED.to_owned());
                 }
+                self.trigger(Trigger::Locked);
                 self.begin()
+            }
+            // Input reached a lock surface: someone is at the lock.
+            CANVAS_EVENT_INPUT if event.id == 0 => {
+                self.trigger(Trigger::Input);
+                true
             }
             CANVAS_EVENT_UNLOCKED => {
                 if self.phase != Phase::Unlocking {
@@ -584,11 +774,19 @@ impl Conductor {
                 kind: PROMPT_INFO,
                 text,
             }),
-            Finger::Gone(_) | Finger::Unavailable(_) => {
-                // The run said why on its own witness; the panel no longer
-                // says the reader is live.
+            Finger::Gone(_) => {
+                // The run said why on its own witness, and claims again
+                // within the window; the panel no longer says the reader is
+                // live.
                 state.ready = None;
                 state.pending = None;
+                true
+            }
+            Finger::Unavailable(_) => {
+                // Said once by the run; no window opens again until the next
+                // lock, and a refused reader is not heated, so no rest.
+                state.unavailable = true;
+                self.stop_reader();
                 true
             }
             Finger::Match => self.matched(),
@@ -662,6 +860,15 @@ impl Conductor {
         let _ = reply.send(reply_to_pam);
         true
     }
+}
+
+/// Tell the conductor on `events`, at `due`, that run `run`'s window may be
+/// due to close.
+fn due_at(events: UnboundedSender<Event>, run: u32, due: Instant) {
+    tokio::spawn(async move {
+        tokio::time::sleep_until(due).await;
+        let _ = events.send(Event::WindowDue { run });
+    });
 }
 
 /// `text` cut to at most `max` bytes, at a character boundary.

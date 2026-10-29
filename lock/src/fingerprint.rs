@@ -5,15 +5,17 @@
 //! `pam_fprintd` in it cannot take a password and a finger at once (its
 //! manual, pam_fprintd(8), says so under its limitations). So the lock does
 //! not put the reader in its PAM stack at all. While the session is locked
-//! this module claims the default reader for the lock's user and keeps a
-//! verification going, beside the PAM conversation on screen; a match is a
-//! verdict the conductor unlocks on, as it would on PAM's success. GNOME's
+//! and someone is at it, this module claims the default reader for the
+//! lock's user and keeps a verification going, beside the PAM conversation
+//! on screen; a match is a verdict the conductor unlocks on, as it would on
+//! PAM's success. GNOME's
 //! answer (two PAM stacks, each in a worker process of its own) is not this
 //! one: the reader is one D-Bus device, and fprintd is its only owner.
 //!
 //! [`Reader`] is what a reader is to the conductor, so the conductor's tests
 //! run against a fake. [`Fprintd`] is the real one: one **verification run
-//! per lock**, a task that
+//! per window** (the conductor holds the reader only while someone is at the
+//! lock, `conductor::Windows`), a task that
 //!
 //! - claims the default device for the user and loops `VerifyStart("any")`,
 //!   a `VerifyStatus`, and what that status means, sending the conductor a
@@ -34,8 +36,9 @@
 //! - on a reader that cannot ever verify for this lock (no reader, no
 //!   enrolled prints, no permission, no system bus) says so once and does
 //!   nothing more until the next lock;
-//! - when the conductor stops it (the lock is over, or the host went), stops
-//!   the verify and releases the device, within a bound, and ends. The
+//! - when the conductor stops it (the window closed, the lock is over, or the
+//!   host went), stops the verify and releases the device, within a bound,
+//!   and ends. The
 //!   release matters: a polkit prompt's PAM stack, once the session is
 //!   unlocked, must find the reader free.
 //!
@@ -132,21 +135,24 @@ pub fn retry_line(result: &str) -> &'static str {
     }
 }
 
-/// A reader, to the conductor: one verification run per lock.
+/// A reader, to the conductor: one verification run per window
+/// (`conductor::Windows`).
 pub trait Reader: Send + 'static {
     /// Begin a run for `user`, its findings sent on `events` as
-    /// [`Event::Finger`] under `run`. The run lasts until [`Run::stop`].
+    /// [`Event::Finger`] under `run`. The run lasts until [`Run::stop`] or
+    /// [`Run::close`].
     fn start(&mut self, user: &str, run: u32, events: UnboundedSender<Event>) -> Run;
 }
 
-/// A run under way: its stop, and its task.
+/// A run under way: its stop, and its task. The stop carries what the run's
+/// witness says before `released`, if anything.
 pub struct Run {
-    stop: Option<oneshot::Sender<()>>,
+    stop: Option<oneshot::Sender<Option<String>>>,
     task: JoinHandle<()>,
 }
 
 impl Run {
-    pub fn new(stop: oneshot::Sender<()>, task: JoinHandle<()>) -> Run {
+    pub fn new(stop: oneshot::Sender<Option<String>>, task: JoinHandle<()>) -> Run {
         Run {
             stop: Some(stop),
             task,
@@ -155,9 +161,19 @@ impl Run {
 
     /// Tell the run the lock is over. The task releases what it holds and
     /// ends; the handle resolves when it has.
-    pub fn stop(mut self) -> JoinHandle<()> {
+    pub fn stop(self) -> JoinHandle<()> {
+        self.end(None)
+    }
+
+    /// Stop the run as [`Run::stop`] does, its witness saying `why` (a
+    /// window closed) ahead of the release.
+    pub fn close(self, why: String) -> JoinHandle<()> {
+        self.end(Some(why))
+    }
+
+    fn end(mut self, why: Option<String>) -> JoinHandle<()> {
         if let Some(stop) = self.stop.take() {
-            let _ = stop.send(());
+            let _ = stop.send(why);
         }
         self.task
     }
@@ -248,23 +264,42 @@ impl Report {
     }
 }
 
-/// The conductor's word that the lock is over: a stop sent, or the sender
+/// The conductor's word that the run is over: a stop sent, or the sender
 /// dropped (the conductor is gone).
 struct Stop {
-    rx: oneshot::Receiver<()>,
+    rx: oneshot::Receiver<Option<String>>,
     stopped: bool,
+    /// What the stop said to put ahead of the release.
+    why: Option<String>,
 }
 
 impl Stop {
-    fn new(rx: oneshot::Receiver<()>) -> Stop {
-        Stop { rx, stopped: false }
+    fn new(rx: oneshot::Receiver<Option<String>>) -> Stop {
+        Stop {
+            rx,
+            stopped: false,
+            why: None,
+        }
     }
 
     /// Resolves once the stop has come; at once every time after.
     async fn wait(&mut self) {
         if !self.stopped {
-            let _ = (&mut self.rx).await;
+            if let Ok(why) = (&mut self.rx).await {
+                self.why = why;
+            }
             self.stopped = true;
+        }
+    }
+
+    /// The run's last witness: why it stopped, if the stop said, and
+    /// whether a claim was let go.
+    fn say(&self, released: bool) {
+        match (self.why.as_deref(), released) {
+            (Some(why), true) => witness(&format!("fingerprint: {why}; released")),
+            (Some(why), false) => witness(&format!("fingerprint: {why}")),
+            (None, true) => witness("fingerprint: released"),
+            (None, false) => {}
         }
     }
 
@@ -345,15 +380,14 @@ async fn verify_run(
         let claimed = held.release(timings.release_bound).await;
         match end {
             End::Stopped => {
-                if claimed {
-                    witness("fingerprint: released");
-                }
+                stop.say(claimed);
                 return;
             }
             End::Unavailable(why) => {
                 witness(&format!("fingerprint: {why}; password only"));
                 report.send(Finger::Unavailable(why));
                 stop.wait().await;
+                stop.say(false);
                 return;
             }
             End::Gone { why, lived } => {
@@ -366,6 +400,7 @@ async fn verify_run(
                 ));
                 report.send(Finger::Gone(why));
                 if stop.or(tokio::time::sleep(backoff)).await.is_none() {
+                    stop.say(false);
                     return;
                 }
                 backoff = (backoff * 2).min(timings.last_backoff);

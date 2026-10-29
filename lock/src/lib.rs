@@ -30,9 +30,11 @@
 //!   `Unlock` signal is witnessed and ignored.
 //! - **The fingerprint reader** is spoken to directly, on fprintd's D-Bus
 //!   interface ([`fingerprint`]), while the conversation runs: PAM asks one
-//!   thing at a time, so the reader is not in the PAM stack. A match is a
-//!   success; the password keeps working throughout; the reader is released
-//!   when the lock is over.
+//!   thing at a time, so the reader is not in the PAM stack. It is held in
+//!   windows while someone is at the lock (the lock going up, input on a
+//!   lock surface, a resume) and rests otherwise ([`conductor::Windows`]). A
+//!   match is a success; the password keeps working throughout; the reader
+//!   is released when a window closes and when the lock is over.
 //! - **Nothing typed is ever written anywhere but to PAM**, and no witness
 //!   carries an answer. The host's stdin is read unbuffered, so no read
 //!   buffer keeps a copy of one.
@@ -48,6 +50,9 @@
 //!   unlock path, or PAM waits on the reader too.
 //! - `CAUSTICS_LOCK_FINGERPRINT`: `0` is no reader; unset or anything else
 //!   is the reader verifying while locked.
+//! - `CAUSTICS_LOCK_FINGERPRINT_WINDOW`: the reader's windows, `idle,cap,rest`
+//!   in seconds, default `30,90,120`; a malformed value is one witness and
+//!   the default.
 //! - `CAUSTICS_LOCK_DRY_RUN_SECRET`: the **dry run**. PAM is not touched: a
 //!   conversation is one echo-off ask, `Password: `, compared with these
 //!   bytes. logind is still spoken to if a system bus answers, so a test
@@ -77,7 +82,7 @@ use std::sync::Arc;
 use caustics_bar_abi::wire::{self, Frame, Secret};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
-use crate::conductor::{Conductor, Event, Sink};
+use crate::conductor::{Conductor, Event, Sensor, Sink, Windows};
 use crate::fingerprint::{Fprintd, Reader};
 use crate::pam::{DryRun, LinuxPam, Pam};
 
@@ -106,6 +111,9 @@ pub struct Settings {
     pub dry_run: Option<Secret>,
     /// `CAUSTICS_LOCK_FINGERPRINT` is not `0`.
     pub fingerprint: bool,
+    /// `CAUSTICS_LOCK_FINGERPRINT_WINDOW`, or the default; `Err` holds a
+    /// value that is not `idle,cap,rest`, for the witness.
+    pub windows: Result<Windows, String>,
 }
 
 impl Settings {
@@ -114,16 +122,19 @@ impl Settings {
             std::env::var_os("CAUSTICS_LOCK_PAM_SERVICE"),
             std::env::var_os("CAUSTICS_LOCK_DRY_RUN_SECRET"),
             std::env::var_os("CAUSTICS_LOCK_FINGERPRINT"),
+            std::env::var_os("CAUSTICS_LOCK_FINGERPRINT_WINDOW"),
         )
     }
 
     /// The rule, apart from the environment: an empty service is the
     /// default, an empty secret is no dry run (it would unlock on an empty
-    /// answer), and the reader is on unless its variable is `0`.
+    /// answer), the reader is on unless its variable is `0`, and its windows
+    /// are the default when unset or empty.
     pub fn from_vars(
         service: Option<OsString>,
         secret: Option<OsString>,
         fingerprint: Option<OsString>,
+        windows: Option<OsString>,
     ) -> Settings {
         Settings {
             service: service
@@ -134,6 +145,13 @@ impl Settings {
                 .filter(|s| !s.is_empty())
                 .map(|s| Secret::new(s.into_encoded_bytes())),
             fingerprint: fingerprint.is_none_or(|f| f != "0"),
+            windows: match windows.filter(|w| !w.is_empty()) {
+                None => Ok(Windows::default()),
+                Some(text) => text
+                    .to_str()
+                    .and_then(Windows::parse)
+                    .ok_or_else(|| text.to_string_lossy().into_owned()),
+            },
         }
     }
 }
@@ -280,13 +298,25 @@ pub async fn serve(
         Some(logind) => (Some(logind.hint.clone()), logind.locked),
         None => (None, false),
     };
-    let reader: Option<Box<dyn Reader>> = if settings.fingerprint {
-        Some(Box::new(Fprintd::system()))
+    let sensor = if settings.fingerprint {
+        let windows = settings.windows.unwrap_or_else(|text| {
+            let windows = Windows::default();
+            witness(&format!(
+                "fingerprint: CAUSTICS_LOCK_FINGERPRINT_WINDOW={text} is not idle,cap,rest in \
+                 seconds; {},{},{}",
+                windows.idle.as_secs(),
+                windows.cap.as_secs(),
+                windows.rest.as_secs()
+            ));
+            windows
+        });
+        let reader: Box<dyn Reader> = Box::new(Fprintd::system());
+        Some(Sensor { reader, windows })
     } else {
         witness("fingerprint: off (CAUSTICS_LOCK_FINGERPRINT=0)");
         None
     };
-    let code = Conductor::new(pam, user, title, sink, events, hint, reader)
+    let code = Conductor::new(pam, user, title, sink, events, hint, sensor)
         .run(inbox, locked)
         .await;
     if let Some(path) = socket {
