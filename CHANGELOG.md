@@ -139,7 +139,13 @@ fprintd on the system bus itself rather than through PAM (which asks one
 thing at a time): a match unlocks, a no-match is a line on the panel and a
 fresh verify, a reader that goes is claimed again with a backoff, and the
 reader is released at the unlock; `CAUSTICS_LOCK_FINGERPRINT=0` turns it
-off. The canvas journals a line shown beside an ask, without its words.
+off. The reader is held in windows while someone is at the lock (the lock
+going up, input on a lock surface, which the canvas tells the sidecar as
+`CANVAS_EVENT_INPUT`, and a resume from suspend) and rests between them,
+since libfprint disables a sensor that has run for a few minutes; a reader
+that goes right after its verify started is claimed again after a doubling
+pause rather than every second (`CAUSTICS_LOCK_FINGERPRINT_WINDOW`). The
+canvas journals a line shown beside an ask, without its words.
 
 **The canvas's lock surfaces.** The canvas host now locks: the lock
 sidecar's `Lock` takes `ext_session_lock_v1`, a lock surface goes on every

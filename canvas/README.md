@@ -148,8 +148,11 @@ lock surface on every output, draws the wallpaper darkened by
 a conversation PAM says succeeded, or a fingerprint fprintd says matched,
 unlocks; Escape starts a fresh one, and the screen is never dismissed. The
 fingerprint reader is the sidecar's own: it verifies beside the password
-while locked, its lines show on the panel under the conversation's title,
-and it is released at the unlock (lock/README.md, *Behaviour*). While locked, the prompt is the lock's
+while someone is at the lock, in windows that the lock going up, input on
+a lock surface (which the canvas tells the sidecar, at most once in five
+seconds) and a resume open; its lines show on the panel under the
+conversation's title, and it is released when a window closes and at the
+unlock (lock/README.md, *Behaviour*). While locked, the prompt is the lock's
 alone: another sink asking (a polkit request) is told no at once. A dim up
 when the lock comes is ended.
 
@@ -270,10 +273,13 @@ lock: ext_session_lock_v1 asked for, with 1 lock surfaces
 output winit: lock surface configured …                          one per output, while locked
 lock: the compositor locked the session; told to caustics-lock
 seat: the keyboard is on the lock (output winit)
+lock: input at the lock (a key); told to caustics-lock           at most once in 5 s, while locked
 lock: caustics-lock asked to unlock; unlocking
 lock: the session is unlocked; told to caustics-lock
-caustics-lock: fingerprint: reader … claimed for …; verifying    the lock sidecar's own, relayed
+caustics-lock: fingerprint: window open (locked)                 the lock sidecar's own, relayed
+caustics-lock: fingerprint: reader … claimed for …; verifying
 caustics-lock: fingerprint matched; unlocking
+caustics-lock: fingerprint: window closed (idle); released       nobody at the lock
 caustics-lock: fingerprint: released                             the reader let go at the end of the lock
 exit: lock: the compositor ended caustics-lock's session lock …  `finished`: exit 1
 ```
