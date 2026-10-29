@@ -5645,10 +5645,11 @@ say "35k. a fingerprint unlocks the canvas's lock beside the password, the reade
 # match and the second with one that does; nobody types. Then a second lock,
 # whose verify waits for a finger that never comes: its window, opened by
 # the lock going up, closes when nobody is there (the windows are 8 s idle
-# and a 1 s rest here, CAUSTICS_LOCK_FINGERPRINT_WINDOW) and lets the reader
-# go; the first key typed is input at the lock, which the host tells the
-# sidecar, and a window opens again; the password unlocks, and the reader
-# must be let go all the same.
+# here, CAUSTICS_LOCK_FINGERPRINT_WINDOW), lets the reader go and puts the
+# wake line on the panel; the first key typed straight after is input at
+# the lock, which the host tells the sidecar, and a window opens again at
+# once, its ready line replacing the wake line; the password unlocks, and
+# the reader must be let go all the same.
 if [[ "$CANVAS_RUN" -ne 1 || "$LOCK_RUN" -ne 1 ]]; then
     printf '  SKIP  %s  %s\n' "$(stamp)" "the fingerprint lock runs on the nested target's canvas only"
     SKIPS=$((SKIPS + 1))
@@ -5669,7 +5670,7 @@ else
     fi
     fixture_start fingerprint 'bash -c '"'"'cd "$1" && exec env \
         CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload caustics-glyphs caustics-lock" \
-        CAUSTICS_LOCK_DRY_RUN_SECRET="$3" CAUSTICS_LOCK_FINGERPRINT_WINDOW=8,60,1 \
+        CAUSTICS_LOCK_DRY_RUN_SECRET="$3" CAUSTICS_LOCK_FINGERPRINT_WINDOW=8,60 \
         DBUS_SYSTEM_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/fprint-bus" \
         RUST_LOG=info "$2/caustics-canvas" 2>>"$1/canvas.log"'"'"' fingerprint "$T_HOME" "$T_BIN" '"$finger_right"
     FINGER_RUN=0
@@ -5751,23 +5752,26 @@ if [[ "${FINGER_RUN:-0}" -eq 1 ]]; then
     else
         fail "the second fingerprint lock never asked: $(canvas_log | grep -E 'fingerprint|prompt' | tail -4 | tr '\n' '|' | cut -c1-400)"
     fi
-    # Nobody there: the window closes on idle and the reader is let go
-    # before any unlock.
+    # Nobody there: the window closes on idle, the reader is let go before
+    # any unlock, and the panel's line becomes the wake line (the host
+    # journals the second info line of conversation 2, never its words).
     if wait_until "the idle window's close" 20 'canvas_log | jgrep -F "caustics-lock: fingerprint: window closed (idle); released"' &&
         wait_until "the reader released by the window" 10 '[[ "$(fprintd_log | grep -cF "fake-fprintd: Release")" -ge 2 ]]' &&
+        wait_until "the wake line" 10 '[[ "$(canvas_count "prompt: conversation 2: an info line")" -eq 2 ]]' &&
         [[ "$(canvas_count 'caustics-lock: unlocked')" -eq 1 ]]; then
-        pass "the window closed with nobody at the lock, and the reader was released while still locked"
+        pass "the window closed with nobody at the lock, the reader was released while still locked, and the panel's line became the wake line"
     else
         fail "the window never closed on idle: $(canvas_log | grep -E 'fingerprint' | tail -3 | tr '\n' '|' | cut -c1-300); fprintd: $(fprintd_log | tail -3 | tr '\n' '|')"
     fi
-    # Past the 1 s rest, a key: the host tells the sidecar someone is at the
-    # lock, and a window opens; Return once it is verifying.
-    sleep 2
+    # Straight after the close, a key: the host tells the sidecar someone is
+    # at the lock, and a window opens at once, with nothing to wait out; its
+    # ready line replaces the wake line. Return once it is verifying.
     keys "$finger_right"
     if wait_until "the input's window" 15 'canvas_log | jgrep -F "caustics-lock: fingerprint: window open (input)"' &&
         wait_until "the reader verifying in it" 15 '[[ "$(fprintd_log | grep -cF "fake-fprintd: VerifyStart any")" -ge 4 ]]' &&
+        wait_until "the ready line again" 10 '[[ "$(canvas_count "prompt: conversation 2: an info line")" -ge 3 ]]' &&
         canvas_log | jgrep -F "lock: input at the lock (a key); told to caustics-lock"; then
-        pass "a key at the lock was told to the sidecar, and a window opened and verified again"
+        pass "a key at the lock was told to the sidecar, a window opened at once and verified again, and the ready line replaced the wake line"
     else
         fail "no window on input: $(canvas_log | grep -E 'fingerprint|input at the lock' | tail -3 | tr '\n' '|' | cut -c1-300)"
     fi
