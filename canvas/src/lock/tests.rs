@@ -314,3 +314,45 @@ fn stray_events_change_nothing() {
     assert!(locks.synced().is_empty());
     assert_eq!(locks.phase(), Phase::Unlocked);
 }
+
+/// Input on a lock surface is told to the owner as `CANVAS_EVENT_INPUT`
+/// while locked, at most once in five seconds, and never while locking,
+/// unlocking or unlocked.
+#[test]
+fn input_on_a_lock_surface_is_told_to_the_owner_once_in_five_seconds() {
+    let mut locks = Locks::new();
+    let mut fake = Fake::new();
+    let t0 = Instant::now();
+    let input = |fake: &mut Fake, locks: &mut Locks, at: Duration| {
+        let effects = locks.input(t0 + at, "a key");
+        fake.apply(locks, effects);
+    };
+    input(&mut fake, &mut locks, Duration::ZERO);
+    fake.ask(&mut locks, LOCKER, LOCK_LOCK);
+    input(&mut fake, &mut locks, Duration::from_secs(1));
+    assert!(fake.told.is_empty(), "told while locking: {:?}", fake.told);
+    fake.compositor_locks(&mut locks);
+    input(&mut fake, &mut locks, Duration::from_secs(2));
+    input(&mut fake, &mut locks, Duration::from_secs(3));
+    input(&mut fake, &mut locks, Duration::from_millis(6999));
+    input(&mut fake, &mut locks, Duration::from_secs(7));
+    assert_eq!(
+        fake.told,
+        [
+            (LOCKER.to_owned(), CANVAS_EVENT_LOCKED),
+            (LOCKER.to_owned(), CANVAS_EVENT_INPUT),
+            (LOCKER.to_owned(), CANVAS_EVENT_INPUT),
+        ]
+    );
+    fake.ask(&mut locks, LOCKER, LOCK_UNLOCK);
+    input(&mut fake, &mut locks, Duration::from_secs(20));
+    fake.sync_answers(&mut locks);
+    input(&mut fake, &mut locks, Duration::from_secs(30));
+    assert_eq!(fake.told.len(), 4, "{:?}", fake.told);
+    assert_eq!(fake.told[3], (LOCKER.to_owned(), CANVAS_EVENT_UNLOCKED));
+    // The next lock tells its first input at once.
+    fake.ask(&mut locks, LOCKER, LOCK_LOCK);
+    fake.compositor_locks(&mut locks);
+    input(&mut fake, &mut locks, Duration::from_secs(31));
+    assert_eq!(fake.told[5], (LOCKER.to_owned(), CANVAS_EVENT_INPUT));
+}

@@ -43,10 +43,24 @@
 //!   compositor has locked, it shows no layer surface, so the overlays go
 //!   unseen.
 //!
+//! - **Input on a lock surface** while locked (a key, the pointer moving, a
+//!   button, a touch) is told to the owner as `CANVAS_EVENT_INPUT` with `id`
+//!   0, at most once in [`INPUT_TOLD_EVERY`]: the lock sidecar holds its
+//!   fingerprint reader while someone is at the lock, and this is how it
+//!   knows. The prompt's keys are still the prompt's.
+//!
 //! This module owns no Wayland object and no pipe. [`Effect`]s say what to
 //! do, and `wayland.rs` does it, as with the prompt core.
 
-use caustics_bar_abi::wire::{CANVAS_EVENT_LOCKED, CANVAS_EVENT_UNLOCKED, LOCK_LOCK, LOCK_UNLOCK};
+use std::time::{Duration, Instant};
+
+use caustics_bar_abi::wire::{
+    CANVAS_EVENT_INPUT, CANVAS_EVENT_LOCKED, CANVAS_EVENT_UNLOCKED, LOCK_LOCK, LOCK_UNLOCK,
+};
+
+/// Input on a lock surface is told to the lock's owner at most this often:
+/// the fact that someone is there, not each key.
+pub const INPUT_TOLD_EVERY: Duration = Duration::from_secs(5);
 
 /// Where the lock is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -92,6 +106,8 @@ pub struct Locks {
     /// A `LOCK_LOCK` that arrived while unlocking: the sidecar to lock for
     /// once the unlock is confirmed.
     relock: Option<String>,
+    /// When input on a lock surface was last told to the owner.
+    input_told: Option<Instant>,
 }
 
 impl Default for Locks {
@@ -100,6 +116,7 @@ impl Default for Locks {
             phase: Phase::Unlocked,
             owner: None,
             relock: None,
+            input_told: None,
         }
     }
 }
@@ -227,6 +244,7 @@ impl Locks {
             ))];
         }
         self.phase = Phase::Locked;
+        self.input_told = None;
         let owner = self.owner_name();
         vec![
             Effect::Note(format!(
@@ -236,6 +254,30 @@ impl Locks {
             Effect::Tell {
                 sidecar: owner,
                 event: CANVAS_EVENT_LOCKED,
+            },
+        ]
+    }
+
+    /// `what` (a key, the pointer moving, a button, a touch) reached a lock
+    /// surface at `now`. Told to the owner while locked, once in
+    /// [`INPUT_TOLD_EVERY`]; nothing otherwise.
+    pub fn input(&mut self, now: Instant, what: &str) -> Vec<Effect> {
+        if self.phase != Phase::Locked {
+            return Vec::new();
+        }
+        if self
+            .input_told
+            .is_some_and(|told| now.saturating_duration_since(told) < INPUT_TOLD_EVERY)
+        {
+            return Vec::new();
+        }
+        self.input_told = Some(now);
+        let owner = self.owner_name();
+        vec![
+            Effect::Note(format!("lock: input at the lock ({what}); told to {owner}")),
+            Effect::Tell {
+                sidecar: owner,
+                event: CANVAS_EVENT_INPUT,
             },
         ]
     }

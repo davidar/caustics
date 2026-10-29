@@ -55,6 +55,12 @@
 //! core, and neither a key nor the pointer nor a touch cancels a dim that is
 //! also up, which stays as it was when the prompt closes.
 //!
+//! **While the session is locked**, input on a lock surface (a key, the
+//! pointer moving, a button, a touch) is told to the lock's sidecar as
+//! `CANVAS_EVENT_INPUT` with `id` 0, at most once in five seconds
+//! (`lock.rs`), beside whatever else the input does: someone is at the
+//! lock, and the sidecar holds its fingerprint reader while someone is.
+//!
 //! **The wake's pointer** is apart from all of that: on a background or a
 //! lock pane (`Role::stirs`) the pointer's place, in that pane's buffer px,
 //! and a count of its presses there are written into `facts` once per
@@ -284,6 +290,8 @@ pub struct Canvas {
     /// Where the pointer last was on an overlay, surface-local: what a
     /// motion is measured from.
     pointer_at: Option<(f64, f64)>,
+    /// The same on a lock pane, for the lock's input.
+    lock_pointer_at: Option<(f64, f64)>,
     /// The pointer as the wake is told it (`pointer.rs`), and whether
     /// `facts` is behind it.
     wake_pointer: Pointer,
@@ -394,6 +402,7 @@ impl Canvas {
             xkb: None,
             xkb_missing_said: false,
             pointer_at: None,
+            lock_pointer_at: None,
             wake_pointer: Pointer::new(),
             pointer_unwritten: false,
             facts: CanvasFacts::default(),
@@ -1070,6 +1079,13 @@ impl Canvas {
         self.end_dim();
     }
 
+    /// `what` reached a lock surface: told to the lock's sidecar, if the
+    /// session is locked and it has not been told in the last few seconds.
+    fn lock_input(&mut self, what: &str) {
+        let effects = self.locks.input(Instant::now(), what);
+        self.apply_lock(effects);
+    }
+
     // -- the keyboard --------------------------------------------------------
 
     /// The seat's keymap: compiled by libxkbcommon, opened the first time one
@@ -1098,6 +1114,9 @@ impl Canvas {
     /// keymap's; what is done with it is the dim's: any key is a user who is
     /// back.
     fn key_pressed(&mut self, code: u32) {
+        // While locked the compositor sends keys to the lock surfaces only:
+        // a key is someone at the lock, whatever the prompt does with it.
+        self.lock_input("a key");
         let key = match self.xkb.as_mut().filter(|xkb| xkb.ready()) {
             Some(xkb) => xkb.press(code),
             None => keys::key_of_code(code),
@@ -1887,6 +1906,7 @@ impl PointerHandler for Canvas {
         events: &[PointerEvent],
     ) {
         let mut cancel = None;
+        let mut at_lock = None;
         // While a prompt is up the pointer cancels nothing: a dim also up
         // stays as it is.
         let prompting = self.prompts.raised();
@@ -1916,6 +1936,24 @@ impl PointerHandler for Canvas {
                 // takes clicks.
                 pointer.set_cursor(serial, None, 0, 0);
             }
+            // Someone at the lock: the pointer moving on a lock pane, or a
+            // button. Arriving is not moving, as on an overlay.
+            if role == Some(Role::Lock) {
+                match event.kind {
+                    PointerEventKind::Enter { .. } => self.lock_pointer_at = Some(event.position),
+                    PointerEventKind::Leave { .. } => self.lock_pointer_at = None,
+                    PointerEventKind::Motion { .. } => {
+                        if moved(self.lock_pointer_at, event.position) {
+                            at_lock.get_or_insert("the pointer moving");
+                        }
+                        self.lock_pointer_at = Some(event.position);
+                    }
+                    PointerEventKind::Press { .. } => {
+                        at_lock.get_or_insert("a button");
+                    }
+                    _ => {}
+                }
+            }
             let on_overlay = !prompting && role.is_some_and(Role::input_cancels);
             if !on_overlay {
                 continue;
@@ -1942,6 +1980,9 @@ impl PointerHandler for Canvas {
                     cancel.get_or_insert("a scroll");
                 }
             }
+        }
+        if let Some(what) = at_lock {
+            self.lock_input(what);
         }
         if let Some(what) = cancel {
             self.input(what);
@@ -2013,12 +2054,14 @@ impl Dispatch<wl_touch::WlTouch, ()> for Canvas {
         _: &Connection,
         _: &QueueHandle<Canvas>,
     ) {
-        if let wl_touch::Event::Down { surface, .. } = event
-            && !canvas.prompts.raised()
-            && canvas
-                .role_of_surface(&surface)
-                .is_some_and(Role::input_cancels)
-        {
+        let wl_touch::Event::Down { surface, .. } = event else {
+            return;
+        };
+        let role = canvas.role_of_surface(&surface);
+        if role == Some(Role::Lock) {
+            canvas.lock_input("a touch");
+        }
+        if !canvas.prompts.raised() && role.is_some_and(Role::input_cancels) {
             canvas.input("a touch");
         }
     }

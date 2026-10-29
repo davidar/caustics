@@ -1583,24 +1583,27 @@ of the lock. Fixed size, 16 B.
 ```
 struct CanvasEventBody { // 16 B
     uint event;          // 0   CANVAS_EVENT_*
-    uint id;             // 4   the dim's CanvasBody.id, as the sidecar sent it; 0 for the lock's two
+    uint id;             // 4   the dim's CanvasBody.id, as the sidecar sent it; 0 for the lock's three
     uint _rsvd0, _rsvd1; // 8
 }
 ```
 
 | `CANVAS_EVENT_*` | | means |
 |---|---|---|
-| 1 | `CANVAS_EVENT_INPUT` | input cancelled the dim: the pointer moved over an overlay, a button, a scroll or a touch on one, or a key. The host has taken the overlays down already; the sidecar answers with a `CANVAS_UNDIM`, so the two ends agree the dim is over |
+| 1 | `CANVAS_EVENT_INPUT` | to the dim's sidecar: input cancelled the dim: the pointer moved over an overlay, a button, a scroll or a touch on one, or a key. The host has taken the overlays down already; the sidecar answers with a `CANVAS_UNDIM`, so the two ends agree the dim is over. To the lock sidecar, with `id` 0, while the session is locked: input reached a lock surface (a key, the pointer moving, a button, a touch), said at most once in five seconds; someone is at the lock, and the sidecar answers nothing |
 | 2 | `CANVAS_EVENT_DIMMED` | the dim reached its depth, said once a dim; it stays there until an undim or input |
 | 3 | `CANVAS_EVENT_LOCKED` | to the lock sidecar, after its `LOCK_LOCK`: the compositor confirmed the lock and every output has its lock surface (*Lock*) |
 | 4 | `CANVAS_EVENT_UNLOCKED` | to the lock sidecar, after its `LOCK_UNLOCK`: the session is unlocked and the lock surfaces are gone |
 
-`CANVAS_EVENT_LAST` is 4. The host says the lock's two to the sidecar
+`CANVAS_EVENT_LAST` is 4. The host says the lock's three to the sidecar
 whose `LOCK_LOCK` took the lock: `locked` when the compositor sends
 `ext_session_lock_v1.locked`, and `unlocked` after its `unlock_and_destroy`,
 once a `wl_display.sync` behind it is answered, so the compositor has read
 the unlock (docs/canvas.md, *Surfaces*). A `LOCK_LOCK` while locked is
-answered `locked` again.
+answered `locked` again. Between the two, `input` with `id` 0 says someone
+is at the lock: the prompt's keys are still the prompt's, and the event is
+the fact of input, not what it was (`caustics-lock` holds its fingerprint
+reader while someone is there, lock/README.md, *Behaviour*).
 
 The host learns the dim reached its depth from the caustic's readback
 (`CanvasState::dim_reached` for the head's `id`, *The canvas's buffer*), not

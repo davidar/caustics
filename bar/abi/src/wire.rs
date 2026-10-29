@@ -340,10 +340,14 @@ abi_consts! {
     pub const DIM_MAX_MILLI: u32 = 1000;
 }
 
-/// `CanvasEventBody::event` (docs/abi.md, *Canvas event*): the dim `id` names
-/// was cancelled by input (a key, a button, a touch, the pointer moving over
-/// the overlay). The host has taken the overlay down already; the sidecar
-/// answers with a `CANVAS_UNDIM`, so the two agree the dim is over.
+/// `CanvasEventBody::event` (docs/abi.md, *Canvas event*): to the dim's
+/// sidecar, the dim `id` names was cancelled by input (a key, a button, a
+/// touch, the pointer moving over the overlay). The host has taken the
+/// overlay down already; the sidecar answers with a `CANVAS_UNDIM`, so the
+/// two agree the dim is over. **To the lock sidecar**, with `id` 0, while the
+/// session is locked: input reached a lock surface (a key, the pointer
+/// moving, a button, a touch), said at most once in five seconds; the
+/// sidecar answers nothing.
 pub const CANVAS_EVENT_INPUT: u32 = 1;
 /// The dim `id` names reached its depth. Said once a dim; the dim stays there
 /// until an undim or input.
@@ -1255,8 +1259,9 @@ impl Canvas {
 pub struct CanvasEventBody {
     /// `CANVAS_EVENT_*`.
     pub event: u32,
-    /// The dim's [`CanvasBody::id`], as the sidecar sent it; 0 for
-    /// [`CANVAS_EVENT_LOCKED`] and [`CANVAS_EVENT_UNLOCKED`].
+    /// The dim's [`CanvasBody::id`], as the sidecar sent it; 0 for the
+    /// lock's three: [`CANVAS_EVENT_LOCKED`], [`CANVAS_EVENT_UNLOCKED`] and
+    /// [`CANVAS_EVENT_INPUT`] to the lock sidecar.
     pub id: u32,
     pub _rsvd0: u32,
     pub _rsvd1: u32,
@@ -1671,7 +1676,7 @@ pub enum Frame {
     /// *Canvas*: a command for the canvas.
     Canvas(Canvas),
     /// *Canvas event*: the canvas host telling a sidecar what became of its
-    /// dim.
+    /// dim or its lock.
     CanvasEvent(CanvasEventBody),
 
     /// *Prompt*: a sink sidecar asking the canvas host.
