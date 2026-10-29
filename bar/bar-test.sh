@@ -5481,6 +5481,32 @@ if [[ "$LOCK_RUN" -eq 1 ]]; then
     else
         fail "niri wrote a screenshot after a wrong secret"
     fi
+    # The lock is the deepest dim: the idle daemon's `dim --wait` while
+    # locked is answered done at once, with no overlay made, so no dim is
+    # left under the lock for the unlock to land on (the screenshot after
+    # the unlock below is the proof that nothing dimmed stayed).
+    overlays_locked=$(canvas_count "an overlay surface")
+    dim_t0=$(now_us)
+    waited=$(on_target 40 '"$T_BIN/caustics-canvasctl" dim 1 over 30 --wait; echo "exit=$?"' 2>&1)
+    took=$((($(now_us) - dim_t0) / 1000))
+    # The client exits 0 on the sidecar's `done` and on nothing else, and
+    # prints nothing for it; the sidecar's status says the dim is dimmed.
+    if [[ "$waited" == "exit=0" ]] && ((took < 5000)) &&
+        [[ "$(canvasctl status 2>&1)" == *"dim=dimmed"* ]]; then
+        pass "caustics-canvasctl dim 1 over 30 --wait while locked was done: exit 0, $took ms after it was run, and dim=dimmed"
+    else
+        fail "dim 1 over 30 --wait while locked: $(tr '\n' '|' <<<"$waited" | cut -c1-200) after $took ms"
+    fi
+    if wait_until "the dim reached at once" 10 'canvas_log | jgrep -F "the session is locked, so it is reached at once"'; then
+        pass "$(canvas_last 'the session is locked, so it is reached at once' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the host never said the locked dim was reached at once: $(canvas_log | grep -F 'dim ' | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    if [[ "$(canvas_count "an overlay surface")" -eq "$overlays_locked" ]]; then
+        pass "no overlay surface was made for the dim under the lock"
+    else
+        fail "an overlay surface was made for a dim while locked"
+    fi
     keys "$canvas_right"
     key Return
     if wait_until "the unlock" 20 'canvas_log | jgrep -F "caustics-lock: unlocked"'; then
@@ -5514,6 +5540,9 @@ if [[ "$LOCK_RUN" -eq 1 ]]; then
     else
         fail "after the unlock $moved px differ from before the lock, and the corner is ${corner[*]}"
     fi
+    # The dim done under the lock is undone as the idle daemon's resume
+    # would: the sidecar's undim, with nothing on screen to take down.
+    canvasctl undim >/dev/null 2>&1 || fail "caustics-canvasctl undim after the unlock failed"
     lock_status() { on_target 5 '"$T_BIN/caustics-canvasctl" status 2>/dev/null'; }
     if wait_until "the lock's status" 20 '[[ "$(lock_status)" == *"locked=no attempts=1"* ]]'; then
         pass "caustics-canvasctl status: $(grep -F 'locked=' <<<"$(lock_status)")"
