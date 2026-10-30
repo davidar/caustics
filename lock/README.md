@@ -98,10 +98,11 @@ adds it (*In the canvas's set*).
   a claimed reader, no system bus, no fprintd) is one witness line, and the
   password alone, until the next lock.
 - **A claim polkit refuses** (fprintd's `PermissionDenied` on `Claim`) ends
-  its window and nothing more: polkit's answer is about the moment (it
-  refuses a session it takes as inactive, which it can around a suspend)
-  and the same claim is granted a little later, so the panel says a key
-  wakes the reader and the next trigger tries again. Where polkit never grants it,
+  its window and nothing more: polkit's answer is about the moment (for a
+  few tens of milliseconds after a resume, logind reports the user as not
+  active, and polkit reads that as a session that may not verify) and the
+  same claim is granted a little later, so the panel says a key wakes the
+  reader and the next trigger tries again. Where polkit never grants it,
   that costs one refused claim, and one polkit request the agent cancels
   while locked, per window: on the lock, on each input (at most one in
   five seconds) and on each resume.
