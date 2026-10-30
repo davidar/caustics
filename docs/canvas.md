@@ -331,7 +331,8 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   reader and verifies beside the conversation, in **windows**: one opens as
   the lock goes up, when input reaches a lock surface (the host tells the
   sidecar, at most once in five seconds) and on a resume from suspend, and
-  closes after half a minute without one, or a minute and a half at most;
+  closes after half a minute without one, or a minute and a half at most,
+  or as the machine goes to sleep, after which none opens until it resumes;
   the panel's line then says a key wakes the reader, and the next trigger
   opens a window at once. The reason is libfprint's temperature
   model: a sensor that is not always-on is taken to heat while it runs and
@@ -450,7 +451,7 @@ process holding a secret is the canvas host, and the bar is not it.
 | `caustics-wallpaper` | mid-dim | the overlay goes with it (a dim without its owner is undone, so a crashed sidecar never leaves a dark screen); the picture stays; the host restarts it, and it comes back with no dim |
 | a fade | mid-fade | the waiting client gets EOF on the socket and exits 1; the idle stage locks anyway |
 | `caustics-lock` | locked | the host stays locked (it never unlocks on its own); the sidecar restarts, reads `LockedHint`, resumes the conversation |
-| the fingerprint reader | locked | the password keeps working; the sidecar releases what it held and claims the reader again after a pause that doubles from 1 s to 30 s while its window stays open (a resume from suspend is the usual cause; fprintd reports a sensor disabled for heat the same way, so the pause starts again from 1 s only after a verify that was live for a minute); fprintd itself dying releases its claim, and the next claim starts it again |
+| the fingerprint reader | locked | the password keeps working; the sidecar releases what it held and claims the reader again after a pause that doubles from 1 s to 30 s while its window stays open (a resume from suspend is the usual cause; fprintd reports a sensor disabled for heat the same way, so the pause starts again from 1 s only after a verify that was live for a minute); fprintd itself dying releases its claim, and the next claim starts it again; the machine going to sleep closes the window, and none opens until the resume, so no claim races the suspend |
 | `caustics-polkit` | mid-prompt | the host takes the prompt down with its pipe; polkitd times out the request; the caller sees "not authorized"; the sidecar restarts and re-registers |
 | the host | greeting | the display manager restarts it; nothing was logged in |
 

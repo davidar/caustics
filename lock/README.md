@@ -52,8 +52,13 @@ adds it (*In the canvas's set*).
   at the lock. A window opens when the lock goes up, when input reaches a
   lock surface (a key, the pointer moving, a button, a touch: the host's
   `CANVAS_EVENT_INPUT`, said at most once in five seconds) and on a resume
-  from suspend (logind's `PrepareForSleep`), at once whenever none is open.
-  It stays open 30 s past its last trigger, and 90 s at most. libfprint
+  from suspend (logind's `PrepareForSleep(false)`), at once whenever none
+  is open. It stays open 30 s past its last trigger, and 90 s at most. The
+  machine going to sleep (`PrepareForSleep(true)`) closes the window open,
+  and none opens until it has resumed, whatever triggers come meanwhile
+  (the before-sleep hook's lock among them): nobody's finger is on the
+  reader with the lid closed, and a claim made while the machine suspends
+  only races it. libfprint
   disables a sensor that has run continuously for a few minutes and lets
   it cool for minutes, so a reader held for the whole of a lock would be
   dead for most of it; a window that short does not heat it that far, so
@@ -63,8 +68,8 @@ adds it (*In the canvas's set*).
   conversation says it again after its title: `Touch the fingerprint
   reader` (or `Swipe a finger across the reader`) while a window's verify
   is live; `Press a key to wake the fingerprint reader` once a window has
-  closed; `Fingerprint reader not available` while the sidecar claims a
-  reader that went. A reader that can never verify for this lock puts no
+  closed, or once a claim was refused; `Fingerprint reader not available`
+  while the sidecar claims a reader that went. A reader that can never verify for this lock puts no
   line up, and the unlock says nothing. A finger that does not match
   is an error line (`Fingerprint not recognised; try again`) and a fresh
   verify after half a second, never a counted failure; a scan to try again
@@ -89,9 +94,17 @@ adds it (*In the canvas's set*).
   as for one unplugged, and the sidecar cannot tell the two apart, so a
   reader that goes right after its verify started is given time, never
   claimed again every second. **A reader that cannot verify**
-  for this lock (no reader, no enrolled prints, no permission, no system
-  bus, no fprintd) is one witness line, and the password alone, until the
-  next lock.
+  for this lock (no reader, no enrolled prints, a verify polkit refuses on
+  a claimed reader, no system bus, no fprintd) is one witness line, and the
+  password alone, until the next lock.
+- **A claim polkit refuses** (fprintd's `PermissionDenied` on `Claim`) ends
+  its window and nothing more: polkit's answer is about the moment (it
+  refuses a session it takes as inactive, which it can around a suspend)
+  and the same claim is granted a little later, so the panel says a key
+  wakes the reader and the next trigger tries again. Where polkit never grants it,
+  that costs one refused claim, and one polkit request the agent cancels
+  while locked, per window: on the lock, on each input (at most one in
+  five seconds) and on each resume.
 - **Nothing unlocks but a success**: logind's `Unlock` signal is witnessed
   and ignored.
 - A transaction is `pam_start`, `pam_authenticate` and, on success,
@@ -150,6 +163,10 @@ tooling reads. None carries a secret, or which finger matched.
 
 ```
 fingerprint: window open (locked|input|resume)
+fingerprint: no window (locked|input|resume) while the machine sleeps
+fingerprint: the machine is going to sleep; released    the window closed for the sleep; `released` if a claim was held
+fingerprint: the machine is going to sleep; no window until it resumes    no window was open
+fingerprint: not permitted to claim the reader; the next window tries again
 fingerprint: reader <name> claimed for <user>; verifying
 fingerprint: not recognised
 fingerprint: <a scan to try again: Swipe too short; try again, …>

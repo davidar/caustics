@@ -13,7 +13,7 @@
 //! conductor asked, so the conductor never waits on the bus.
 //!
 //! Without a system bus, or without a session there, there is **no logind**:
-//! one witness, no signals (and so no resume), no hint, and the socket's
+//! one witness, no signals (and so no sleep and no resume), no hint, and the socket's
 //! `lock` is the only trigger. That is the tests' case: they point `DBUS_SYSTEM_BUS_ADDRESS` at
 //! a socket that does not exist.
 

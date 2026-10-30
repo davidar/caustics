@@ -32,9 +32,11 @@
 //!   interface ([`fingerprint`]), while the conversation runs: PAM asks one
 //!   thing at a time, so the reader is not in the PAM stack. It is held in
 //!   windows while someone is at the lock (the lock going up, input on a
-//!   lock surface, a resume) and let go otherwise ([`conductor::Windows`]). A
-//!   match is a success; the password keeps working throughout; the reader
-//!   is released when a window closes and when the lock is over.
+//!   lock surface, a resume) and let go otherwise ([`conductor::Windows`]),
+//!   and never claimed while the machine is going to sleep. A match is a
+//!   success; the password keeps working throughout; the reader is released
+//!   when a window closes and when the lock is over. A claim polkit refuses
+//!   ends its window only: the next trigger tries again.
 //! - **Nothing typed is ever written anywhere but to PAM**, and no witness
 //!   carries an answer. The host's stdin is read unbuffered, so no read
 //!   buffer keeps a copy of one.
