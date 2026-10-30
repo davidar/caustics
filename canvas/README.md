@@ -16,7 +16,11 @@ its log to the journal.
 The canvas is part of the bar's set: `bar/install.sh` builds and installs
 it with everything else (bar/systemd/README.md) and links
 `~/.local/bin/caustics-canvas` and `~/.local/bin/caustics-canvasctl` into the
-set. The first time, link the unit and enable it:
+set. Every install after the first settles this unit as it settles the
+bar's: the unit restarts when the canvas's own binary changed, and
+otherwise only the sidecars whose binaries changed are ended, which the
+canvas respawns on the new code (a lock sidecar ended while the session is
+locked comes back locked). The first time, link the unit and enable it:
 
 ```sh
 systemctl --user link "$PWD/canvas/systemd/caustics-canvas.service"

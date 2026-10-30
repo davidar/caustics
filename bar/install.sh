@@ -38,6 +38,7 @@ FROM=""
 RESTART=""
 DROPIN=""
 UNIT=caustics-bar
+CANVAS_UNIT=caustics-canvas
 DROPIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT.service.d"
 
 # The sixteen, in the order the hosts name them: the bar, then `SIDECARS` in
@@ -224,75 +225,92 @@ if [[ -n "$reload" ]] ||
     say "systemd reloaded the unit and its drop-ins"
 fi
 
-# --- 5. the unit ------------------------------------------------------------
+# --- 5. the units -----------------------------------------------------------
 
 if [[ "$RESTART" != yes ]]; then
-    say "not restarting $UNIT (prefix is not $HOME/.local)"
-    exit 0
-fi
-if ! systemctl --user cat "$UNIT" >/dev/null 2>&1; then
-    say "no $UNIT unit installed; see bar/systemd/README.md"
+    say "not restarting $UNIT or $CANVAS_UNIT (prefix is not $HOME/.local)"
     exit 0
 fi
 
-# The bar supervises its sidecars and respawns one that exits, from the path
-# beside its own binary. So when the running bar is this set's and its own
-# binary did not change, the unit stays up and only the sidecars whose
-# binaries did change are ended: each comes back on the new code, and the
-# panel never blinks. The unit restarts when the bar's binary changed, when
-# the set is a new one, when a drop-in changed, or when the running bar is
-# not this set's at all.
-main=$(systemctl --user show "$UNIT" -p MainPID --value 2>/dev/null || echo 0)
-running_bar=$(readlink "/proc/${main:-0}/exe" 2>/dev/null || true)
-if [[ -n "$set_existed" && -z "$reload" && "${main:-0}" -gt 0 && "$running_bar" == "$SET/caustics-bar" ]]; then
-    ended=0
-    for pid in $(pgrep -P "$main" 2>/dev/null); do
-        exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
-        [[ "$exe" == *" (deleted)" ]] || continue
-        kill -TERM "$pid" 2>/dev/null || continue
-        say "ended $(basename "${exe% (deleted)}") (pid $pid); the bar respawns it on the new binary"
-        ended=$((ended + 1))
-    done
-    if [[ "$ended" -eq 0 ]]; then
-        say "the running bar is this set's and nothing it runs changed; not restarting $UNIT"
-    else
-        say "the bar itself is unchanged; not restarting $UNIT"
+# Two hosts run out of the set, each from a user unit of its own: the bar
+# and the canvas. Each supervises its sidecars and respawns one that exits,
+# from the path beside its own binary. So when the running host is this set's
+# and its own binary did not change, its unit stays up and only the sidecars
+# whose binaries did change are ended: each comes back on the new code, and
+# the panel never blinks (a lock sidecar ended while the session is locked
+# comes back locked, docs/canvas.md, *Failure model*). A host's unit
+# restarts when the host's binary changed, when the set is a new one, when
+# the running host is not this set's at all, or (the bar's) when a drop-in
+# changed; a restarted canvas re-locks from logind's hint before it paints.
+# Nothing is settled by hand: a sidecar replaced on disk and left running is
+# the old code with a new name beside it, which is the failure this script
+# exists to stop.
+#
+# settle <unit> <host> <restart-anyway> <readme>: the host named is
+# `$SET/<host>`; the readme is where to look when the unit is not installed.
+settle() {
+    local unit=$1 host=$2 anyway=$3 readme=$4 main running pid exe ended cursor line health
+    if ! systemctl --user cat "$unit" >/dev/null 2>&1; then
+        say "no $unit unit installed; see $readme"
+        return 0
     fi
-    exit 0
-fi
+    main=$(systemctl --user show "$unit" -p MainPID --value 2>/dev/null || echo 0)
+    running=$(readlink "/proc/${main:-0}/exe" 2>/dev/null || true)
+    if [[ -n "$set_existed" && -z "$anyway" && "${main:-0}" -gt 0 && "$running" == "$SET/$host" ]]; then
+        ended=0
+        for pid in $(pgrep -P "$main" 2>/dev/null); do
+            exe=$(readlink "/proc/$pid/exe" 2>/dev/null) || continue
+            [[ "$exe" == *" (deleted)" ]] || continue
+            kill -TERM "$pid" 2>/dev/null || continue
+            say "ended $(basename "${exe% (deleted)}") (pid $pid); $host respawns it on the new binary"
+            ended=$((ended + 1))
+        done
+        if [[ "$ended" -eq 0 ]]; then
+            say "the running $host is this set's and nothing it runs changed; not restarting $unit"
+        else
+            say "$host itself is unchanged; not restarting $unit"
+        fi
+        return 0
+    fi
 
-cursor=$(journalctl --user -u "$UNIT" --no-pager -n 0 --show-cursor 2>/dev/null |
-    /usr/bin/sed -n 's/^-- cursor: //p')
-systemctl --user restart "$UNIT" || die "the unit would not restart"
-say "restarted $UNIT"
+    cursor=$(journalctl --user -u "$unit" --no-pager -n 0 --show-cursor 2>/dev/null |
+        /usr/bin/sed -n 's/^-- cursor: //p')
+    systemctl --user restart "$unit" || die "$unit would not restart"
+    say "restarted $unit"
 
-# The first thing the new bar says about itself. `set:` names the directory it
-# resolved to, which is the one thing worth reading back: a bar that is still
-# running an older set has a stale link or a systemd that did not re-exec.
-for _ in $(seq 40); do
-    line=$(journalctl --user -u "$UNIT" --no-pager -o cat \
-        ${cursor:+--after-cursor "$cursor"} 2>/dev/null | grep -F 'set: ' | head -1)
-    [[ -n "$line" ]] && break
-    sleep 0.5
-done
-if [[ -n "${line:-}" ]]; then
-    say "$line"
-else
-    say "no 'set:' line yet; journalctl --user -u $UNIT"
-fi
+    # The first thing the new host says about itself. `set:` names the
+    # directory it resolved to, which is the one thing worth reading back: a
+    # host that is still running an older set has a stale link or a systemd
+    # that did not re-exec.
+    for _ in $(seq 40); do
+        line=$(journalctl --user -u "$unit" --no-pager -o cat \
+            ${cursor:+--after-cursor "$cursor"} 2>/dev/null | grep -F 'set: ' | head -1)
+        [[ -n "$line" ]] && break
+        sleep 0.5
+    done
+    if [[ -n "${line:-}" ]]; then
+        say "$line"
+    else
+        say "no 'set:' line yet; journalctl --user -u $unit"
+    fi
+    [[ "$host" == caustics-bar ]] || return 0
 
-# ...and the first health line, which is the bar naming every sidecar it
-# started — `running pid=`, `absent`, or `refused`. The bar writes one
-# ten seconds after it starts and hourly thereafter (`health.rs`), so this is a
-# short wait and not a vigil.
-for _ in $(seq 40); do
-    health=$(journalctl --user -u "$UNIT" --no-pager -o cat \
-        ${cursor:+--after-cursor "$cursor"} 2>/dev/null | grep -F 'health (' | head -1)
-    [[ -n "$health" ]] && break
-    sleep 0.5
-done
-if [[ -n "${health:-}" ]]; then
-    say "$health"
-else
-    say "no health line yet; journalctl --user -u $UNIT -f"
-fi
+    # ...and the bar's first health line, which names every sidecar it
+    # started — `running pid=`, `absent`, or `refused`. The bar writes one
+    # ten seconds after it starts and hourly thereafter (`health.rs`), so this
+    # is a short wait and not a vigil.
+    for _ in $(seq 40); do
+        health=$(journalctl --user -u "$unit" --no-pager -o cat \
+            ${cursor:+--after-cursor "$cursor"} 2>/dev/null | grep -F 'health (' | head -1)
+        [[ -n "$health" ]] && break
+        sleep 0.5
+    done
+    if [[ -n "${health:-}" ]]; then
+        say "$health"
+    else
+        say "no health line yet; journalctl --user -u $unit -f"
+    fi
+}
+
+settle "$UNIT" caustics-bar "$reload" bar/systemd/README.md
+settle "$CANVAS_UNIT" caustics-canvas "" canvas/README.md
