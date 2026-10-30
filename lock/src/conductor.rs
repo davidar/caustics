@@ -36,11 +36,18 @@
 //! five seconds) and on a resume from suspend, at once whenever none is
 //! open; it stays open [`Windows::idle`] past its last trigger, never longer
 //! than [`Windows::cap`]. Each window is one run of the reader; the unlock,
-//! or the host going, ends it as it ends everything.
+//! or the host going, ends it as it ends everything. The machine going to
+//! sleep (logind's `PrepareForSleep(true)`) closes the window open, and
+//! none opens until it has resumed: nobody's finger is on a reader with the
+//! lid closed, and a claim made while the machine suspends only races it. A
+//! claim polkit refuses ends its window and nothing more: polkit's view of
+//! the session changes from one moment to the next (a session it takes as
+//! inactive around a suspend), so the next trigger tries again.
 //!
 //! The panel shows one line under the ask, and the reader's keeps it true to
 //! the reader: its ready line while a window's verify is live,
-//! [`WAKE_READER`] once a window has closed, [`READER_NOT_AVAILABLE`] while
+//! [`WAKE_READER`] once a window has closed (by its timer, or by a claim
+//! polkit refused), [`READER_NOT_AVAILABLE`] while
 //! a run claims again after the reader went, and a no-match or a scan to
 //! retry as it comes. The reader's state line is said again after every
 //! fresh conversation's title. A line with no conversation to carry it (a pause between
@@ -181,6 +188,8 @@ pub enum Event {
     Retry,
     /// What the fingerprint reader's run `run` found.
     Finger { run: u32, finger: Finger },
+    /// logind's `PrepareForSleep(true)`: the machine is going to sleep.
+    Sleep,
     /// logind's `PrepareForSleep(false)`: the machine has resumed.
     Resume,
     /// The window of run `run` may be due to close.
@@ -237,6 +246,9 @@ struct Fingerprint {
     /// The reader said it cannot verify for this lock: no window opens
     /// until the next.
     unavailable: bool,
+    /// The machine is going to sleep, or asleep: no window opens until it
+    /// has resumed. The process's, not the lock's: a lock does not reset it.
+    sleeping: bool,
     /// The run of the window open now.
     run: Option<Run>,
     /// The id the next run is given.
@@ -314,6 +326,7 @@ impl Conductor {
                 windows,
                 window: None,
                 unavailable: false,
+                sleeping: false,
                 run: None,
                 run_id: 1,
                 current: 0,
@@ -352,7 +365,14 @@ impl Conductor {
                     self.begin()
                 }
                 Event::Finger { run, finger } => self.finger(run, finger),
+                Event::Sleep => {
+                    self.sleep();
+                    true
+                }
                 Event::Resume => {
+                    if let Some(finger) = self.finger.as_mut() {
+                        finger.sleeping = false;
+                    }
                     self.trigger(Trigger::Resume);
                     true
                 }
@@ -405,8 +425,27 @@ impl Conductor {
         }
     }
 
+    /// The machine is going to sleep: the window open, if any, closes, and
+    /// none opens until the resume. The panel is told nothing: the screen
+    /// is off, and the resume's window replaces whatever line stands.
+    /// Unlocked, only the flag is set: there is no window to close.
+    fn sleep(&mut self) {
+        let locked = self.phase == Phase::Locked;
+        let Some(finger) = self.finger.as_mut() else {
+            return;
+        };
+        finger.sleeping = true;
+        if finger.window.is_some() {
+            // The run's witness says why, ahead of its release.
+            self.end_window(Some("the machine is going to sleep".to_owned()));
+        } else if locked {
+            witness("fingerprint: the machine is going to sleep; no window until it resumes");
+        }
+    }
+
     /// Someone is at the lock: open a window, or keep the open one open
-    /// longer. Nothing for a reader that cannot verify for this lock.
+    /// longer. Nothing for a reader that cannot verify for this lock, nor
+    /// while the machine sleeps.
     fn trigger(&mut self, trigger: Trigger) {
         if self.phase != Phase::Locked {
             return;
@@ -417,6 +456,13 @@ impl Conductor {
             return;
         };
         if finger.unavailable {
+            return;
+        }
+        if finger.sleeping {
+            witness(&format!(
+                "fingerprint: no window ({}) while the machine sleeps",
+                trigger.name()
+            ));
             return;
         }
         let now = Instant::now();
@@ -771,6 +817,12 @@ impl Conductor {
                 // until its verify is live again.
                 state.pending = None;
                 self.state_line(READER_NOT_AVAILABLE)
+            }
+            Finger::Refused => {
+                // Said once by the run, which claimed nothing: this window
+                // is over, but not the reader, and a key opens another.
+                self.stop_reader();
+                self.state_line(WAKE_READER)
             }
             Finger::Unavailable(_) => {
                 // Said once by the run; no window opens again until the next

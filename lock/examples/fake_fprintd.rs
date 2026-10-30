@@ -17,7 +17,8 @@
 //! - `FAKE_FPRINTD_SCAN_TYPE`: the device's `scan-type` (default `press`).
 //! - `FAKE_FPRINTD_MODE`: `normal`; `no-device` (`GetDefaultDevice` is
 //!   `NoSuchDevice`); `no-enrolled` (`VerifyStart` is `NoEnrolledPrints`);
-//!   `in-use` (`Claim` is `AlreadyInUse`).
+//!   `in-use` (`Claim` is `AlreadyInUse`); `refused` (`Claim` is
+//!   `PermissionDenied`, as when polkit refuses it).
 //!
 //! It prints one line per call on stderr (`fake-fprintd: Claim <user>`,
 //! `VerifyStart any`, `VerifyStatus <result> <done>`, `VerifyStop`,
@@ -54,6 +55,7 @@ pub enum Mode {
     NoDevice,
     NoEnrolled,
     InUse,
+    Refused,
 }
 
 impl Mode {
@@ -63,6 +65,7 @@ impl Mode {
             "no-device" => Some(Mode::NoDevice),
             "no-enrolled" => Some(Mode::NoEnrolled),
             "in-use" => Some(Mode::InUse),
+            "refused" => Some(Mode::Refused),
             _ => None,
         }
     }
@@ -126,6 +129,7 @@ pub enum FprintError {
     NoSuchDevice(String),
     NoEnrolledPrints(String),
     AlreadyInUse(String),
+    PermissionDenied(String),
     ClaimDevice(String),
 }
 
@@ -166,6 +170,11 @@ impl Device {
         if state.script.mode == Mode::InUse {
             return Err(FprintError::AlreadyInUse(
                 "Device was already claimed".to_owned(),
+            ));
+        }
+        if state.script.mode == Mode::Refused {
+            return Err(FprintError::PermissionDenied(
+                "Not Authorized: net.reactivated.fprint.device.verify".to_owned(),
             ));
         }
         state.claimed = true;
@@ -290,7 +299,7 @@ async fn main() -> zbus::Result<()> {
         .unwrap_or_else(|| "press".to_owned());
     let Some(mode) = Mode::parse(&var("FAKE_FPRINTD_MODE")) else {
         eprintln!(
-            "fake-fprintd: FAKE_FPRINTD_MODE is not one of normal, no-device, no-enrolled, in-use"
+            "fake-fprintd: FAKE_FPRINTD_MODE is not one of normal, no-device, no-enrolled, in-use, refused"
         );
         std::process::exit(2);
     };

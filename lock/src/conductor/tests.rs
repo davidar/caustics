@@ -912,3 +912,83 @@ async fn an_unavailable_reader_opens_no_window_until_the_next_lock() {
     next_run(&mut runs).await;
     assert_eq!(lock.close().await, 0);
 }
+
+/// The machine going to sleep closes the window open, with that reason, and
+/// says nothing on the panel; the before-sleep hook's `locked` and any input
+/// open nothing while it sleeps; the resume opens a window, and input
+/// extends it as ever.
+#[tokio::test]
+async fn sleep_closes_the_window_and_none_opens_until_the_resume() {
+    let (mut lock, mut runs) = with_windows(dry_run_pam(), SHORT);
+    lock.locked().await;
+    let run = next_run(&mut runs).await;
+    let id = lock.expect_ask().await;
+    lock.ready(run.id);
+    lock.expect(PROMPT_INFO, 0, READY).await;
+    lock.send(Event::Sleep);
+    assert_eq!(
+        stopped(run).await.as_deref(),
+        Some("the machine is going to sleep")
+    );
+    lock.input();
+    no_run(&mut runs, Duration::from_millis(100)).await;
+    lock.silent(Duration::from_millis(100)).await;
+    lock.send(Event::Resume);
+    let resumed = next_run(&mut runs).await;
+    let opened = tokio::time::Instant::now();
+    lock.ready(resumed.id);
+    assert_eq!(lock.expect(PROMPT_INFO, 0, READY).await, id);
+    tokio::time::sleep(SHORT.idle * 2 / 3).await;
+    lock.input();
+    assert_eq!(
+        stopped(resumed).await.as_deref(),
+        Some("window closed (idle)")
+    );
+    assert!(
+        opened.elapsed() >= SHORT.idle * 2 / 3 + SHORT.idle,
+        "the input did not extend the window: {:?}",
+        opened.elapsed()
+    );
+    assert_eq!(lock.expect(PROMPT_INFO, 0, WAKE_READER).await, id);
+    assert_eq!(lock.close().await, 0);
+}
+
+/// The incident's order: the sleep comes while unlocked, then the
+/// before-sleep hook's lock and the host's `locked`. No window opens on that
+/// `locked`; the resume opens one, with the resume as its trigger.
+#[tokio::test]
+async fn a_lock_after_the_sleep_opens_no_window_until_the_resume() {
+    let (mut lock, mut runs) = with_windows(dry_run_pam(), SHORT);
+    lock.send(Event::Sleep);
+    lock.locked().await;
+    let id = lock.expect_ask().await;
+    no_run(&mut runs, Duration::from_millis(200)).await;
+    lock.send(Event::Resume);
+    let resumed = next_run(&mut runs).await;
+    lock.ready(resumed.id);
+    assert_eq!(lock.expect(PROMPT_INFO, 0, READY).await, id);
+    lock.type_in(id, RIGHT);
+    lock.expect(PROMPT_DONE, 1, "").await;
+    lock.expect_lock(LOCK_UNLOCK).await;
+    assert_eq!(stopped(resumed).await, None);
+    assert_eq!(lock.close().await, 0);
+}
+
+/// A claim polkit refused closes the window and puts the wake line up, but
+/// is not a reader that cannot verify: the next input opens a window.
+#[tokio::test]
+async fn a_refused_claim_closes_the_window_and_input_opens_another() {
+    let (mut lock, mut runs) = with_fake_reader(dry_run_pam());
+    lock.locked().await;
+    let run = next_run(&mut runs).await;
+    let id = lock.expect_ask().await;
+    lock.finger(run.id, Finger::Refused);
+    assert_eq!(stopped(run).await, None);
+    assert_eq!(lock.expect(PROMPT_INFO, 0, WAKE_READER).await, id);
+    lock.input();
+    let again = next_run(&mut runs).await;
+    lock.ready(again.id);
+    assert_eq!(lock.expect(PROMPT_INFO, 0, READY).await, id);
+    assert_eq!(lock.close().await, 0);
+    assert_eq!(stopped(again).await, None);
+}

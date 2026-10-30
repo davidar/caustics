@@ -201,6 +201,24 @@ async fn no_enrolled_prints_is_password_only_and_releases_the_claim() {
     assert_eq!(rig.log.count("Claim tester"), 1, "{:?}", rig.log.lines());
 }
 
+/// A claim polkit refuses is reported once, as refused and not as a reader
+/// that cannot verify; nothing was claimed, so nothing is released, and the
+/// run claims nothing more: the next window is the conductor's to open.
+#[tokio::test]
+async fn a_refused_claim_is_reported_once_and_releases_nothing() {
+    let Some(mut rig) = Rig::start("match", "press", fake::Mode::Refused).await else {
+        return;
+    };
+    assert_eq!(rig.finger().await, Finger::Refused);
+    tokio::time::sleep(TIMINGS.first_backoff * 3).await;
+    assert!(
+        rig.events.try_recv().is_err(),
+        "a second finding after the refusal"
+    );
+    rig.stop().await;
+    assert_eq!(rig.log.lines(), ["GetDefaultDevice", "Claim tester"]);
+}
+
 #[tokio::test]
 async fn no_fprintd_on_the_bus_is_password_only() {
     let Some(mut rig) = Rig::with(None).await else {

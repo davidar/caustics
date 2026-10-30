@@ -1,7 +1,9 @@
 //! logind on the **system** bus: the session's `Lock` and `Unlock` signals in,
-//! the Manager's `PrepareForSleep(false)` in as a resume (the person is back,
-//! and the lock opens a fingerprint window), its `LockedHint` read once at
-//! start and set on the host's word.
+//! the Manager's `PrepareForSleep` in on both edges (`true` as the machine
+//! going to sleep, when the lock lets the fingerprint reader go and claims
+//! nothing; `false` as a resume, when the person is back and the lock opens
+//! a fingerprint window), its `LockedHint` read once at start and set on the
+//! host's word.
 //!
 //! The session is the one `caustics_sidecar::session` finds, as the polkit
 //! sink finds its own. The signal streams are subscribed **before** the
@@ -135,14 +137,17 @@ async fn subscribe(
     Ok([
         caustics_sidecar::forward(locks, events.clone(), |_| Some(Event::LogindLock)),
         caustics_sidecar::forward(unlocks, events.clone(), |_| Some(Event::LogindUnlock)),
-        // Only the resume: the lock is up before the sleep already (the
-        // before-sleep hold is `lock --wait`).
+        // Both edges: the sleep stops the reader being claimed while the
+        // machine suspends (the before-sleep hook's `lock --wait` puts the
+        // lock up in that same moment), and the resume opens a window.
         caustics_sidecar::forward(sleeps, events.clone(), |signal: PrepareForSleep| {
-            signal
-                .args()
-                .ok()
-                .filter(|args| !*args.start())
-                .map(|_| Event::Resume)
+            signal.args().ok().map(|args| {
+                if *args.start() {
+                    Event::Sleep
+                } else {
+                    Event::Resume
+                }
+            })
         }),
     ])
 }

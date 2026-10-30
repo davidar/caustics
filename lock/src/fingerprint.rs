@@ -34,8 +34,12 @@
 //!   disconnect soon after a start is a reader that needs time, and the
 //!   pause before the next claim doubles rather than hammering it;
 //! - on a reader that cannot ever verify for this lock (no reader, no
-//!   enrolled prints, no permission, no system bus) says so once and does
-//!   nothing more until the next lock;
+//!   enrolled prints, a verify polkit refuses on a claimed reader, no system
+//!   bus) says so once and does nothing more until the next lock;
+//! - on a claim polkit refuses (fprintd's `PermissionDenied` on `Claim`)
+//!   says so once and ends, holding nothing: polkit's answer is about the
+//!   moment (it refuses a session it takes as inactive, as around a
+//!   suspend), so the conductor's next window claims again;
 //! - when the conductor stops it (the window closed, the lock is over, or the
 //!   host went), stops the verify and releases the device, within a bound,
 //!   and ends. The
@@ -111,6 +115,9 @@ pub enum Finger {
     Gone(String),
     /// No reader will verify for this lock; the password is the only way.
     Unavailable(String),
+    /// polkit refused the claim: this run is over, holding nothing, and the
+    /// next window tries again.
+    Refused,
 }
 
 /// The line for a reader of `scan_type`.
@@ -325,6 +332,8 @@ enum End {
     Stopped,
     /// Never for this lock.
     Unavailable(String),
+    /// polkit refused the claim; nothing is held.
+    Refused,
     /// Gone; claim again after the backoff. `lived` when the claim's verify
     /// had been live for [`Timings::settled`], which resets the backoff.
     Gone { why: String, lived: bool },
@@ -393,6 +402,15 @@ async fn verify_run(
             End::Unavailable(why) => {
                 witness(&format!("fingerprint: {why}; password only"));
                 report.send(Finger::Unavailable(why));
+                stop.wait().await;
+                stop.say(false);
+                return;
+            }
+            End::Refused => {
+                witness(
+                    "fingerprint: not permitted to claim the reader; the next window tries again",
+                );
+                report.send(Finger::Refused);
                 stop.wait().await;
                 stop.say(false);
                 return;
@@ -533,9 +551,8 @@ async fn claim(
         Some(Err(e)) => {
             return match fprint_error(&e) {
                 Some("NoEnrolledPrints") => End::Unavailable(no_prints(user)),
-                Some("PermissionDenied") => {
-                    End::Unavailable("not permitted to claim the reader".to_owned())
-                }
+                // polkit's answer for this moment, not for the lock.
+                Some("PermissionDenied") => End::Refused,
                 _ => gone(format!("claim: {e}")),
             };
         }
