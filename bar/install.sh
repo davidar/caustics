@@ -2,7 +2,7 @@
 # Install the bar and its sidecars as one **set** (docs/architecture.md, *The ABI*).
 #
 # A set is a directory: `<prefix>/lib/caustics-bar/<abi-hash>/` holds the
-# seventeen binaries, and `<prefix>/bin/caustics-bar` is a symlink into it, as
+# eighteen binaries, and `<prefix>/bin/caustics-bar` is a symlink into it, as
 # are `caustics-canvas` and `caustics-canvasctl`. The bar resolves
 # its own path (`current_exe`) and looks for its sidecars beside itself, so a
 # bar started through that link runs its own set's sidecars — and a sidecar
@@ -41,7 +41,7 @@ UNIT=caustics-bar
 CANVAS_UNIT=caustics-canvas
 DROPIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT.service.d"
 
-# The seventeen, in the order the hosts name them: the bar, then `SIDECARS` in
+# The eighteen, in the order the hosts name them: the bar, then `SIDECARS` in
 # `bar/src/feeders/pipe.rs`; then the canvas host, its own sidecar (`SIDECARS`
 # in `canvas/src/sidecars.rs`, whose other is `caustics-reload`, above), its
 # client, `caustics-polkit`, the canvas's polkit sink, which the canvas does
@@ -49,7 +49,9 @@ DROPIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT.service.d"
 # `caustics-lock`, its lock sidecar, which a drop-in adds once the previous
 # locker is unhooked (canvas/README.md, *Enabling the lock*), and
 # `caustics-secrets`, its NetworkManager secret agent, which a drop-in adds
-# too (canvas/README.md, *Enabling the secret agent*). A name here
+# too (canvas/README.md, *Enabling the secret agent*), and
+# `caustics-pairing`, its BlueZ pairing agent, which a drop-in adds too
+# (canvas/README.md, *Enabling the pairing agent*). A name here
 # that is not in a host's list is a binary nothing starts; a name in a list
 # that is not here is a sidecar its host reports absent.
 BINARIES=(
@@ -70,6 +72,7 @@ BINARIES=(
     caustics-polkit
     caustics-lock
     caustics-secrets
+    caustics-pairing
 )
 
 # The binaries something outside the set starts by name: the bar's unit, the
@@ -186,7 +189,7 @@ done
 
 # Older sets are left alone, deliberately: a bar that is still running holds
 # its own set's path, and a sidecar of its that crashes respawns out of it. A
-# set is small (seventeen binaries) and removing one by hand is `rm -r` on a
+# set is small (eighteen binaries) and removing one by hand is `rm -r` on a
 # directory named after a hash nothing is running.
 kept=$(find "$PREFIX/lib/caustics-bar" -mindepth 1 -maxdepth 1 -type d | wc -l)
 [[ "$kept" -gt 1 ]] && say "$((kept - 1)) older set(s) kept; a running bar holds its own"

@@ -206,6 +206,25 @@ opt-in, like the polkit agent (canvas/README.md, *Enabling the secret
 agent*). No wire or buffer contract changed; the set is now seventeen
 binaries.
 
+**The canvas's Bluetooth pairing agent** (`caustics-pairing`,
+pairing/README.md), and pairing from the bar. The bar's Bluetooth menu now
+discovers on every powered adapter while it is open and lists the devices
+in range that are not paired and have a name, strongest signal first,
+below the paired ones; a click pairs one (`Pair`, then `Trusted` and
+`Connect`, each step witnessed, a failure by BlueZ's error name), and a
+middle click on a paired device forgets it. BlueZ asks its default agent
+whatever the pairing needs, and that agent is a new sink of the canvas:
+registered with BlueZ's agent manager on the system bus, it turns a
+passkey to confirm, a pairing or a service to allow, and a PIN or a
+passkey to type into one prompt conversation each (the device's alias as
+the title; a confirmation is confirmed by Enter on the empty field and
+rejected by Escape), and a code to type on the device into a conversation
+held until the device pairs. The answer goes into the method's reply and
+nowhere else, and a PIN's copy is zeroed once sent; BlueZ's cancel takes
+the prompt down. The agent is opt-in, like the secret agent
+(canvas/README.md, *Enabling the pairing agent*). No wire or buffer
+contract changed; the set is now eighteen binaries.
+
 **Pipelines off the loop.** Both hosts build their caustic's pipelines on
 two compile workers instead of on their event loops, one at a time in the
 order a frame needs them, and install each as it lands with a

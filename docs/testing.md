@@ -377,6 +377,21 @@ log holds the secret; and the agent leaves with its host. The bar's join
 has no nested step, because there is no NetworkManager in the gate; its
 dispatch and the profile it asks for are `network/tests/actions.rs`'s.
 
+**The pairing agent's step** (35m) runs `caustics-pairing` in its dry run
+the same way, with the fake host's script confirming the first ask with an
+empty answer, dismissing the second, answering the third with the run's
+PIN and leaving the fourth open. It plays BlueZ with `busctl --user call`
+and checks: `RequestConfirmation` returns once confirmed, with the address
+the device's path spells as the title, "Confirm passkey 000042" as the line
+and the confirmation's ask; a dismissed one fails as rejected; the reply to
+`RequestPinCode` is the PIN and nothing else, which no log holds; a `Cancel`
+while `RequestPasskey` waits takes the prompt down with `PROMPT_CANCEL` and
+fails the waiting call as cancelled; the dry run never reaches for the
+system bus; and the agent leaves with its host. The bar's discovery and
+pairing have no nested step, because there is no BlueZ in the gate; their
+dispatch is `bluetooth/tests/actions.rs`'s and their rows
+`bluetooth/tests/frames.rs`'s.
+
 ### Adding a step
 
 1. **Decide the tier first.** If what you want to prove is a property of the

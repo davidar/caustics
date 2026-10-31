@@ -411,17 +411,17 @@ trap 'exit 130' INT TERM
 # --- step 1: build ----------------------------------------------------------
 
 say "1. build"
-# All seventeen binaries (the bar spawns each sidecar from beside itself, and
+# All eighteen binaries (the bar spawns each sidecar from beside itself, and
 # the canvas its own), the rows demo, the sink sidecars' fake host, and the
 # lock's fake fprintd.
 if (cd "$REPO" &&
     cargo build --offline -p caustics-bar -p caustics-sysmon -p caustics-tray -p caustics-power \
         -p caustics-audio -p caustics-network -p caustics-bluetooth -p caustics-notify -p caustics-apps -p caustics-glyphs \
         -p caustics-reload -p caustics-canvas -p caustics-wallpaper -p caustics-polkit \
-        -p caustics-lock -p caustics-secrets &&
+        -p caustics-lock -p caustics-secrets -p caustics-pairing &&
     cargo build --offline -p caustics-bar-abi --example rows_demo --example fake_host &&
     cargo build --offline -p caustics-lock --example fake_fprintd); then
-    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit, lock and secrets sinks, the rows_demo example, the fake host and the fake fprintd"
+    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit, lock, secrets and pairing sinks, the rows_demo example, the fake host and the fake fprintd"
 else
     fail "cargo build of the set, the rows_demo example, the fake host or the fake fprintd"
     exit 1
@@ -466,7 +466,7 @@ gssh 30 'systemctl --user stop caustics-bar 2>/dev/null
         ~/.local/bin/caustics-glyphs ~/.local/bin/caustics-reload \
         ~/.local/bin/caustics-canvas ~/.local/bin/caustics-wallpaper ~/.local/bin/caustics-canvasctl \
         ~/.local/bin/caustics-polkit ~/.local/bin/caustics-lock ~/.local/bin/caustics-secrets \
-        ~/.local/bin/rows_demo'
+        ~/.local/bin/caustics-pairing ~/.local/bin/rows_demo'
 
 gscp "$BINARY" tester@127.0.0.1:.local/bin/caustics-bar && pass "binary" || fail "binary"
 # Beside the bar, which is where the bar looks first.
@@ -489,10 +489,10 @@ gscp "$GLYPHS_SIDECAR" tester@127.0.0.1:.local/bin/caustics-glyphs && pass "glyp
     fail "glyphs sidecar"
 gscp "$RELOAD_SIDECAR" tester@127.0.0.1:.local/bin/caustics-reload && pass "reload sidecar" ||
     fail "reload sidecar"
-# The rest of the set: the canvas, its sidecar and client, and its three sinks.
-# The bar starts none of them, but a set is all seventeen, and the install step
+# The rest of the set: the canvas, its sidecar and client, and its four sinks.
+# The bar starts none of them, but a set is all eighteen, and the install step
 # (25d) installs it whole from here.
-for name in caustics-canvas caustics-wallpaper caustics-canvasctl caustics-polkit caustics-lock caustics-secrets; do
+for name in caustics-canvas caustics-wallpaper caustics-canvasctl caustics-polkit caustics-lock caustics-secrets caustics-pairing; do
     gscp "$REPO/target/debug/$name" "tester@127.0.0.1:.local/bin/$name" && pass "$name" ||
         fail "$name"
 done
@@ -3933,7 +3933,7 @@ restart_bar "the compiled-in sidecar set restored"
 say "25d. install.sh installs a whole set, and a bar started through it runs that set"
 # VM only: on a nested run it would install into the developer's home.
 if vm_only "the install script runs only in the guest; on the nested target it would install into the developer's home"; then
-# `--from` mode (the guest has no cargo): the set's name, the seventeen installs,
+# `--from` mode (the guest has no cargo): the set's name, the eighteen installs,
 # the symlink, and a bar started through it finding its own set's sidecars.
 GUEST_HOME=$(gssh 20 'printf %s "$HOME"')
 gscp "$REPO/bar/install.sh" tester@127.0.0.1:install.sh >/dev/null
@@ -3941,15 +3941,15 @@ gssh 20 'chmod +x ~/install.sh; rm -rf ~/caustics-install-test' >/dev/null
 install_out=$(gssh 120 '$HOME/install.sh --from $HOME/.local/bin --prefix $HOME/caustics-install-test 2>&1')
 note "$(printf '%s' "$install_out" | tail -5)"
 assert_contains "the script named the set" "$install_out" "set $BAR_HASH"
-assert_contains "and installed seventeen binaries" "$install_out" "installed 17 of 17 into"
+assert_contains "and installed eighteen binaries" "$install_out" "installed 18 of 18 into"
 assert_contains "and did not restart a unit it does not point at" \
     "$install_out" "not restarting caustics-bar"
 
 installed=$(gssh 20 "ls \$HOME/caustics-install-test/lib/caustics-bar/$BAR_HASH | wc -l")
-if [[ "${installed:-0}" -eq 17 ]]; then
-    pass "seventeen binaries in the set directory"
+if [[ "${installed:-0}" -eq 18 ]]; then
+    pass "eighteen binaries in the set directory"
 else
-    fail "the set directory holds ${installed:-0} binaries, not seventeen"
+    fail "the set directory holds ${installed:-0} binaries, not eighteen"
 fi
 link=$(gssh 20 'readlink $HOME/caustics-install-test/bin/caustics-bar')
 assert_contains "the symlink points into the set" "$link" "/lib/caustics-bar/$BAR_HASH/caustics-bar"
@@ -5933,6 +5933,122 @@ else
         pass "the agent exited when its host went: $(secrets_log | grep -F 'stdin closed' | tail -1 | sed 's/^caustics-secrets: //')"
     else
         fail "caustics-secrets (pid ${secrets_pid:-?}) outlived its host"
+    fi
+fi
+
+say "35m. the pairing agent asks through the wire, and the answer reaches BlueZ's reply alone"
+# `caustics-pairing` in its dry run (pairing/README.md): the agent object on
+# the run's private session bus, no system bus at all, and
+# `bar/abi/examples/fake_host.rs` on its pipes playing the canvas host,
+# which confirms the first ask with an empty answer, dismisses the second,
+# answers the third with the PIN, and leaves the fourth open. This step
+# plays BlueZ with `busctl`. The PIN is this run's own, and no log may hold
+# it; the reply is the one place it may be. No BlueZ answers for the
+# device's alias, so every title is the address its path spells.
+if [[ "$T_NAME" == vm ]]; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the pairing agent's dry run and its fake host run on the nested target only"
+    SKIPS=$((SKIPS + 1))
+else
+    pairing_pin="g$RANDOM-$RANDOM"
+    pairing_log() { on_target 10 'cat "$T_HOME/pairing.log" 2>/dev/null'; }
+    on_target 10 'rm -f "$T_HOME/pairing.log" "$T_HOME/pairing-held.out"' >/dev/null
+    fixture_start pairing 'bash -c '"'"'cd "$1" && exec env CAUSTICS_PAIRING_DRY_RUN=1 \
+        DBUS_SYSTEM_BUS_ADDRESS="unix:path=$1/no-system-bus" \
+        PAIRING_CONFIRM= FAKE_HOST_SECRET="$3" FAKE_HOST_SCRIPT="text:PAIRING_CONFIRM cancel text" \
+        "$2/examples/fake_host" "$2/caustics-pairing" >>"$1/pairing.log" 2>&1'"'"' pairing "$T_HOME" "$T_BIN" '"$pairing_pin"
+    pairing_dest=""
+    if wait_until "the pairing agent's dry run" 30 'pairing_log | jgrep -F "dry run: the agent is at"'; then
+        pairing_dest=$(pairing_log | sed -n 's/.*dry run: the agent is at \([^ ]*\) .*/\1/p' | tail -1)
+        pass "$(pairing_log | grep -F 'dry run:' | tail -1 | sed 's/^caustics-pairing: //' | cut -c1-140)"
+    else
+        fail "caustics-pairing never said where its agent is: $(pairing_log | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    pairing_device=/org/bluez/hci0/dev_02_5E_00_00_0B_99
+    # pairing_call <method> <signature> [args…]: one Agent1 call as BlueZ
+    # makes it; the reply and busctl's exit status.
+    pairing_call() {
+        local method="$1"; shift
+        on_target 40 "busctl --user call --timeout=30 '$pairing_dest' /caustics/pairing \
+            org.bluez.Agent1 $method $* 2>&1; echo \"exit=\$?\""
+    }
+    if [[ -n "$pairing_dest" ]]; then
+        reply=$(pairing_call RequestConfirmation ou "$pairing_device" 42)
+        if [[ "$reply" == *"exit=0"* ]]; then
+            pass "RequestConfirmation confirmed by an empty answer returned"
+        else
+            fail "the confirmed call: $(printf '%s' "$reply" | tr '\n' '|' | cut -c1-200)"
+        fi
+        log=$(pairing_log)
+        assert_contains "the title is the address the device's path spells" "$log" \
+            'prompt id=1 kind=title arg=1 message="02:5E:00:00:0B:99"'
+        assert_contains "a line names the passkey to confirm" "$log" \
+            'prompt id=1 kind=info arg=0 message="Confirm passkey 000042"'
+        assert_contains "an echoed ask says how to confirm" "$log" \
+            'prompt id=1 kind=echo arg=0 message="Enter to confirm, Escape to reject"'
+        assert_contains "and PROMPT_DONE said it was confirmed" "$log" 'prompt id=1 kind=done arg=1'
+
+        reply=$(pairing_call RequestConfirmation ou "$pairing_device" 7)
+        if [[ "$reply" != *"exit=0"* && "$reply" == *"dismissed"* ]]; then
+            pass "a dismissed confirmation fails the call as Rejected: $(printf '%s' "$reply" | head -1 | cut -c1-100)"
+        else
+            fail "the dismissed call: $(printf '%s' "$reply" | tr '\n' '|' | cut -c1-200)"
+        fi
+        log=$(pairing_log)
+        assert_contains "the host dismissed the second ask" "$log" "answered id=2 with cancel"
+        assert_contains "and PROMPT_DONE said failure" "$log" 'prompt id=2 kind=done arg=0'
+
+        reply=$(pairing_call RequestPinCode o "$pairing_device")
+        if [[ "$reply" == *"exit=0"* && "$reply" == *"s \"$pairing_pin\""* ]]; then
+            pass "RequestPinCode returned the PIN typed, and nothing else"
+        else
+            fail "the PIN call's reply is ${#reply} bytes and is not the PIN alone"
+        fi
+        log=$(pairing_log)
+        assert_contains "a PROMPT_ECHO asked for the PIN" "$log" 'prompt id=3 kind=echo arg=0 message="PIN"'
+        assert_contains "and PROMPT_DONE said it went into the reply" "$log" 'prompt id=3 kind=done arg=1'
+
+        # The fourth ask is left open by the script: BlueZ cancels it while
+        # its RequestPasskey waits, as BlueZ does when the other device gives up.
+        reply=$(on_target 60 "( busctl --user call --timeout=40 '$pairing_dest' /caustics/pairing \
+                org.bluez.Agent1 RequestPasskey o '$pairing_device' >\"\$T_HOME/pairing-held.out\" 2>&1
+                echo \"exit=\$?\" >>\"\$T_HOME/pairing-held.out\" ) &
+            held=\$!
+            for _ in \$(seq 60); do
+                grep -qF 'prompt id=4 kind=echo' \"\$T_HOME/pairing.log\" && break
+                sleep 0.5
+            done
+            busctl --user call --timeout=10 '$pairing_dest' /caustics/pairing org.bluez.Agent1 Cancel 2>&1
+            echo \"cancel-exit=\$?\"
+            wait \$held
+            cat \"\$T_HOME/pairing-held.out\"")
+        if [[ "$reply" == *"cancel-exit=0"* && "$reply" == *"cancelled"* && "$reply" != *$'\nexit=0'* ]]; then
+            pass "Cancel mid-conversation fails the waiting call as Canceled: $(printf '%s' "$reply" | grep -F 'cancelled' | head -1 | cut -c1-100)"
+        else
+            fail "the cancelled call: $(printf '%s' "$reply" | tr '\n' '|' | cut -c1-200)"
+        fi
+        log=$(pairing_log)
+        assert_contains "the passkey was asked" "$log" 'prompt id=4 kind=echo arg=0 message="Passkey"'
+        assert_contains "and PROMPT_CANCEL withdrew it" "$log" 'prompt id=4 kind=cancel'
+    fi
+    leaks=$(on_target 10 "grep -cF -- '$pairing_pin' \"\$T_HOME/pairing.log\"")
+    if [[ "${leaks:-1}" -eq 0 ]] && ! journal | jgrep -F -- "$pairing_pin"; then
+        pass "no witness, no host line and no bar line holds the PIN"
+    else
+        fail "the PIN is in ${leaks:-?} lines of the agent's log, or in the bar's journal"
+    fi
+    if pairing_log | jgrep -iE 'system-bus|system bus: '; then
+        fail "the dry run spoke of the system bus: $(pairing_log | grep -iE 'system-bus|system bus: ' | head -1 | cut -c1-160)"
+    else
+        pass "the dry run never reached for the system bus"
+    fi
+    # The fake host goes, and the agent leaves with it: stdin's EOF.
+    pairing_pid=$(pairing_log | sed -n 's/^fake-host: started .* as pid \([0-9]*\)$/\1/p' | tail -1)
+    fixture_stop pairing
+    if [[ -n "$pairing_pid" ]] &&
+        wait_until "the pairing agent gone" 20 "! on_target 5 'kill -0 $pairing_pid 2>/dev/null'"; then
+        pass "the agent exited when its host went: $(pairing_log | grep -F 'stdin closed' | tail -1 | sed 's/^caustics-pairing: //')"
+    else
+        fail "caustics-pairing (pid ${pairing_pid:-?}) outlived its host"
     fi
 fi
 
