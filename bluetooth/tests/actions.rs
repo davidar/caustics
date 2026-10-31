@@ -259,22 +259,23 @@ fn with_no_adapter_nothing_at_all_performs() {
 }
 
 #[test]
-fn only_activate_and_middle_clicks_perform() {
+fn only_activate_secondary_and_middle_clicks_perform() {
     let state = state(true);
-    for kind in [ACTION_SECONDARY, ACTION_SET_VALUE] {
-        for row in [ROW_CHIP, ROW_POWER, mouse_row(), buds_row(), speaker_row()] {
-            assert_eq!(op_for(&state, row, kind), None, "row {row} kind {kind}");
-        }
+    for row in [ROW_CHIP, ROW_POWER, mouse_row(), buds_row(), speaker_row()] {
+        assert_eq!(op_for(&state, row, ACTION_SET_VALUE), None, "row {row}");
     }
-    // A middle click is the radio on the chip, a paired device's forgetting,
-    // and nothing on the other menu rows.
+    // A right click is a paired device's forgetting and nothing else; a
+    // middle click is that too, and the radio on the chip.
+    for row in [ROW_CHIP, ROW_POWER, ROW_SEP_NEARBY, speaker_row()] {
+        assert_eq!(op_for(&state, row, ACTION_SECONDARY), None, "row {row}");
+    }
     for row in [ROW_POWER, ROW_SEP_NEARBY, speaker_row()] {
         assert_eq!(op_for(&state, row, ACTION_MIDDLE), None, "row {row}");
     }
 }
 
 #[test]
-fn a_device_in_range_pairs_and_a_middle_click_forgets_a_paired_one() {
+fn a_device_in_range_pairs_and_a_right_or_middle_click_forgets_a_paired_one() {
     let state = state(true);
     assert_eq!(
         op_for(&state, speaker_row(), ACTION_ACTIVATE),
@@ -284,18 +285,22 @@ fn a_device_in_range_pairs_and_a_middle_click_forgets_a_paired_one() {
         })
     );
     // Even a connected one, and with the radio off: forgetting needs no radio.
+    // A right click (a touchpad has no middle button) and a middle click alike.
     for (s, row, path, alias) in [
         (state.clone(), buds_row(), BUDS_PATH, "Pixel Buds"),
         (off(), mouse_row(), MOUSE_PATH, "MX Master"),
     ] {
-        assert_eq!(
-            op_for(&s, row, ACTION_MIDDLE),
-            Some(Op::Forget {
-                adapter: HCI0.to_owned(),
-                path: path.to_owned(),
-                alias: alias.to_owned()
-            })
-        );
+        for kind in [ACTION_SECONDARY, ACTION_MIDDLE] {
+            assert_eq!(
+                op_for(&s, row, kind),
+                Some(Op::Forget {
+                    adapter: HCI0.to_owned(),
+                    path: path.to_owned(),
+                    alias: alias.to_owned()
+                }),
+                "kind {kind}"
+            );
+        }
     }
     assert_eq!(
         Op::Pair {

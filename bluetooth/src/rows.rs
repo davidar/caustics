@@ -14,9 +14,9 @@
 //! under the popup it is open inside of (docs/abi.md, *Rows*).
 //!
 //! **Clicks** (`crate::actions`). A paired device's row connects it or
-//! disconnects it, and a **middle click forgets it** (`RemoveDevice`) at once,
-//! with no confirmation: the bar has none, and the device can be paired
-//! again. A device in range's row pairs it, trusts it and connects it. The
+//! disconnects it, and a **right click forgets it** (`RemoveDevice`; a
+//! touchpad's two-finger tap, or a mouse's middle button) at once, with no
+//! confirmation: the bar has none, and the device can be paired again. A device in range's row pairs it, trusts it and connects it. The
 //! agent's rows answer the question they ask ([`crate::pairing`]).
 
 use caustics_bar_abi::buffer::APPLET_BLUETOOTH;

@@ -228,7 +228,8 @@ discoverable to other devices for the same while (so a pairing can start
 from a phone), and lists the devices in range that are not paired and
 have a name, strongest signal first, below the paired ones; a click pairs
 one (`Pair`, then `Trusted` and `Connect`, each step witnessed, a failure
-by BlueZ's error name), and a middle click on a paired device forgets it.
+by BlueZ's error name), and a right click (a touchpad's two-finger tap) or
+a middle click on a paired device forgets it.
 The Bluetooth sidecar is BlueZ's pairing agent, registered as the default,
 and asks each question where it belongs. A yes or a no (a passkey to
 compare, a pairing or a service to allow) is three rows on its chip, the

@@ -15,7 +15,7 @@
 use zbus::Connection;
 
 use caustics_bar_abi::buffer::{
-    ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE,
+    ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE, ACTION_SECONDARY,
 };
 
 use crate::bluez::{self, ADAPTER, CONNECT, DISCONNECT, State};
@@ -142,9 +142,9 @@ impl Op {
 /// applet has no meaning for. The menu's own notices are [`Discovery`]'s, not
 /// this table's.
 ///
-/// A middle click on a paired device's row forgets it at once: the bar has no
-/// confirmation, and a forgotten device can be paired again from the list of
-/// devices in range.
+/// A right click (a touchpad's two-finger tap) or a middle click on a paired
+/// device's row forgets it at once: the bar has no confirmation, and a
+/// forgotten device can be paired again from the list of devices in range.
 pub fn op_for(state: &State, row: u32, kind: u32) -> Option<Op> {
     let adapter = state.adapter.as_ref()?;
     let toggle = || Op::Power {
@@ -180,7 +180,7 @@ pub fn op_for(state: &State, row: u32, kind: u32) -> Option<Op> {
                 Op::Connect { path, alias }
             })
         }
-        (_, ACTION_MIDDLE) => {
+        (_, ACTION_SECONDARY | ACTION_MIDDLE) => {
             let device = state
                 .devices
                 .iter()
