@@ -84,7 +84,7 @@ while [[ $# -gt 0 ]]; do
         --restart) RESTART=yes; shift ;;
         --no-restart) RESTART=no; shift ;;
         --dropin) DROPIN="${2:?--dropin needs a file}"; shift 2 ;;
-        -h|--help) /usr/bin/sed -n "2,/^set -uo/p" "${BASH_SOURCE[0]}" | /usr/bin/sed '$d'; exit 0 ;;
+        -h|--help) sed -n "2,/^set -uo/p" "${BASH_SOURCE[0]}" | sed '$d'; exit 0 ;;
         *) die "unknown argument $1" ;;
     esac
 done
@@ -195,7 +195,7 @@ pinning_dropins() {
     local f
     for f in "$DROPIN_DIR"/*.conf; do
         [[ -f "$f" ]] || continue
-        /usr/bin/sed -n "s|^Environment=.*VK_DRIVER_FILES=\([^ \"]*\).*|$(basename "$f"): \1|p" "$f"
+        sed -n "s|^Environment=.*VK_DRIVER_FILES=\([^ \"]*\).*|$(basename "$f"): \1|p" "$f"
     done
 }
 
@@ -274,7 +274,7 @@ settle() {
     fi
 
     cursor=$(journalctl --user -u "$unit" --no-pager -n 0 --show-cursor 2>/dev/null |
-        /usr/bin/sed -n 's/^-- cursor: //p')
+        sed -n 's/^-- cursor: //p')
     systemctl --user restart "$unit" || die "$unit would not restart"
     say "restarted $unit"
 
