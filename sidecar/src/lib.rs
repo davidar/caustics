@@ -9,9 +9,6 @@
 //!   requests and must also wake on its own.
 //! - [`icons`] (feature `icons`): the icon-theme search `caustics-apps`,
 //!   `caustics-glyphs` and `caustics-tray` share.
-//! - [`settings`]: which program a menu's "Settings" row opens — the
-//!   `$CAUSTICS_SETTINGS` override, else the desktop's own, else the first known
-//!   one on `PATH`, else none — so no sidecar names a settings program.
 //! - [`session`] (feature `session`): this process's uid and user name, and
 //!   logind's session for it, which the canvas's polkit and lock sinks both
 //!   speak for.
@@ -82,8 +79,6 @@ pub use drain::{Drain, drain, forward};
 pub mod icons;
 
 pub mod inbox;
-
-pub mod settings;
 
 #[cfg(feature = "session")]
 pub mod session;

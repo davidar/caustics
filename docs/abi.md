@@ -1329,7 +1329,7 @@ away keeps its last picture.
 **`REQ_ACTIVATION`** is not a question either, and nothing answers it: it is
 an **`xdg_activation_v1` token** for a click. A sidecar asks for them row by
 row with `RFLAG_ACTIVATION` (*Rows*); `caustics-notify` flags only the rows whose
-click invokes an action, so do-not-disturb, clear-all and settings cost no
+click invokes an action, so do-not-disturb and clear-all cost no
 token. When the caustic sends a sidecar an `ACT_SIDECAR` of kind
 `ACTION_ACTIVATE` with `token` set, the process forwards the action as always
 and, beside it, asks the compositor for a token (`get_activation_token`,

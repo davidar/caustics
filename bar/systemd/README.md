@@ -160,12 +160,6 @@ sidecar inherits, and restart it:
 Environment=CAUSTICS_SYSMON_CHARTS=cpu cpu-temp mem net disk gpu
 ```
 
-The "Settings…" rows in the network, Bluetooth, audio, power and notification
-menus open the settings program `caustics-sidecar` picks: `$CAUSTICS_SETTINGS` if it
-is set, else the desktop's own by `$XDG_CURRENT_DESKTOP`, else the first of
-`cosmic-settings`, `gnome-control-center` and `systemsettings` on `PATH`. With
-none, the menu has no settings row.
-
 ### Swapping one sidecar without restarting the bar
 
 The bar respawns a sidecar that exits, from beside its own binary, so a

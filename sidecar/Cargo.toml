@@ -2,7 +2,7 @@
 name = "caustics-sidecar"
 version = "0.1.0"
 edition.workspace = true
-description = "What every bar sidecar shares: the witness line, the zbus drain, the stdin inbox, the icon-theme search, the settings-program choice, the login session and a private test bus"
+description = "What every bar sidecar shares: the witness line, the zbus drain, the stdin inbox, the icon-theme search, the login session and a private test bus"
 license.workspace = true
 rust-version.workspace = true
 

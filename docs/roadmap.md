@@ -19,10 +19,8 @@ CHANGELOG.md.
    sshd, niri, autologin, UPower and lavapipe, provisioned once into a disk
    that is rebuilt from the recipe and never hand-made, with the QMP, VNC and
    screendump pieces written here.
-2. **Small rough edges.** A network in range with no saved profile still
-   opens the settings program on click; it should prompt or do nothing. The
-   oracle's module comment and the drop-in quote one vendor's Vulkan driver
-   file by name.
+2. **Small rough edges.** The oracle's module comment and the drop-in quote
+   one vendor's Vulkan driver file by name.
 
 ## Packaging
 

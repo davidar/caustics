@@ -493,11 +493,8 @@ written by Pin and Unpin; a compiled-in list seeds it until the first pin),
 and a sidecar's own choices (which charts `caustics-sysmon` samples) are that
 sidecar's affair, reaching the bar only as a self-describing frame.
 
-The settings program a sidecar's "Settings…" row opens is likewise not the
-bar's. One function in `caustics-sidecar` picks it: `$CAUSTICS_SETTINGS` if set, else
-the desktop's own by `$XDG_CURRENT_DESKTOP` (`cosmic-settings`,
-`gnome-control-center`, `systemsettings`), else the first of those on `PATH`,
-else no settings row at all.
+No sidecar launches a settings program. The menus do what the bar does,
+and the rarer settings are the user's terminal.
 
 ## Power and the discrete GPU
 

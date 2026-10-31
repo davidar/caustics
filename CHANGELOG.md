@@ -58,6 +58,9 @@ logind, and says when it stayed false (no locker listens to logind's `Lock`,
 or the one that does sets no hint) instead of witnessing a lock. Log Out
 without `$NIRI_SOCKET` ends the user's own session through logind's
 `Session.Terminate` rather than doing nothing, and says which way it went.
+No sidecar launches a settings program: the "Settings…" rows of the network,
+Bluetooth, audio, power and notification menus are gone, and with them
+`caustics-sidecar`'s choice of program and `$CAUSTICS_SETTINGS`.
 
 **The canvas** (`caustics-canvas`, docs/canvas.md). A second host of a
 caustic on the same mechanism (`caustics-host`): the wallpaper on every

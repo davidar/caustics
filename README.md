@@ -221,11 +221,8 @@ dock entry's right-click menu. Until the first pin the dock shows only the
 running windows. **A sidecar's
 settings are its own**: `$CAUSTICS_SYSMON_CHARTS` picks the charts and
 `$PUNCHCUTTER_FONT` the font (the text engine reads it), both set on the
-unit. The "Settings…" rows open
-`$CAUSTICS_SETTINGS` if it is set, else your desktop's settings program by
-`$XDG_CURRENT_DESKTOP`, else the first of `cosmic-settings`,
-`gnome-control-center` and `systemsettings` on `PATH`. With none, there is no
-settings row.
+unit. The bar launches no settings program: its menus do what the bar
+does, and the rarer settings are your terminal's.
 
 ## Status
 
@@ -253,8 +250,8 @@ support.
 ## Non-goals
 
 - **A configuration file.** The tunables module is the configuration.
-- **Password entry**, or any text input, in the bar. A network that needs a
-  password opens the settings program. The canvas (docs/canvas.md), the
+- **Password entry**, or any text input, in the bar. A network's password is
+  asked on the canvas's prompt. The canvas (docs/canvas.md), the
   wallpaper, fade, lock and prompt host designed beside the bar, is the one
   program in this tree that takes a password, and the bar is not it.
 - **A widget toolkit.** Menus, sliders and toasts are immediate-mode layout
