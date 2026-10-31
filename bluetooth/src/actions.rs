@@ -32,7 +32,7 @@ pub enum Op {
     /// `Disconnect()` on one that is.
     Disconnect { path: String, alias: String },
     /// `Pair()` on a device in range, then `Trusted = true` and `Connect()`.
-    /// Whatever the pairing asks, the session's pairing agent asks.
+    /// Whatever the pairing asks, this sidecar's agent asks ([`crate::agent`]).
     Pair { path: String, alias: String },
     /// `Adapter1.RemoveDevice` for a paired device: the pairing goes.
     Forget {
@@ -209,8 +209,8 @@ pub fn is_menu_notice(kind: u32) -> bool {
 /// `ACTION_MENU_OPEN`, on every powered adapter, and stop on
 /// `ACTION_MENU_CLOSE` and when the sidecar leaves. An adapter powered while
 /// the menu is open is started too; one powered off has stopped by itself.
-/// A pairing begun from the other device while the menu is open reaches the
-/// session's pairing agent like one begun here. Pure: the ops it returns are
+/// A pairing begun from the other device while the menu is open reaches
+/// this sidecar's agent like one begun here. Pure: the ops it returns are
 /// what [`perform`] does.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Discovery {
@@ -273,7 +273,7 @@ impl Discovery {
 ///
 /// `Connect`, `Disconnect` and a pairing are **spawned**: each can take
 /// seconds on a real device (a pairing as long as the person takes to answer
-/// the canvas's prompt) and this is called from the sidecar's one select
+/// the agent's question) and this is called from the sidecar's one select
 /// loop, so the outcome is witnessed by the spawned task and the republish
 /// comes from the next signal like any other change. A failed step is one
 /// witness with BlueZ's error name, and the steps after it are not taken.

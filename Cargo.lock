@@ -291,6 +291,7 @@ dependencies = [
  "caustics-sidecar",
  "tokio",
  "zbus",
+ "zeroize",
 ]
 
 [[package]]
@@ -405,8 +406,6 @@ version = "0.1.0"
 dependencies = [
  "caustics-bar-abi",
  "caustics-sidecar",
- "tokio",
- "zbus",
  "zeroize",
 ]
 

@@ -1,16 +1,15 @@
-//! The one secret this agent ever gives BlueZ: the PIN `RequestPinCode`
+//! The one secret this sidecar ever gives BlueZ: the PIN `RequestPinCode`
 //! returns, as `s`.
 //!
 //! The text lives in a [`Zeroizing`] string that is filled once, with room
 //! made up front so it never moves, and zeroed when the reply drops, which
 //! is after zbus has serialised it into the method return. Serialising
 //! borrows it. The method return's own buffer is zbus's, and the bytes in it
-//! (and in the bus's and BlueZ's copies) are outside this process's reach,
-//! as they are for the secret agent's reply.
+//! (and in the bus's and BlueZ's copies) are outside this process's reach.
 //!
 //! A passkey goes back as a `u32`, a value on the stack with nothing behind
-//! it to zero; the typed digits it was read from are the wire's `Secret`,
-//! zeroed when it drops.
+//! it to zero; the digits it was read from came in a zeroing buffer
+//! ([`crate::sink`]).
 
 use zbus::export::serde::ser::{Serialize, Serializer};
 use zbus::zvariant::{Signature, Type};

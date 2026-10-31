@@ -357,8 +357,8 @@ pub struct Partly {
 /// filter first (`Transport` `auto`, both radios; `DuplicateData` off, so a
 /// device that keeps advertising is not a signal every time), then
 /// `StartDiscovery`, then `Discoverable = true`, so a pairing can start from
-/// the other device too while the menu is open (the canvas's pairing agent
-/// takes the question either way). A filter BlueZ refuses is not a reason to
+/// the other device too while the menu is open (this sidecar's agent takes
+/// the question either way, [`crate::agent`]). A filter BlueZ refuses is not a reason to
 /// stay blind, nor is a `Discoverable` it refuses a reason to stop looking,
 /// so each is returned beside a discovery that started anyway.
 ///
@@ -396,8 +396,8 @@ pub async fn stop_discovery(conn: &Connection, path: &str) -> Result<(), String>
     stopped.and(hidden)
 }
 
-/// `Pair()` on one device: BlueZ asks the session's pairing agent whatever
-/// the pairing needs, and answers when it is done (or failed). It can take
+/// `Pair()` on one device: BlueZ asks this sidecar's agent whatever the
+/// pairing needs ([`crate::agent`]), and answers when it is done (or failed). It can take
 /// as long as the person takes to answer; zbus puts no timeout on it.
 pub async fn pair(conn: &Connection, path: &str) -> Result<(), String> {
     device_proxy(conn, path)

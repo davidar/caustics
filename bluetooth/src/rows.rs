@@ -16,14 +16,18 @@
 //! **Clicks** (`crate::actions`). A paired device's row connects it or
 //! disconnects it, and a **middle click forgets it** (`RemoveDevice`) at once,
 //! with no confirmation: the bar has none, and the device can be paired
-//! again. A device in range's row pairs it, trusts it and connects it.
+//! again. A device in range's row pairs it, trusts it and connects it. The
+//! agent's rows answer the question they ask ([`crate::pairing`]).
 
 use caustics_bar_abi::buffer::APPLET_BLUETOOTH;
 use caustics_bar_abi::wire::{
-    Frame, RFLAG_CHECKABLE, RFLAG_CHECKED, RFLAG_DISABLED, RFLAG_HAS_MENU, RowsBuilder,
+    Frame, RFLAG_ATTENTION, RFLAG_CHECKABLE, RFLAG_CHECKED, RFLAG_DISABLED, RFLAG_HAS_MENU,
+    RFLAG_SHOW, RowsBuilder,
 };
 
+use crate::ask;
 use crate::bluez::State;
+use crate::pairing::View;
 
 /// The bar item. A click opens the menu (`RFLAG_HAS_MENU`); a middle click
 /// comes back as `ACTION_MIDDLE` and toggles the radio.
@@ -38,6 +42,16 @@ pub const ROW_SEP_DEVICES: u32 = 3;
 /// there are both. Its id is 6, after the retired 4 and 5, because ids are
 /// never renumbered.
 pub const ROW_SEP_NEARBY: u32 = 6;
+/// The pairing agent's rows (`crate::pairing`), above the toggle while it
+/// asks something: the yes-or-no question, disabled so a click on it in a
+/// toast does nothing, then its two answers, then a code to type on the
+/// other device, then a separator in the menu. Fixed ids below
+/// [`DEVICE_ID_BIT`], so no device row can wear one.
+pub const ROW_QUESTION: u32 = 7;
+pub const ROW_CONFIRM: u32 = 8;
+pub const ROW_REJECT: u32 = 9;
+pub const ROW_DISPLAY: u32 = 10;
+pub const ROW_SEP_AGENT: u32 = 11;
 
 /// The bit every device row id carries, so no derived id can ever equal one of
 /// the constants above or the retired ids.
@@ -83,19 +97,58 @@ fn fnv1a(address: &str) -> u32 {
     hash
 }
 
+/// The whole picture with nothing asked: [`picture_with`] and an empty
+/// [`View`].
+pub fn picture(revision: u32, state: &State) -> Frame {
+    picture_with(revision, state, &View::default())
+}
+
 /// The whole picture. No adapter is a frame with **no rows**: the chip
 /// disappears and the bar's health line still says `running`; a missing
-/// BlueZ costs this chip and nothing else.
-pub fn picture(revision: u32, state: &State) -> Frame {
+/// BlueZ costs this chip and nothing else. The one exception is the agent
+/// asking something (`asking`), which is news whatever the picture: the
+/// chip is there for its rows, and the menu is those rows alone.
+///
+/// While the agent asks, the chip wears `RFLAG_SHOW` and its rows
+/// `RFLAG_ATTENTION`, so the bar shows them as a toast without a grab
+/// (docs/abi.md, *Toasts*), and they lead the menu when it is open.
+pub fn picture_with(revision: u32, state: &State, asking: &View) -> Frame {
     let mut rows = RowsBuilder::new(APPLET_BLUETOOTH, revision);
-    let Some(adapter) = state.adapter.as_ref() else {
+    let adapter = state.adapter.as_ref();
+    if adapter.is_none() && !asking.showing() {
         return rows.frame();
-    };
+    }
 
-    let icon = if adapter.powered { ICON_ON } else { ICON_OFF };
+    let powered = adapter.is_some_and(|a| a.powered);
+    let icon = if powered { ICON_ON } else { ICON_OFF };
+    let mut flags = RFLAG_HAS_MENU;
+    if asking.showing() {
+        flags |= RFLAG_SHOW;
+    }
     // `level` −1: a radio is on or off, and a fraction drawn on the icon would
     // be a number this applet does not have.
-    let chip = rows.item(ROW_CHIP, None, Some(icon), -1.0, RFLAG_HAS_MENU);
+    let chip = rows.item(ROW_CHIP, None, Some(icon), -1.0, flags);
+
+    if let Some(question) = &asking.question {
+        rows.menu(
+            chip,
+            ROW_QUESTION,
+            Some(question),
+            None,
+            RFLAG_ATTENTION | RFLAG_DISABLED,
+        );
+        rows.menu(chip, ROW_CONFIRM, Some(ask::CONFIRM), None, RFLAG_ATTENTION);
+        rows.menu(chip, ROW_REJECT, Some(ask::REJECT), None, RFLAG_ATTENTION);
+    }
+    if let Some(display) = &asking.display {
+        rows.menu(chip, ROW_DISPLAY, Some(display), None, RFLAG_ATTENTION);
+    }
+    let Some(adapter) = adapter else {
+        return rows.frame();
+    };
+    if asking.showing() {
+        rows.separator(chip, ROW_SEP_AGENT);
+    }
 
     let mut flags = RFLAG_CHECKABLE;
     if adapter.powered {
@@ -134,8 +187,9 @@ pub fn picture(revision: u32, state: &State) -> Frame {
     }
     // The devices in range that are not paired. **No `CHECKABLE`**: the
     // missing mark is what tells them from the paired ones above. A click
-    // pairs (`crate::actions`); whatever the pairing asks is asked by the
-    // canvas's prompt, never here.
+    // pairs (`crate::actions`); whatever the pairing asks, this sidecar's
+    // agent asks: a yes or a no in the rows above, a code to type on the
+    // canvas's prompt.
     for device in &state.nearby {
         let icon = if device.icon.is_empty() {
             ICON_DEVICE

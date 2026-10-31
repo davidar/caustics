@@ -2,7 +2,7 @@
 name = "caustics-bluetooth"
 version = "0.1.0"
 edition.workspace = true
-description = "the bar's bluetooth sidecar: BlueZ's adapter, its paired devices and, while the menu is open, the devices in range as one ABI rows frame on stdout, actions back on stdin"
+description = "the bar's bluetooth sidecar: BlueZ's adapter, its paired devices and, while the menu is open, the devices in range as one ABI rows frame on stdout, actions back on stdin; and BlueZ's pairing agent, asking yes or no on the bar and a typed PIN through the canvas"
 license.workspace = true
 rust-version.workspace = true
 
@@ -22,6 +22,9 @@ tokio = { version = "1.53.1", default-features = false, features = [
     "time",
     "macros",
 ] }
+# The copy of a typed PIN this sidecar holds on its way to BlueZ: the sink's
+# reply, read into a buffer zeroed when it drops, and the reply itself.
+zeroize = "1.9.1"
 # BlueZ on the system bus. `tokio` instead of the default `async-io`, so the
 # process carries one executor rather than two.
 zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
