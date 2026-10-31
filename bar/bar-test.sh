@@ -2764,8 +2764,26 @@ displays_wait_row() { # displays_wait_row <row id> <seconds>: laid out since the
         sleep 1
     done
 }
+displays_hover_chip() { # the pointer proven on the chip: its hover line, or one more move
+    # The first virtual motion after a grabbed menu closed can go unseen (the
+    # compositor recomputes the pointer's focus on the motion after it), and a
+    # click sent into that gap is lost. A hand moves many times; this moves
+    # again once, and says so.
+    local try hovers_before
+    for try in 1 2; do
+        hovers_before=$(journal_count "hover: applet-caustics-displays at=")
+        pointer_to "$displays_cx" $((bar_origin_y + displays_cy))
+        if wait_for_journal_more "hover: applet-caustics-displays at=" 3 "$hovers_before" ||
+            journal | grep -F 'hover: ' | tail -1 | grep -qF 'hover: applet-caustics-displays at='; then
+            return 0
+        fi
+        note "the pointer's move to the displays chip was not seen (try $try); moving again"
+    done
+    return 1
+}
 displays_open_output() { # the chip's menu, then the output's submenu, whose Scale row shows
     local opens_before
+    displays_hover_chip || return 1
     opens_before=$(journal_count "popup: open kind=menu")
     displays_mark=$(journal_lines)
     click_at "$displays_cx" $((bar_origin_y + displays_cy))
