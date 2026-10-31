@@ -12,7 +12,7 @@ ordered by the tunables: a dock (pinned favourites, running windows grouped by
 application, click to focus and cycle, a right-click menu with New window,
 Close, Pin and Unpin, hover previews captured from the compositor), a clock
 with a month calendar, charts, and the sidecars' chips (tray, network,
-Bluetooth, audio, battery, notifications, power) plus an idle-inhibit toggle.
+Bluetooth, audio, displays, battery, notifications, power) plus an idle-inhibit toggle.
 Popups are the bar's own: menus with submenus, sliders, check and radio rows,
 scrolling when a menu is taller than the output, and toasts without a grab.
 Configuration is the caustic's tunables module, edited in the checkout and
@@ -27,7 +27,7 @@ process and its caustic, declared once in Rust with the Slang side generated
 and checked against Slang's reflection; and the wire between the bar and its
 sidecars, length-prefixed binary frames read by a reader that skips what it
 does not know. One hash over both, carried by every binary and checked on a
-sidecar's first frame. `bar/install.sh` installs the bar, its ten sidecars,
+sidecar's first frame. `bar/install.sh` installs the bar, its eleven sidecars,
 the canvas host, its sidecar, its client, its polkit sink and its lock
 sidecar as one set named by that hash.
 Every payload crosses as one frame: a compiled entry point, an output-sized
@@ -61,6 +61,18 @@ without `$NIRI_SOCKET` ends the user's own session through logind's
 No sidecar launches a settings program: the "Settings…" rows of the network,
 Bluetooth, audio, power and notification menus are gone, and with them
 `caustics-sidecar`'s choice of program and `$CAUSTICS_SETTINGS`.
+
+**Displays** (`caustics-displays`, displays/README.md). A chip beside the
+power chip whose menu lists niri's outputs, each with On, Scale (1 to 3 and
+the current one), Mode (niri's list, the preferred one named) and Rotation
+(the four rotations), set over niri's IPC socket with the same `Output`
+requests `niri msg output` sends; every outcome is one witness. The outputs
+are read at start, when the menu opens and every two seconds while it is
+up, and never on a clock while it is closed. The only output on cannot be
+turned off. A change lasts until niri restarts, and the menu says the
+layout is niri's config's. Without `$NIRI_SOCKET` there is no chip. Its
+applet value, `APPLET_DISPLAYS`, is new in the wire's contract, which moved
+the ABI hash: the bar and every sidecar are rebuilt and installed together.
 
 **The canvas** (`caustics-canvas`, docs/canvas.md). A second host of a
 caustic on the same mechanism (`caustics-host`): the wallpaper on every

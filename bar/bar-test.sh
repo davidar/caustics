@@ -31,6 +31,8 @@ NETWORK_SIDECAR="$REPO/target/debug/caustics-network"
 BLUETOOTH_SIDECAR="$REPO/target/debug/caustics-bluetooth"
 # The notification daemon.
 NOTIFY_SIDECAR="$REPO/target/debug/caustics-notify"
+# niri's outputs, over its IPC socket.
+DISPLAYS_SIDECAR="$REPO/target/debug/caustics-displays"
 # Desktop entries and colour icons, answering `Request` frames.
 APPS_SIDECAR="$REPO/target/debug/caustics-apps"
 # The font, the OpenType arena and the symbolic icons: the bar loads no font
@@ -416,12 +418,12 @@ say "1. build"
 # lock's fake fprintd.
 if (cd "$REPO" &&
     cargo build --offline -p caustics-bar -p caustics-sysmon -p caustics-tray -p caustics-power \
-        -p caustics-audio -p caustics-network -p caustics-bluetooth -p caustics-notify -p caustics-apps -p caustics-glyphs \
-        -p caustics-reload -p caustics-canvas -p caustics-wallpaper -p caustics-polkit \
+        -p caustics-audio -p caustics-network -p caustics-bluetooth -p caustics-notify -p caustics-displays \
+        -p caustics-apps -p caustics-glyphs -p caustics-reload -p caustics-canvas -p caustics-wallpaper -p caustics-polkit \
         -p caustics-lock -p caustics-secrets -p caustics-pairing &&
     cargo build --offline -p caustics-bar-abi --example rows_demo --example fake_host &&
     cargo build --offline -p caustics-lock --example fake_fprintd); then
-    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit, lock, secrets and pairing sinks, the rows_demo example, the fake host and the fake fprintd"
+    pass "cargo build of the bar, its eleven sidecars, the canvas, its sidecar and client, the polkit, lock, secrets and pairing sinks, the rows_demo example, the fake host and the fake fprintd"
 else
     fail "cargo build of the set, the rows_demo example, the fake host or the fake fprintd"
     exit 1
@@ -462,7 +464,8 @@ gssh 30 'systemctl --user stop caustics-bar 2>/dev/null
     mkdir -p ~/.local/bin ~/caustics-bar/caustics ~/.config/systemd/user/caustics-bar.service.d
     rm -f ~/.local/bin/caustics-bar ~/.local/bin/caustics-sysmon ~/.local/bin/caustics-tray \
         ~/.local/bin/caustics-power ~/.local/bin/caustics-audio ~/.local/bin/caustics-network \
-        ~/.local/bin/caustics-bluetooth ~/.local/bin/caustics-notify ~/.local/bin/caustics-apps \
+        ~/.local/bin/caustics-bluetooth ~/.local/bin/caustics-notify ~/.local/bin/caustics-displays \
+        ~/.local/bin/caustics-apps \
         ~/.local/bin/caustics-glyphs ~/.local/bin/caustics-reload \
         ~/.local/bin/caustics-canvas ~/.local/bin/caustics-wallpaper ~/.local/bin/caustics-canvasctl \
         ~/.local/bin/caustics-polkit ~/.local/bin/caustics-lock ~/.local/bin/caustics-secrets \
@@ -483,6 +486,8 @@ gscp "$BLUETOOTH_SIDECAR" tester@127.0.0.1:.local/bin/caustics-bluetooth && pass
     fail "bluetooth sidecar"
 gscp "$NOTIFY_SIDECAR" tester@127.0.0.1:.local/bin/caustics-notify && pass "notify sidecar" ||
     fail "notify sidecar"
+gscp "$DISPLAYS_SIDECAR" tester@127.0.0.1:.local/bin/caustics-displays && pass "displays sidecar" ||
+    fail "displays sidecar"
 gscp "$APPS_SIDECAR" tester@127.0.0.1:.local/bin/caustics-apps && pass "apps sidecar" ||
     fail "apps sidecar"
 gscp "$GLYPHS_SIDECAR" tester@127.0.0.1:.local/bin/caustics-glyphs && pass "glyphs sidecar" ||
@@ -1971,11 +1976,11 @@ else
 fi
 # ...and the rest of the compiled-in set.
 started_n=$(journal |
-    grep -cE 'sidecar (caustics-sysmon|caustics-tray|caustics-power|caustics-audio|caustics-network|caustics-bluetooth|caustics-notify|caustics-apps|caustics-glyphs|caustics-reload): started pid=')
-if [[ "${started_n:-0}" -ge 10 ]]; then
-    pass "the compiled-in set is ten, and all ten started"
+    grep -cE 'sidecar (caustics-sysmon|caustics-tray|caustics-power|caustics-audio|caustics-network|caustics-bluetooth|caustics-notify|caustics-displays|caustics-apps|caustics-glyphs|caustics-reload): started pid=')
+if [[ "${started_n:-0}" -ge 11 ]]; then
+    pass "the compiled-in set is eleven, and all eleven started"
 else
-    fail "only $started_n of the ten compiled-in sidecars started ($(journal |
+    fail "only $started_n of the eleven compiled-in sidecars started ($(journal |
         grep -oE 'sidecar [^:]*: started pid=[0-9]*' | tr '\n' ' '))"
 fi
 # The font reaches the bar as bytes: the sidecar's witness, then the bar's.

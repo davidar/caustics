@@ -106,7 +106,7 @@ writes frames; `bar/abi/examples/rows_demo.rs` is one.
 
 Both contracts are hashed at build time into one number that every binary
 carries. A sidecar's first frame says its hash, and the bar refuses a sidecar
-built against another one. So the bar, its ten sidecars, the canvas host,
+built against another one. So the bar, its eleven sidecars, the canvas host,
 its sidecar and its client are **one set**:
 `bar/install.sh` builds them together and installs them into a directory
 named after the hash, with `~/.local/bin/caustics-bar` a symlink into it. A
@@ -128,6 +128,7 @@ running bar keeps its own set's sidecars even after a newer set is installed.
 |---|---|---|
 | NetworkManager (system bus) | `caustics-network` | no network chip |
 | BlueZ (system bus) | `caustics-bluetooth` | no Bluetooth chip |
+| niri's IPC socket (`$NIRI_SOCKET`) | `caustics-displays` | no displays chip |
 | UPower, logind, power-profiles-daemon (or tuned-ppd), a backlight | `caustics-power` | no battery chip, no power menu; no brightness slider without a backlight. The menu's **Lock** row asks logind, which only signals: a locker must listen (`caustics-lock`, canvas/README.md *Enabling the lock*, or another hooked to logind's `Lock`), else the row does nothing and the journal says so |
 | PipeWire with WirePlumber (`wpctl`) and `pactl` (Debian and Ubuntu: `pulseaudio-utils`) | `caustics-audio` | no audio chip; PulseAudio alone has no `wpctl` |
 | a session bus | `caustics-tray` | no tray (`caustics-tray` is the StatusNotifierWatcher when the name is free, and a host on the existing watcher when it is not) |

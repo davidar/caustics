@@ -151,6 +151,7 @@ The sidecars the bar starts, compiled in as `SIDECARS` in
 | `caustics-network` | NetworkManager (system bus) | the network chip, its menu, networks in range while the menu is open | no network chip |
 | `caustics-bluetooth` | BlueZ (system bus) | the Bluetooth chip and its devices | no Bluetooth chip |
 | `caustics-notify` | `org.freedesktop.Notifications` (it *is* the daemon) | the bell, its history menu, toasts | no notifications from the bar |
+| `caustics-displays` | niri's IPC socket | the displays chip: each output's on/off, scale, mode and rotation | no displays chip |
 | `caustics-apps` | desktop entries, icon themes | app names, launch argv, colour icons as pixels | the dock shows app ids, letters for icons |
 | `caustics-glyphs` | fontconfig, the font files, symbolic icon themes | the font's curves and OpenType tables, symbolic icons as curves, fallback faces | **no text at all** |
 | `caustics-reload` | `caustics/`, the user's tunables, Slang (in its own process) | the compiled caustic, on every save | no hot reload; the bar runs the caustic built into it |
@@ -329,7 +330,7 @@ There are two contracts, both in docs/abi.md, byte for byte:
 **The install set.** The two contracts and the entry list are hashed at build
 time into one `ABI_HASH`, which rides in every binary. A sidecar's first
 frame is a `Hello` carrying its hash, and a bar refuses a child whose hash is
-not its own. So the eighteen binaries (the bar, its ten sidecars, the
+not its own. So the nineteen binaries (the bar, its eleven sidecars, the
 canvas host, its sidecar, its client, its polkit sink, its lock sidecar, its secret agent and its pairing agent) are one **set**: `bar/install.sh` builds
 them together and installs them into a directory named after the hash, with
 `~/.local/bin/caustics-bar` a symlink into it. A bar resolves its sidecars beside

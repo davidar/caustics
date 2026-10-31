@@ -125,10 +125,10 @@ there by hand and running `systemctl --user daemon-reload` is the same thing.
 Everything the bar shows that it does not own itself comes from a **sidecar**
 (docs/architecture.md, *Sidecars*): a separate process the bar starts, whose
 stdout is a stream of binary frames the bar copies to the GPU without
-parsing. The ten, compiled into the bar as `SIDECARS` in
+parsing. The eleven, compiled into the bar as `SIDECARS` in
 `bar/src/feeders/pipe.rs`: `caustics-sysmon`, `caustics-tray`, `caustics-power`,
-`caustics-audio`, `caustics-network`, `caustics-bluetooth`, `caustics-notify`, `caustics-apps`,
-`caustics-glyphs`, `caustics-reload`.
+`caustics-audio`, `caustics-network`, `caustics-bluetooth`, `caustics-notify`,
+`caustics-displays`, `caustics-apps`, `caustics-glyphs`, `caustics-reload`.
 
 Each is spawned with **no arguments**, stdout and stdin piped, stderr
 inherited into this unit's journal. Each name resolves, in order: a command

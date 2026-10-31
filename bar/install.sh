@@ -63,6 +63,7 @@ BINARIES=(
     caustics-network
     caustics-bluetooth
     caustics-notify
+    caustics-displays
     caustics-apps
     caustics-glyphs
     caustics-reload
