@@ -45,7 +45,7 @@ use caustics_bar_abi::wire::{
 };
 use caustics_network::model::VISIBLE;
 use caustics_network::nm;
-use caustics_network::rows::{ITEM, SEP_VISIBLE, SETTINGS, WIFI};
+use caustics_network::rows::{ITEM, WIFI};
 
 mod synth;
 
@@ -84,9 +84,6 @@ fn dump(what: &str, rows: &Rows) {
 fn the_binary_publishes_the_item_the_switch_and_the_known_networks() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_caustics-network"))
         // The bar spawns a sidecar with no arguments (docs/abi.md, *Lifecycle*).
-        // A named settings program, so the settings row is drawn whatever is
-        // installed; no click reaches it, so it never runs.
-        .env("CAUSTICS_SETTINGS", "true")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // Inherited, so the witnesses land in this test's own output.
@@ -155,10 +152,6 @@ fn the_binary_publishes_the_item_the_switch_and_the_known_networks() {
         switch.flags & RFLAG_CHECKED,
         RFLAG_CHECKED,
         "the radio is on while this test runs"
-    );
-    assert!(
-        rows.rows.iter().any(|row| row.id == SETTINGS),
-        "the settings row is last"
     );
 
     // The known networks: radio rows, and at most one of them checked — exactly
@@ -239,10 +232,6 @@ fn the_binary_publishes_the_item_the_switch_and_the_known_networks() {
          any network sees some when scanned"
     );
     assert!(found.len() <= 10, "capped at ten: {}", found.len());
-    assert!(
-        scanned.rows.iter().any(|row| row.id == SEP_VISIBLE),
-        "the section has a separator"
-    );
     for row in &found {
         assert_eq!(row.role, ROW_MENU);
         assert_eq!(row.flags, 0, "an unknown network carries no mark");
@@ -260,9 +249,9 @@ fn the_binary_publishes_the_item_the_switch_and_the_known_networks() {
     labels.dedup();
     assert_eq!(labels.len(), total, "one row per SSID");
     assert_eq!(
-        scanned.rows.iter().position(|row| row.id == SETTINGS),
-        Some(scanned.rows.len() - 1),
-        "the settings row is still last"
+        scanned.rows.last().map(|row| row.id),
+        found.last().map(|row| row.id),
+        "the networks in range end the menu"
     );
 
     // The child's stdin closing is its notice to leave (docs/abi.md, *Lifecycle*).

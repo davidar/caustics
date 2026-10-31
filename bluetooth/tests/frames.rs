@@ -30,8 +30,7 @@ use caustics_bar_abi::wire::{
 use caustics_bluetooth::bluez::{Device, State, parse_managed_objects};
 use caustics_bluetooth::rows::{
     DEVICE_ID_BIT, ICON_DEVICE, ICON_OFF, ICON_ON, NEARBY_ID_BIT, POWER_LABEL, ROW_CHIP, ROW_POWER,
-    ROW_SEP_DEVICES, ROW_SEP_NEARBY, ROW_SEP_SETTINGS, ROW_SETTINGS, SETTINGS_LABEL, device_row,
-    nearby_row, picture,
+    ROW_SEP_DEVICES, ROW_SEP_NEARBY, device_row, nearby_row, picture,
 };
 
 mod synth;
@@ -76,13 +75,8 @@ fn state(body: &[u8]) -> State {
 /// Round-trip through `wire::write`/`wire::read`, so every assertion below is
 /// about what the *bar* would decode rather than about `RowsBuilder`'s memory.
 fn decoded(revision: u32, state: &State) -> Rows {
-    decoded_with(revision, state, true)
-}
-
-/// The same, saying whether a settings program can be named.
-fn decoded_with(revision: u32, state: &State, settings: bool) -> Rows {
     let mut bytes = Vec::new();
-    wire::write(&mut bytes, &picture(revision, state, settings)).expect("writing to a Vec");
+    wire::write(&mut bytes, &picture(revision, state)).expect("writing to a Vec");
     match wire::read(&mut bytes.as_slice()) {
         Ok(Some(Frame::Rows(rows))) => rows,
         other => panic!("expected a rows frame, got {other:?}"),
@@ -163,8 +157,8 @@ fn the_first_state_is_a_chip_a_toggle_and_one_device() {
 
     assert_eq!(rows.applet, APPLET_BLUETOOTH);
     assert_eq!(rows.revision, 7);
-    // The chip, the toggle, a separator, the device, a separator, Settings.
-    assert_eq!(rows.rows.len(), 6);
+    // The chip, the toggle, a separator, the device.
+    assert_eq!(rows.rows.len(), 4);
 
     let chip = &rows.rows[0];
     assert_eq!(chip.id, ROW_CHIP);
@@ -178,19 +172,13 @@ fn the_first_state_is_a_chip_a_toggle_and_one_device() {
     let ids: Vec<u32> = rows.rows[1..].iter().map(|row| row.id).collect();
     assert_eq!(
         ids,
-        vec![
-            ROW_POWER,
-            ROW_SEP_DEVICES,
-            device_row(TAG_DEVICE),
-            ROW_SEP_SETTINGS,
-            ROW_SETTINGS,
-        ]
+        vec![ROW_POWER, ROW_SEP_DEVICES, device_row(TAG_DEVICE),]
     );
     for i in 1..rows.rows.len() {
         let row = &rows.rows[i];
         assert_eq!(row.parent, 0, "row {} hangs off the chip", row.id);
         let expected = match row.id {
-            ROW_SEP_DEVICES | ROW_SEP_SETTINGS => ROW_SEPARATOR,
+            ROW_SEP_DEVICES => ROW_SEPARATOR,
             _ => ROW_MENU,
         };
         assert_eq!(row.role, expected, "row {}", row.id);
@@ -212,14 +200,7 @@ fn the_first_state_is_a_chip_a_toggle_and_one_device() {
         Some(ICON_DEVICE),
         "no Icon on the bus means the fallback"
     );
-
-    let settings = index_of(&rows, ROW_SETTINGS);
-    assert_eq!(settings, rows.rows.len() - 1, "Settings is last");
-    assert_eq!(rows.label(settings).as_deref(), Some(SETTINGS_LABEL));
-    assert_eq!(
-        rows.rows[settings].flags, 0,
-        "Settings performs on a plain activate"
-    );
+    assert_eq!(device, rows.rows.len() - 1, "the last device ends the menu");
 }
 
 #[test]
@@ -227,7 +208,7 @@ fn a_connected_device_is_checked_and_wears_bluez_s_own_icon() {
     let rows = decoded(1, &state(TWO_DEVICES));
     assert_eq!(
         rows.rows.len(),
-        7,
+        5,
         "one more device row than the first body"
     );
 
@@ -276,26 +257,12 @@ fn no_adapter_is_a_frame_with_no_rows() {
     assert!(rows.rows.is_empty(), "{:?}", rows.rows);
 }
 
+/// No separator ever ends the menu: the devices end it, or with none the
+/// toggle does.
 #[test]
-fn no_paired_device_is_one_separator_and_then_settings() {
-    let mut state = state(ONE_DEVICE);
-    state.devices.clear();
-    let rows = decoded(1, &state);
-
-    let ids: Vec<u32> = rows.rows.iter().map(|row| row.id).collect();
-    assert_eq!(
-        ids,
-        vec![ROW_CHIP, ROW_POWER, ROW_SEP_DEVICES, ROW_SETTINGS],
-        "the second separator is written only when there was a device"
-    );
-}
-
-/// With no settings program to name, the settings row is not written, nor is
-/// a separator that would then end the menu.
-#[test]
-fn no_settings_program_is_no_settings_row() {
+fn the_menu_ends_at_the_last_device_or_the_toggle() {
     let two = state(TWO_DEVICES);
-    let rows = decoded_with(1, &two, false);
+    let rows = decoded(1, &two);
     let ids: Vec<u32> = rows.rows.iter().map(|row| row.id).collect();
     let mut expected = vec![ROW_CHIP, ROW_POWER, ROW_SEP_DEVICES];
     expected.extend(two.devices.iter().map(|device| device_row(&device.address)));
@@ -306,12 +273,12 @@ fn no_settings_program_is_no_settings_row() {
 
     let mut none = state(ONE_DEVICE);
     none.devices.clear();
-    let rows = decoded_with(1, &none, false);
+    let rows = decoded(1, &none);
     let ids: Vec<u32> = rows.rows.iter().map(|row| row.id).collect();
     assert_eq!(
         ids,
         vec![ROW_CHIP, ROW_POWER],
-        "no device and no settings is the toggle alone"
+        "no device is the toggle alone"
     );
 }
 
@@ -356,13 +323,8 @@ fn ids_roles_and_parents_are_stable_when_only_a_value_moved() {
 
 #[test]
 fn a_device_row_id_comes_from_the_address_and_never_hits_a_fixed_id() {
-    let fixed = [
-        ROW_CHIP,
-        ROW_POWER,
-        ROW_SEP_DEVICES,
-        ROW_SEP_SETTINGS,
-        ROW_SETTINGS,
-    ];
+    // The fixed ids and the two retired ones.
+    let fixed = [ROW_CHIP, ROW_POWER, ROW_SEP_DEVICES, 4, 5, ROW_SEP_NEARBY];
     for address in [
         TAG_DEVICE,
         BUDS_DEVICE,
@@ -483,8 +445,6 @@ fn the_devices_in_range_follow_the_paired_ones_under_their_own_separator() {
             ROW_SEP_NEARBY,
             nearby_row(synth::SPEAKER_ADDRESS),
             nearby_row(synth::PHONE_ADDRESS),
-            ROW_SEP_SETTINGS,
-            ROW_SETTINGS,
         ]
     );
     let speaker = index_of(&rows, nearby_row(synth::SPEAKER_ADDRESS));
@@ -499,7 +459,7 @@ fn the_devices_in_range_follow_the_paired_ones_under_their_own_separator() {
     // separator, with no second one.
     let mut alone = state.clone();
     alone.devices.clear();
-    let rows = decoded_with(2, &alone, false);
+    let rows = decoded(2, &alone);
     let ids: Vec<u32> = rows.rows.iter().map(|row| row.id).collect();
     assert_eq!(
         ids,

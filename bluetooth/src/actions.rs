@@ -19,19 +19,8 @@ use caustics_bar_abi::buffer::{
 };
 
 use crate::bluez::{self, ADAPTER, CONNECT, DISCONNECT, State};
-use crate::rows::{ROW_CHIP, ROW_POWER, ROW_SETTINGS, device_row, nearby_row};
+use crate::rows::{ROW_CHIP, ROW_POWER, device_row, nearby_row};
 use crate::witness;
-use caustics_sidecar::settings::{self, Panel};
-
-/// The settings page the last row opens; which program shows it is
-/// `caustics_sidecar::settings`' choice.
-pub const SETTINGS_PANEL: Panel = Panel::Bluetooth;
-
-/// Whether a settings program can be named for [`SETTINGS_PANEL`]; the
-/// picture leaves the settings row out when none can.
-pub fn settings_available() -> bool {
-    settings::settings_command(SETTINGS_PANEL).is_some()
-}
 
 /// Something a row of this applet does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,8 +46,6 @@ pub enum Op {
     /// Stop looking on one adapter: the menu closed, or the sidecar is
     /// leaving.
     StopDiscovery { adapter: String },
-    /// The settings program's bluetooth page.
-    Settings,
 }
 
 /// What an [`Op`] would do, named rather than done: the shape a test can assert
@@ -83,8 +70,6 @@ pub enum Call {
     StartDiscovery { adapter: String },
     /// `StopDiscovery` on an adapter.
     StopDiscovery { adapter: String },
-    /// The settings program, detached, on this panel.
-    Settings(Panel),
 }
 
 impl Op {
@@ -99,7 +84,6 @@ impl Op {
             Op::Forget { .. } => "forget",
             Op::Discover { .. } => "discover",
             Op::StopDiscovery { .. } => "stop discovery",
-            Op::Settings => "settings",
         }
     }
 
@@ -147,7 +131,6 @@ impl Op {
             Op::StopDiscovery { adapter } => Call::StopDiscovery {
                 adapter: adapter.clone(),
             },
-            Op::Settings => Call::Settings(SETTINGS_PANEL),
         }
     }
 }
@@ -172,7 +155,6 @@ pub fn op_for(state: &State, row: u32, kind: u32) -> Option<Op> {
         // A middle click on the chip is the radio, the same as the row.
         (ROW_CHIP, ACTION_MIDDLE) => Some(toggle()),
         (ROW_POWER, ACTION_ACTIVATE) => Some(toggle()),
-        (ROW_SETTINGS, ACTION_ACTIVATE) => Some(Op::Settings),
         (_, ACTION_ACTIVATE) => {
             if !adapter.powered {
                 return None;
@@ -293,7 +275,6 @@ impl Discovery {
 /// witness with BlueZ's error name, and the steps after it are not taken.
 pub async fn perform(conn: Option<&Connection>, op: Op) {
     match op.call() {
-        Call::Settings(panel) => witness(&format!("settings: {}", settings::open_settings(panel))),
         Call::SetPowered { path, on, .. } => {
             let Some(conn) = conn else {
                 return witness(&format!("{}: there is no system bus", op.describe()));

@@ -39,7 +39,6 @@ fn view(now: Instant) -> View {
         now,
         minute: Duration::from_secs(60),
         ages: true,
-        settings: true,
     }
 }
 
@@ -293,8 +292,7 @@ fn no_name_is_an_empty_frame_and_an_empty_history_says_so() {
             rows::ROW_SEP_TOP,
             ROW_EMPTY,
             rows::ROW_SEP_BOTTOM,
-            ROW_CLEAR,
-            rows::ROW_SETTINGS
+            ROW_CLEAR
         ]
     );
     let flags = |id| rows.rows.iter().find(|r| r.id == id).unwrap().flags;
@@ -302,22 +300,13 @@ fn no_name_is_an_empty_frame_and_an_empty_history_says_so() {
     assert_ne!(flags(ROW_CLEAR) & RFLAG_DISABLED, 0);
 }
 
-/// With no settings program to name, there is no settings row: the menu ends
-/// at "Clear all".
+/// With a notification, the menu still ends at "Clear all".
 #[test]
-fn no_settings_program_is_no_settings_row() {
+fn the_menu_ends_at_clear_all() {
     let now = Instant::now();
     let mut history = History::new();
     history.notify(incoming("Summary"), now);
-    let (rows, _) = rows::picture(
-        1,
-        &history,
-        View {
-            settings: false,
-            ..view(now)
-        },
-    );
-    assert!(!rows.rows.iter().any(|r| r.id == rows::ROW_SETTINGS));
+    let (rows, _) = rows::picture(1, &history, view(now));
     assert_eq!(rows.rows.last().unwrap().id, ROW_CLEAR);
 }
 
@@ -353,7 +342,7 @@ fn a_full_history_fits_the_rows_cap_and_the_region() {
     };
     assert_eq!(back.rows.len(), rows.rows.len());
     // And the tail is always there.
-    assert_eq!(rows.rows.last().unwrap().id, rows::ROW_SETTINGS);
+    assert_eq!(rows.rows.last().unwrap().id, ROW_CLEAR);
 
     // Without actions, the menu stops at MENU_MAX.
     let mut history = History::new();
@@ -750,7 +739,7 @@ fn an_age_alone_is_not_sent_while_a_toast_is_up() {
 /// The token is asked for only where a click invokes an action: a
 /// notification with a `default` action and a named action's row carry
 /// `RFLAG_ACTIVATION`; a plain notification (whose click dismisses), Dismiss,
-/// do-not-disturb, clear-all, settings and the chip do not.
+/// do-not-disturb, clear-all and the chip do not.
 #[test]
 fn the_token_is_asked_for_only_where_an_action_runs() {
     let now = Instant::now();
@@ -779,7 +768,7 @@ fn the_token_is_asked_for_only_where_an_action_runs() {
     assert!(wants(action_row(named, 0)) && wants(action_row(named, 1)));
     assert!(!wants(plain), "a click that only dismisses wants no token");
     assert!(!wants(action_row(named, INDEX_DISMISS)));
-    for fixed in [ROW_CHIP, ROW_DND, ROW_CLEAR, rows::ROW_SETTINGS] {
+    for fixed in [ROW_CHIP, ROW_DND, ROW_CLEAR] {
         assert!(!wants(fixed), "row {fixed:#x}");
     }
 }
@@ -829,25 +818,4 @@ fn an_image_is_bounded_by_its_area() {
     assert!(image::unpack(&edge).is_some());
     // The 2³¹ claim costs nothing.
     assert!(image::unpack(&(65_536, 65_536, 196_608, false, 8, 3, Vec::new())).is_none());
-}
-
-/// The settings row names a panel, never a program: `$CAUSTICS_SETTINGS` wins,
-/// the first known program on `PATH` follows, and with neither there is
-/// nothing to run (the click is witnessed and nothing starts).
-#[test]
-fn the_settings_program_is_the_override_or_the_first_found_or_none() {
-    use caustics_notify::actions::SETTINGS_PANEL;
-    use caustics_sidecar::settings::{Panel, resolve};
-    use std::ffi::OsStr;
-
-    assert_eq!(SETTINGS_PANEL, Panel::Notifications);
-    let found = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
-    let mine = Some(OsStr::new("my-settings"));
-    let chosen = resolve(SETTINGS_PANEL, mine, None, found(&[])).expect("an override is taken");
-    assert_eq!(chosen.describe(), "my-settings notifications");
-    let niri = Some(OsStr::new("niri"));
-    let chosen = resolve(SETTINGS_PANEL, None, niri, found(&["cosmic-settings"]))
-        .expect("cosmic-settings is on PATH");
-    assert_eq!(chosen.describe(), "cosmic-settings notifications");
-    assert_eq!(resolve(SETTINGS_PANEL, None, niri, found(&[])), None);
 }

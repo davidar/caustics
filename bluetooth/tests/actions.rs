@@ -12,11 +12,10 @@ use caustics_bar_abi::buffer::{
     ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE, ACTION_SECONDARY,
     ACTION_SET_VALUE,
 };
-use caustics_bluetooth::actions::{Call, Discovery, Op, SETTINGS_PANEL, op_for};
+use caustics_bluetooth::actions::{Call, Discovery, Op, op_for};
 use caustics_bluetooth::bluez::{ADAPTER, Adapter, CONNECT, DISCONNECT, Device, State};
 use caustics_bluetooth::rows::{
-    ROW_CHIP, ROW_POWER, ROW_SEP_DEVICES, ROW_SEP_NEARBY, ROW_SEP_SETTINGS, ROW_SETTINGS,
-    device_row, nearby_row,
+    ROW_CHIP, ROW_POWER, ROW_SEP_DEVICES, ROW_SEP_NEARBY, device_row, nearby_row,
 };
 
 const HCI0: &str = "/org/bluez/hci0";
@@ -168,27 +167,6 @@ fn each_op_names_the_call_it_would_make() {
             path: BUDS_PATH.to_owned()
         }
     );
-    assert_eq!(Op::Settings.call(), Call::Settings(SETTINGS_PANEL));
-    assert_eq!(SETTINGS_PANEL, caustics_sidecar::settings::Panel::Bluetooth);
-}
-
-/// The settings row names a panel, never a program: `$CAUSTICS_SETTINGS` wins,
-/// the first known program on `PATH` follows, and with neither there is
-/// nothing to run (the click is witnessed and nothing starts).
-#[test]
-fn the_settings_program_is_the_override_or_the_first_found_or_none() {
-    use caustics_sidecar::settings::resolve;
-    use std::ffi::OsStr;
-
-    let found = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
-    let gnome = Some(OsStr::new("gnome-control-center"));
-    let chosen = resolve(SETTINGS_PANEL, gnome, None, found(&[])).expect("an override is taken");
-    assert_eq!(chosen.describe(), "gnome-control-center bluetooth");
-    let niri = Some(OsStr::new("niri"));
-    let chosen = resolve(SETTINGS_PANEL, None, niri, found(&["cosmic-settings"]))
-        .expect("cosmic-settings is on PATH");
-    assert_eq!(chosen.describe(), "cosmic-settings bluetooth");
-    assert_eq!(resolve(SETTINGS_PANEL, None, niri, found(&[])), None);
 }
 
 #[test]
@@ -222,7 +200,6 @@ fn every_op_says_what_it_is_in_its_witness() {
         Op::Discover {
             adapter: HCI0.to_owned(),
         },
-        Op::Settings,
     ]
     .iter()
     .map(|op| op.describe())
@@ -237,7 +214,6 @@ fn every_op_says_what_it_is_in_its_witness() {
             "pair Example Speaker",
             "forget Pixel Buds",
             "discover on /org/bluez/hci0",
-            "settings"
         ]
     );
 }
@@ -249,17 +225,19 @@ fn a_device_row_does_nothing_while_the_radio_is_off() {
     let off = state(false);
     assert_eq!(op_for(&off, mouse_row(), ACTION_ACTIVATE), None);
     assert_eq!(op_for(&off, buds_row(), ACTION_ACTIVATE), None);
-    // The toggle and Settings still work with the radio off — that is the point
-    // of the toggle.
+    // The toggle still works with the radio off — that is the point of the
+    // toggle.
     assert!(op_for(&off, ROW_POWER, ACTION_ACTIVATE).is_some());
-    assert!(op_for(&off, ROW_SETTINGS, ACTION_ACTIVATE).is_some());
 }
 
 #[test]
 fn the_rows_that_perform_nothing_perform_nothing() {
     let state = state(true);
     assert_eq!(op_for(&state, ROW_SEP_DEVICES, ACTION_ACTIVATE), None);
-    assert_eq!(op_for(&state, ROW_SEP_SETTINGS, ACTION_ACTIVATE), None);
+    // The retired ids of the settings row's separator and the row itself.
+    for retired in [4, 5] {
+        assert_eq!(op_for(&state, retired, ACTION_ACTIVATE), None);
+    }
     // An id this applet never wrote — a stale action for a device that has been
     // removed arrives exactly like this.
     assert_eq!(
@@ -273,7 +251,7 @@ fn the_rows_that_perform_nothing_perform_nothing() {
 fn with_no_adapter_nothing_at_all_performs() {
     // There are no rows in that frame, so any action naming one is stale.
     let empty = State::default();
-    for row in [ROW_CHIP, ROW_POWER, ROW_SETTINGS, mouse_row()] {
+    for row in [ROW_CHIP, ROW_POWER, mouse_row()] {
         for kind in [ACTION_ACTIVATE, ACTION_MIDDLE] {
             assert_eq!(op_for(&empty, row, kind), None, "row {row} kind {kind}");
         }
@@ -284,20 +262,13 @@ fn with_no_adapter_nothing_at_all_performs() {
 fn only_activate_and_middle_clicks_perform() {
     let state = state(true);
     for kind in [ACTION_SECONDARY, ACTION_SET_VALUE] {
-        for row in [
-            ROW_CHIP,
-            ROW_POWER,
-            ROW_SETTINGS,
-            mouse_row(),
-            buds_row(),
-            speaker_row(),
-        ] {
+        for row in [ROW_CHIP, ROW_POWER, mouse_row(), buds_row(), speaker_row()] {
             assert_eq!(op_for(&state, row, kind), None, "row {row} kind {kind}");
         }
     }
     // A middle click is the radio on the chip, a paired device's forgetting,
     // and nothing on the other menu rows.
-    for row in [ROW_POWER, ROW_SETTINGS, ROW_SEP_NEARBY, speaker_row()] {
+    for row in [ROW_POWER, ROW_SEP_NEARBY, speaker_row()] {
         assert_eq!(op_for(&state, row, ACTION_MIDDLE), None, "row {row}");
     }
 }

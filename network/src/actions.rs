@@ -17,7 +17,6 @@ use caustics_bar_abi::buffer::{
 
 use crate::model::{Security, Snapshot};
 use crate::{bus, rows, witness};
-use caustics_sidecar::settings::{self, Panel};
 
 /// Something a row of this applet does.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -43,8 +42,6 @@ pub enum Op {
         /// What it needs, for the witness line.
         needs: &'static str,
     },
-    /// Open the settings program's network page.
-    Settings,
     /// Ask every Wi-Fi device what is in range. The menu just opened,
     /// or fifteen seconds have passed with it still open.
     ///
@@ -116,24 +113,12 @@ pub enum Call {
     AddAndActivate(Join),
     /// Nothing on the bus: a witness saying what the network needs.
     Decline(&'static str),
-    /// The settings program, detached, on this panel.
-    Settings(Panel),
     /// `Device.Wireless.RequestScan({})`, once per Wi-Fi device. A read of the
     /// air: it joins nothing and changes no setting, which is why the live test
     /// is allowed to drive it on a machine somebody is using.
     RequestScan(Vec<String>),
     /// Nothing on the bus. [`Op::ScanStop`]'s whole effect is in the loop.
     StopScanning,
-}
-
-/// The settings page the last row opens; which program shows it is
-/// `caustics_sidecar::settings`' choice.
-pub const SETTINGS_PANEL: Panel = Panel::Network;
-
-/// Whether a settings program can be named for [`SETTINGS_PANEL`]; the
-/// picture leaves the settings row out when none can.
-pub fn settings_available() -> bool {
-    settings::settings_command(SETTINGS_PANEL).is_some()
 }
 
 impl Op {
@@ -145,7 +130,6 @@ impl Op {
             Op::Activate { label, .. } => format!("activate {label:?}"),
             Op::Join(join) => format!("join {:?}", join.label),
             Op::Unjoinable { label, .. } => format!("join {label:?}"),
-            Op::Settings => "settings".to_owned(),
             Op::Scan { .. } => "scan".to_owned(),
             Op::ScanStop => "scan stop".to_owned(),
         }
@@ -158,7 +142,6 @@ impl Op {
             Op::Activate { path, .. } => Call::ActivateConnection(path.clone()),
             Op::Join(join) => Call::AddAndActivate(join.clone()),
             Op::Unjoinable { needs, .. } => Call::Decline(needs),
-            Op::Settings => Call::Settings(SETTINGS_PANEL),
             Op::Scan { devices } => Call::RequestScan(devices.clone()),
             Op::ScanStop => Call::StopScanning,
         }
@@ -191,7 +174,6 @@ pub fn op_for(state: &Snapshot, row: u32, kind: u32) -> Option<Op> {
         (rows::ITEM, ACTION_MIDDLE) | (rows::WIFI, ACTION_ACTIVATE) => {
             Some(Op::Wireless(!state.wireless_enabled))
         }
-        (rows::SETTINGS, ACTION_ACTIVATE) => Some(Op::Settings),
         (row, ACTION_ACTIVATE) => state
             .networks
             .iter()
@@ -272,13 +254,6 @@ pub async fn perform(conn: Option<&Connection>, op: Op, dry: bool) {
                 }
             }
         },
-        Call::Settings(panel) => {
-            witness(&format!(
-                "{}: {}",
-                op.name(),
-                settings::open_settings(panel)
-            ));
-        }
         Call::SetWirelessEnabled(to) => match conn {
             None => witness(&format!("{}: there is no system bus", op.name())),
             Some(conn) => {

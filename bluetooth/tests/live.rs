@@ -28,7 +28,7 @@ use caustics_bar_abi::buffer::APPLET_BLUETOOTH;
 use caustics_bar_abi::wire::{
     self, Frame, RFLAG_CHECKABLE, RFLAG_HAS_MENU, ROW_ITEM, ROW_MENU, ROW_SEPARATOR,
 };
-use caustics_bluetooth::rows::{DEVICE_ID_BIT, POWER_LABEL, ROW_CHIP, ROW_POWER, SETTINGS_LABEL};
+use caustics_bluetooth::rows::{DEVICE_ID_BIT, POWER_LABEL, ROW_CHIP, ROW_POWER};
 
 mod synth;
 
@@ -37,9 +37,6 @@ mod synth;
 fn the_binary_publishes_a_chip_a_toggle_and_the_paired_devices() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_caustics-bluetooth"))
         // The bar spawns a sidecar with no arguments (docs/abi.md, *Lifecycle*).
-        // A named settings program, so the settings row is drawn whatever is
-        // installed; no click is sent, so it never runs.
-        .env("CAUSTICS_SETTINGS", "true")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // Inherited, so the witnesses land in this test's own output.
@@ -130,18 +127,17 @@ fn the_binary_publishes_a_chip_a_toggle_and_the_paired_devices() {
     }
 
     let last = rows.rows.len() - 1;
-    assert_eq!(
-        rows.label(last).as_deref(),
-        Some(SETTINGS_LABEL),
-        "Settings is last"
+    assert!(
+        rows.rows[last].role == ROW_MENU && rows.rows[last].id >= DEVICE_ID_BIT,
+        "a device is last"
     );
     assert_eq!(
         rows.rows
             .iter()
             .filter(|row| row.role == ROW_SEPARATOR)
             .count(),
-        2,
-        "one separator above the devices and one below them"
+        1,
+        "one separator, above the devices"
     );
     assert!(status.success(), "a sidecar exits 0 when its stdin closes");
 }

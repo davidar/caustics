@@ -26,7 +26,7 @@
 //! **A click hands the app focus.** The daemon flags the rows whose click
 //! invokes an action `RFLAG_ACTIVATION`, so the bar asks the compositor for an
 //! `xdg_activation_v1` token for an activation of one of those rows — never for
-//! do-not-disturb, clear-all, settings or a dismissal — and writes it back as a
+//! do-not-disturb, clear-all or a dismissal — and writes it back as a
 //! `REQ_ACTIVATION` request naming the row. A click that
 //! invokes an action is held until its token arrives — then
 //! `ActivationToken(id, token)` goes out *before* `ActionInvoked(id, key)`, as
@@ -540,7 +540,6 @@ impl Daemon {
                 let closed: Vec<_> = ids.into_iter().map(|id| (id, CLOSED_DISMISSED)).collect();
                 self.closed(&closed).await;
             }
-            Op::Settings => actions::spawn_settings(),
             Op::ToastShown { id } => {
                 // The bar says which rows a toast actually showed, so exactly
                 // these are marked: a row held behind the toast is still owed one.
@@ -683,7 +682,6 @@ impl Daemon {
             now,
             minute: self.config.minute,
             ages: true,
-            settings: actions::settings_available(),
         };
         let (rows, ageless, pixmaps, unread, entries, snapshot) = {
             let history = self.history.lock().expect("the history");

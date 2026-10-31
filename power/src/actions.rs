@@ -15,10 +15,9 @@ use caustics_bar_abi::buffer::{
 
 use crate::rows::{
     MAX_PROFILES, ROW_BRIGHTNESS, ROW_LOCK, ROW_LOG_OUT, ROW_PROFILE_BASE, ROW_RESTART,
-    ROW_SETTINGS, ROW_SHUTDOWN, ROW_SUSPEND,
+    ROW_SHUTDOWN, ROW_SUSPEND,
 };
 use crate::{logind, niri, witness};
-use caustics_sidecar::settings::{self, Panel};
 
 /// A row of either menu that performs something.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -32,8 +31,6 @@ pub enum Op {
     Brightness(f32),
     /// A power mode's radio row: its index in the daemon's `Profiles`.
     Profile(u32),
-    /// "Power settings…".
-    Settings,
 }
 
 /// What an [`Op`] would do, named rather than done: the shape a test can
@@ -58,18 +55,6 @@ pub enum Call {
     /// or `net.hadess.PowerProfiles` where only the old name is owned
     /// ([`crate::profiles::ENDPOINTS`]).
     SetProfile,
-    /// The settings program, detached, on this panel.
-    Settings(Panel),
-}
-
-/// The settings page "Power settings…" opens; which program shows it is
-/// `caustics_sidecar::settings`' choice.
-pub const SETTINGS_PANEL: Panel = Panel::Power;
-
-/// Whether a settings program can be named for [`SETTINGS_PANEL`]; the
-/// picture leaves the settings row out when none can.
-pub fn settings_available() -> bool {
-    settings::settings_command(SETTINGS_PANEL).is_some()
 }
 
 impl Op {
@@ -83,7 +68,6 @@ impl Op {
             Op::Shutdown => "shutdown",
             Op::Brightness(_) => "brightness",
             Op::Profile(_) => "power-mode",
-            Op::Settings => "settings",
         }
     }
 
@@ -106,7 +90,6 @@ impl Op {
             Op::Shutdown => Call::Logind("PowerOff"),
             Op::Brightness(_) => Call::SetBrightness,
             Op::Profile(_) => Call::SetProfile,
-            Op::Settings => Call::Settings(SETTINGS_PANEL),
         }
     }
 }
@@ -129,7 +112,6 @@ pub fn op_for(row: u32, kind: u32, value: f32) -> Option<Op> {
         ROW_SUSPEND => Some(Op::Suspend),
         ROW_RESTART => Some(Op::Restart),
         ROW_SHUTDOWN => Some(Op::Shutdown),
-        ROW_SETTINGS => Some(Op::Settings),
         row if (ROW_PROFILE_BASE..ROW_PROFILE_BASE + MAX_PROFILES as u32).contains(&row) => {
             Some(Op::Profile(row - ROW_PROFILE_BASE))
         }
@@ -165,7 +147,7 @@ pub fn spawn_perform(conn: Option<Connection>, op: Op, dry: bool) {
     tokio::spawn(async move { perform(conn.as_ref(), op, dry).await });
 }
 
-/// Do one of the power menu's ops, or open the settings page, and write down
+/// Do one of the power menu's ops and write down
 /// what came back. Exactly one line per outcome: `caustics-power: <action>: ok`, or
 /// `caustics-power: <action>: <error>`. The brightness and power-mode ops are the
 /// loop's, which knows the backlight's name and the profiles' order.
@@ -190,14 +172,6 @@ pub async fn perform(conn: Option<&Connection>, op: Op, dry: bool) {
                 Err(e) => Err(format!("the niri call did not finish ({e})")),
             }
         }
-        Call::Settings(panel) => {
-            witness(&format!(
-                "{}: {}",
-                op.name(),
-                settings::open_settings(panel)
-            ));
-            Ok(())
-        }
         Call::SetBrightness | Call::SetProfile => {
             Err("the loop performs this one, not the table".to_owned())
         }
@@ -221,8 +195,6 @@ pub async fn perform(conn: Option<&Connection>, op: Op, dry: bool) {
         },
     };
     match outcome {
-        // A spawn's own line already said where it went.
-        Ok(()) if matches!(op, Op::Settings) => {}
         Ok(()) => witness(&format!("{}: ok", op.name())),
         Err(why) => witness(&format!("{}: {why}", op.name())),
     }

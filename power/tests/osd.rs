@@ -167,7 +167,7 @@ fn what_is_not_shown_is_said_once_per_burst() {
 
 fn decoded(state: &Picture) -> Rows {
     let mut bytes = Vec::new();
-    wire::write(&mut bytes, &picture(4, state, true)).expect("writing to a Vec");
+    wire::write(&mut bytes, &picture(4, state)).expect("writing to a Vec");
     match wire::read(&mut bytes.as_slice()) {
         Ok(Some(Frame::Rows(rows))) => rows,
         other => panic!("expected a rows frame, got {other:?}"),

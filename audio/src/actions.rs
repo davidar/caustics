@@ -14,20 +14,9 @@ use caustics_bar_abi::buffer::{
     ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE, ACTION_SET_VALUE,
 };
 
-use crate::rows::{KIND_OUTPUT, ROW_AUDIO, ROW_MIC, ROW_MUTE, ROW_SETTINGS, ROW_VOLUME, device_of};
+use crate::rows::{KIND_OUTPUT, ROW_AUDIO, ROW_MIC, ROW_MUTE, ROW_VOLUME, device_of};
 use crate::witness;
 use crate::wpctl::{self, Devices, SINK, SOURCE};
-use caustics_sidecar::settings::{self, Panel};
-
-/// The settings page the last row opens; which program shows it is
-/// `caustics_sidecar::settings`' choice.
-pub const SETTINGS_PANEL: Panel = Panel::Sound;
-
-/// Whether a settings program can be named for [`SETTINGS_PANEL`]; the
-/// picture leaves the settings row out when none can.
-pub fn settings_available() -> bool {
-    settings::settings_command(SETTINGS_PANEL).is_some()
-}
 
 /// A row of this menu that performs something.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,7 +25,6 @@ pub enum Op {
     SetVolume(u32),
     MuteSink,
     MuteSource,
-    Settings,
     /// A row of the Output submenu: make this sink the default. The PipeWire
     /// node id, out of the row id.
     SetOutput(u32),
@@ -50,8 +38,6 @@ pub enum Op {
 pub enum Call {
     /// `wpctl` with these words after it.
     Wpctl(Vec<String>),
-    /// The settings program, detached, on this panel.
-    Settings(Panel),
 }
 
 impl Op {
@@ -61,7 +47,6 @@ impl Op {
             Op::SetVolume(_) => "set-volume",
             Op::MuteSink => "mute",
             Op::MuteSource => "mute-mic",
-            Op::Settings => "settings",
             Op::SetOutput(_) => "set-output",
             Op::SetInput(_) => "set-input",
         }
@@ -75,7 +60,6 @@ impl Op {
             }
             Op::MuteSink => Call::Wpctl(words(&["set-mute", SINK, TOGGLE])),
             Op::MuteSource => Call::Wpctl(words(&["set-mute", SOURCE, TOGGLE])),
-            Op::Settings => Call::Settings(SETTINGS_PANEL),
             // One command for both: `set-default` takes any node, and
             // WirePlumber knows a sink from a source by the node itself.
             Op::SetOutput(id) | Op::SetInput(id) => {
@@ -101,7 +85,6 @@ pub fn op_for(row: u32, kind: u32, value: f32) -> Option<Op> {
         (ROW_VOLUME, ACTION_SET_VALUE) => Some(Op::SetVolume(percent(value))),
         (ROW_MUTE, ACTION_ACTIVATE) => Some(Op::MuteSink),
         (ROW_MIC, ACTION_ACTIVATE) => Some(Op::MuteSource),
-        (ROW_SETTINGS, ACTION_ACTIVATE) => Some(Op::Settings),
         // A middle click on the chip is the mute, which is the one thing worth
         // doing without opening the menu at all.
         (ROW_AUDIO, ACTION_MIDDLE) => Some(Op::MuteSink),
@@ -114,14 +97,6 @@ pub fn op_for(row: u32, kind: u32, value: f32) -> Option<Op> {
         },
         _ => None,
     }
-}
-
-/// Whether `op` writes something the on-screen display would show (the
-/// volume, a mute, a default device), so the change it brings round is this
-/// sidecar's own and not a toast (`crate::osd`). Opening the settings program
-/// writes nothing.
-pub fn writes(op: Op) -> bool {
-    !matches!(op, Op::Settings)
 }
 
 /// `ACTION_MENU_OPEN` and `ACTION_MENU_CLOSE`: the bar telling the sidecar that owns
@@ -174,8 +149,8 @@ pub fn percent(value: f32) -> u32 {
 /// play back one by one, the volume trailing the pointer. Only the latest value
 /// can matter, which is exactly a `watch` channel: the setter task runs one
 /// `wpctl` at a time and, when it comes back, takes whatever the newest value
-/// is by then, skipping everything in between. Mutes and the settings row
-/// still go through [`perform`]; they are one click each.
+/// is by then, skipping everything in between. Mutes and device
+/// switches still go through [`perform`]; they are one click each.
 pub fn spawn_volume_setter() -> tokio::sync::watch::Sender<Option<u32>> {
     let (tx, mut rx) = tokio::sync::watch::channel(None);
     tokio::spawn(async move {
@@ -191,29 +166,20 @@ pub fn spawn_volume_setter() -> tokio::sync::watch::Sender<Option<u32>> {
 
 /// Do it, and write down what came back: nothing on success for a volume or
 /// mute `wpctl` call — the next frame is the reply — one line for a device
-/// switch, and one line on any failure. Opening the settings program is
-/// always one line, because nothing else will show that it happened.
+/// switch, and one line on any failure.
 pub async fn perform(op: Op) {
-    match op.call() {
-        Call::Wpctl(args) => match wpctl::call(&args).await {
-            Err(why) => witness(&format!("{}: {why}", op.name())),
-            // A device switch is one click and rare, and the line is what a
-            // reader of the journal (and a test) sees it by; a volume
-            // drag or a mute is the next frame and nothing else.
-            Ok(()) if matches!(op, Op::SetOutput(_) | Op::SetInput(_)) => witness(&format!(
-                "{}: {} {}",
-                op.name(),
-                wpctl::WPCTL,
-                args.join(" ")
-            )),
-            Ok(()) => {}
-        },
-        Call::Settings(panel) => {
-            witness(&format!(
-                "{}: {}",
-                op.name(),
-                settings::open_settings(panel)
-            ));
-        }
+    let Call::Wpctl(args) = op.call();
+    match wpctl::call(&args).await {
+        Err(why) => witness(&format!("{}: {why}", op.name())),
+        // A device switch is one click and rare, and the line is what a
+        // reader of the journal (and a test) sees it by; a volume
+        // drag or a mute is the next frame and nothing else.
+        Ok(()) if matches!(op, Op::SetOutput(_) | Op::SetInput(_)) => witness(&format!(
+            "{}: {} {}",
+            op.name(),
+            wpctl::WPCTL,
+            args.join(" ")
+        )),
+        Ok(()) => {}
     }
 }

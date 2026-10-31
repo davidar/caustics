@@ -5,7 +5,7 @@
 //! container has none of them, and the frame there is the empty one.
 //!
 //! It **reads** and nothing else: no action is ever written to the child's
-//! stdin, so no volume moves, nothing is muted, and no settings window opens.
+//! stdin, so no volume moves and nothing is muted.
 //! Then it closes stdin and asserts the child left with 0, which is the lifecycle docs/abi.md, *Lifecycle*, describes.
 //!
 //! ```text
@@ -25,9 +25,6 @@ use caustics_bar_abi::wire::{
 fn the_binary_publishes_a_chip_a_slider_two_mutes_and_the_devices() {
     let mut child = Command::new(env!("CARGO_BIN_EXE_caustics-audio"))
         // The bar spawns a sidecar with no arguments (docs/abi.md, *Lifecycle*).
-        // A named settings program, so the settings row is drawn whatever is
-        // installed; no click is sent, so it never runs.
-        .env("CAUSTICS_SETTINGS", "true")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         // Inherited, so the witnesses land in this test's own output.

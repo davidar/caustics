@@ -10,21 +10,16 @@ use caustics_bar_abi::wire::{
 use caustics_power::backlight::Brightness;
 use caustics_power::profiles::Profiles;
 use caustics_power::rows::{
-    LABEL_BRIGHTNESS, LABEL_SETTINGS, POWER_ICON, Picture, ROW_BATTERY, ROW_BRIGHTNESS, ROW_LOCK,
-    ROW_LOG_OUT, ROW_MODES_SEP, ROW_POWER, ROW_PROFILE_BASE, ROW_RESTART, ROW_SEP, ROW_SETTINGS,
-    ROW_SETTINGS_SEP, ROW_SHUTDOWN, ROW_STATE, ROW_SUSPEND, picture,
+    LABEL_BRIGHTNESS, POWER_ICON, Picture, ROW_BATTERY, ROW_BRIGHTNESS, ROW_LOCK, ROW_LOG_OUT,
+    ROW_MODES_SEP, ROW_POWER, ROW_PROFILE_BASE, ROW_RESTART, ROW_SEP, ROW_SHUTDOWN, ROW_STATE,
+    ROW_SUSPEND, picture,
 };
 use caustics_power::upower::{Battery, STATE_CHARGING, STATE_DISCHARGING};
 
 /// The frame's bytes, as `wire::write` puts them on the pipe.
 fn bytes(revision: u32, state: &Picture) -> Vec<u8> {
-    bytes_with(revision, state, true)
-}
-
-/// The same, saying whether a settings program can be named.
-fn bytes_with(revision: u32, state: &Picture, settings: bool) -> Vec<u8> {
     let mut bytes = Vec::new();
-    wire::write(&mut bytes, &picture(revision, state, settings)).expect("writing to a Vec");
+    wire::write(&mut bytes, &picture(revision, state)).expect("writing to a Vec");
     bytes
 }
 
@@ -206,7 +201,7 @@ fn an_absent_battery_is_no_chip_and_no_menu() {
 }
 
 #[test]
-fn the_battery_menu_with_everything_is_state_slider_modes_settings() {
+fn the_battery_menu_with_everything_is_state_slider_modes() {
     let rows = decoded(1, &everything());
     assert_eq!(
         battery_menu(&rows),
@@ -217,8 +212,6 @@ fn the_battery_menu_with_everything_is_state_slider_modes_settings() {
             ROW_PROFILE_BASE,
             ROW_PROFILE_BASE + 1,
             ROW_PROFILE_BASE + 2,
-            ROW_SETTINGS_SEP,
-            ROW_SETTINGS,
         ]
     );
 
@@ -273,49 +266,18 @@ fn the_battery_menu_with_everything_is_state_slider_modes_settings() {
             ),
         ]
     );
-
-    let settings = index_of(&rows, ROW_SETTINGS);
-    assert_eq!(rows.label(settings).as_deref(), Some(LABEL_SETTINGS));
-    assert_eq!(rows.rows[settings].flags, 0);
 }
 
 #[test]
-fn without_a_backlight_or_a_daemon_the_menu_is_state_and_settings() {
+fn without_a_backlight_or_a_daemon_the_menu_is_the_state_row() {
     // A virtual machine's menu: a battery UPower reports, no backlight, no
     // power-profiles daemon.
     let rows = decoded(1, &with_battery(charging_at(76.0)));
-    assert_eq!(
-        battery_menu(&rows),
-        vec![ROW_STATE, ROW_SETTINGS_SEP, ROW_SETTINGS]
-    );
+    assert_eq!(battery_menu(&rows), vec![ROW_STATE]);
     assert_eq!(
         rows.label(index_of(&rows, ROW_STATE)).as_deref(),
         Some("76% · 1 h 5 m until full")
     );
-}
-
-/// With no settings program to name, the battery menu ends at its last mode,
-/// with no settings row and no separator above one.
-#[test]
-fn no_settings_program_is_no_settings_row() {
-    let rows = match wire::read(&mut bytes_with(1, &everything(), false).as_slice()) {
-        Ok(Some(Frame::Rows(rows))) => rows,
-        other => panic!("expected a rows frame, got {other:?}"),
-    };
-    let menu = battery_menu(&rows);
-    assert!(!menu.contains(&ROW_SETTINGS), "{menu:?}");
-    assert!(!menu.contains(&ROW_SETTINGS_SEP), "{menu:?}");
-    assert!(
-        *menu.last().expect("a battery menu") >= ROW_PROFILE_BASE,
-        "{menu:?}"
-    );
-
-    let bare =
-        match wire::read(&mut bytes_with(1, &with_battery(charging_at(76.0)), false).as_slice()) {
-            Ok(Some(Frame::Rows(rows))) => rows,
-            other => panic!("expected a rows frame, got {other:?}"),
-        };
-    assert_eq!(battery_menu(&bare), vec![ROW_STATE]);
 }
 
 #[test]

@@ -2424,10 +2424,10 @@ if [[ ${#power_rect[@]} -eq 4 ]]; then
     fi
 fi
 
-say "16b. the battery chip's menu is the state row and settings, nothing else"
+say "16b. the battery chip's menu is the state row, nothing else"
 # `fake_upower` on the session bus, given to the bar as its system bus (zbus
 # honours `DBUS_SYSTEM_BUS_ADDRESS`). With no power profiles or logind there,
-# the menu is the state row, a separator and "Power settings…".
+# the menu is the state row, and the brightness slider with a backlight.
 fixture_start fake-upower '$T_FAKE_UPOWER'
 fake_up=no
 deadline=$((SECONDS + 15))
@@ -2479,41 +2479,37 @@ if wait_for_journal "layout: applet-caustics-power-8 target=bar" 20; then
     battery_rect=($(layout_rect applet-caustics-power-8))
     pass "the battery chip laid out: ${battery_rect[*]}"
     opens_before=$(journal_count "popup: open kind=menu")
-    click_at "$(python3 -c "print(round(${battery_rect[0]} + ${battery_rect[2]} / 2))")" \
-        "$((bar_origin_y + $(python3 -c "print(round(${battery_rect[1]} + ${battery_rect[3]} / 2))")))"
+    battery_x=$(python3 -c "print(round(${battery_rect[0]} + ${battery_rect[2]} / 2))")
+    battery_y=$((bar_origin_y + $(python3 -c "print(round(${battery_rect[1]} + ${battery_rect[3]} / 2))")))
+    click_at "$battery_x" "$battery_y"
     if wait_for_journal_more "popup: open kind=menu" 8 "$opens_before"; then
         pass "the battery click opened a menu popup"
     else
         fail "no menu popup from the battery chip"
     fi
     deadline=$((SECONDS + 20))
-    while [[ "$(battery_rows_now | grep -c .)" -lt $((3 + has_backlight)) ]] && ((SECONDS < deadline)); do
+    while [[ "$(battery_rows_now | grep -c .)" -lt $((1 + has_backlight)) ]] && ((SECONDS < deadline)); do
         sleep 1
     done
     shot battery-menu.png
     rows=$(battery_rows_now | tr '\n' ' ' | xargs)
-    # 9 the state row, 12 the separator, 13 "Power settings…" (power/src/rows.rs);
-    # no 10 (the slider) and no 11 or 256+ (the power modes).
+    # 9 the state row and, with a backlight, 10 the slider (power/src/rows.rs);
+    # no 11 or 256+ (the power modes).
     if ((has_backlight)) &&
-        [[ "$rows" == "applet-caustics-power-10 applet-caustics-power-12 applet-caustics-power-13 applet-caustics-power-9" ]]; then
-        pass "four rows: the state row, the brightness slider, a separator and the settings row"
-    elif ((!has_backlight)) && [[ "$rows" == "applet-caustics-power-12 applet-caustics-power-13 applet-caustics-power-9" ]]; then
-        pass "three rows: the state row, a separator and the settings row"
+        [[ "$rows" == "applet-caustics-power-10 applet-caustics-power-9" ]]; then
+        pass "two rows: the state row and the brightness slider"
+    elif ((!has_backlight)) && [[ "$rows" == "applet-caustics-power-9" ]]; then
+        pass "one row: the state row"
     else
         fail "the battery menu holds: $rows"
     fi
-    # The settings row is a leaf: it performs (dry run) and the popup closes.
-    if popup_click applet-caustics-power-13; then
-        if wait_for_journal "caustics-power: settings: dry run" 8; then
-            pass "caustics-power: settings: dry run"
-        else
-            fail "no 'caustics-power: settings: dry run' after clicking Power settings…"
-        fi
-        if journal | tail -n 25 | grep -qF 'popup: closed'; then
-            pass "and the popup closed behind it"
-        else
-            fail "the popup stayed open after the settings row was clicked"
-        fi
+    # A second click on the chip closes the menu it opened.
+    closes_before=$(journal_count "popup: closed")
+    click_at "$battery_x" "$battery_y"
+    if wait_for_journal_more "popup: closed" 8 "$closes_before"; then
+        pass "a second click on the battery chip closed its menu"
+    else
+        fail "the battery menu stayed open after a second click on its chip"
     fi
 else
     fail "no 'layout: applet-caustics-power-8 target=bar'; the battery chip was not laid out"

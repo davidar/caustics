@@ -35,7 +35,7 @@ use caustics_bar_abi::wire::{
 };
 use caustics_network::model::{self, MAX_VISIBLE, Network, Primary, Snapshot};
 use caustics_network::nm::{self, Settings, SettingsByPath};
-use caustics_network::rows::{self, ITEM, SEP_BOTTOM, SEP_TOP, SEP_VISIBLE, SETTINGS, WIFI};
+use caustics_network::rows::{self, ITEM, SEP_BOTTOM, SEP_TOP, WIFI};
 
 mod synth;
 
@@ -132,12 +132,7 @@ fn joined_ssid() -> Vec<u8> {
 /// Round-trip through `wire::write`/`wire::read`, so every assertion below is
 /// about what the *bar* would decode rather than about `RowsBuilder`'s memory.
 fn decoded(revision: u32, state: &Snapshot) -> Rows {
-    decoded_with(revision, state, true)
-}
-
-/// The same, saying whether a settings program can be named.
-fn decoded_with(revision: u32, state: &Snapshot, settings: bool) -> Rows {
-    let frame = Frame::Rows(rows::picture(revision, state, settings));
+    let frame = Frame::Rows(rows::picture(revision, state));
     let mut bytes = Vec::new();
     wire::write(&mut bytes, &frame).expect("writing to a Vec");
     match wire::read(&mut bytes.as_slice()) {
@@ -154,7 +149,7 @@ fn index_of(rows: &Rows, id: u32) -> usize {
 }
 
 #[test]
-fn the_fixture_walk_is_one_chip_a_switch_two_networks_and_settings() {
+fn the_fixture_walk_is_one_chip_a_switch_and_two_networks() {
     let state = fixture();
     assert!(state.wireless_enabled);
     assert!(state.wifi_device());
@@ -174,7 +169,8 @@ fn the_fixture_walk_is_one_chip_a_switch_two_networks_and_settings() {
     assert_eq!(rows.applet, APPLET_NETWORK);
     assert_eq!(rows.revision, 7);
 
-    // The chip, the switch, a separator, two networks, a separator, settings.
+    // The chip, the switch, a separator and two networks: nothing in range
+    // follows them, so no separator ends the menu.
     let ids: Vec<u32> = rows.rows.iter().map(|row| row.id).collect();
     assert_eq!(
         ids,
@@ -184,8 +180,6 @@ fn the_fixture_walk_is_one_chip_a_switch_two_networks_and_settings() {
             SEP_TOP,
             state.networks[0].row,
             state.networks[1].row,
-            SEP_BOTTOM,
-            SETTINGS
         ]
     );
 
@@ -232,43 +226,21 @@ fn the_fixture_walk_is_one_chip_a_switch_two_networks_and_settings() {
     assert_eq!(rows.rows[i].flags, RFLAG_RADIO | RFLAG_CHECKABLE);
     assert_eq!(rows.icon(i), Some(model::NONE));
 
-    for id in [SEP_TOP, SEP_BOTTOM] {
-        let i = index_of(&rows, id);
-        assert_eq!(rows.rows[i].role, ROW_SEPARATOR);
-        assert_eq!(rows.label(i), None);
-        assert_eq!(rows.icon(i), None);
-    }
-
-    let i = index_of(&rows, SETTINGS);
-    assert_eq!(i, rows.rows.len() - 1, "the settings row is last");
-    assert_eq!(rows.label(i).as_deref(), Some(rows::SETTINGS_LABEL));
-    assert_eq!(rows.rows[i].flags, 0, "it performs on a plain activate");
-    assert_eq!(rows.icon(i), Some(rows::SETTINGS_ICON));
+    let i = index_of(&rows, SEP_TOP);
+    assert_eq!(rows.rows[i].role, ROW_SEPARATOR);
+    assert_eq!(rows.label(i), None);
+    assert_eq!(rows.icon(i), None);
 }
 
-/// With no settings program to name, the settings row is not written, nor is
-/// a separator that would then end the menu.
+/// With networks in range, the last of them ends the menu: no separator
+/// follows it.
 #[test]
-fn no_settings_program_is_no_settings_row() {
-    let state = fixture();
-    let rows = decoded_with(1, &state, false);
-    let ids: Vec<u32> = rows.rows.iter().map(|row| row.id).collect();
-    let known: Vec<u32> = state.networks.iter().map(|n| n.row).collect();
-    let mut expected = vec![ITEM, WIFI, SEP_TOP];
-    expected.extend(&known);
-    assert_eq!(ids, expected, "the menu ends at the last known network");
-
-    // With networks in range, the last of them ends the menu.
+fn the_last_network_in_range_ends_the_menu() {
     let ranged = with_access_points(&[(b"Example Cafe", 70)]);
-    let rows = decoded_with(1, &ranged, false);
-    let last = rows.rows.last().expect("rows").id;
-    assert_eq!(Some(last), ranged.visible.last().map(|v| v.row));
-    assert!(
-        !rows
-            .rows
-            .iter()
-            .any(|row| row.id == SEP_VISIBLE || row.id == SETTINGS)
-    );
+    let rows = decoded(1, &ranged);
+    let last = rows.rows.last().expect("rows");
+    assert_eq!(Some(last.id), ranged.visible.last().map(|v| v.row));
+    assert_ne!(last.role, ROW_SEPARATOR);
 }
 
 #[test]
@@ -427,10 +399,10 @@ fn the_chip_has_one_icon_for_each_state_the_machine_can_be_in() {
     assert_eq!(wireless_nowhere.icon(), model::OFFLINE);
     let rows = decoded(1, &wireless_nowhere);
     assert_eq!(rows.icon(0), Some(model::OFFLINE));
-    // No networks, so no second separator: the switch, a separator, settings.
+    // No networks, so no separator at all: the chip and the switch.
     assert_eq!(
         rows.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
-        vec![ITEM, WIFI, SEP_TOP, SETTINGS]
+        vec![ITEM, WIFI]
     );
 }
 
@@ -523,7 +495,8 @@ fn a_row_id_is_the_uuid_and_never_an_index() {
             model::DERIVED,
             "every derived id carries the bit that keeps it off the fixed ids 1..=6"
         );
-        for fixed in [ITEM, WIFI, SEP_TOP, SEP_BOTTOM, SETTINGS, SEP_VISIBLE] {
+        // The fixed ids and the two retired ones.
+        for fixed in 1..=6 {
             assert_ne!(network.row, fixed);
         }
     }
@@ -659,7 +632,7 @@ fn the_networks_in_range_are_a_section_of_their_own_below_the_known_ones() {
     );
 
     // The whole menu, in order: the switch, the known networks and their
-    // separator, then what is in range, then its separator and settings last.
+    // separator, then what is in range, last.
     let rows = decoded(11, &state);
     assert_eq!(
         rows.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
@@ -672,8 +645,6 @@ fn the_networks_in_range_are_a_section_of_their_own_below_the_known_ones() {
             SEP_BOTTOM,
             state.visible[0].row,
             state.visible[1].row,
-            SEP_VISIBLE,
-            SETTINGS
         ]
     );
 
@@ -697,24 +668,19 @@ fn the_networks_in_range_are_a_section_of_their_own_below_the_known_ones() {
         Some(model::GOOD)
     );
 
-    let i = index_of(&rows, SEP_VISIBLE);
+    let i = index_of(&rows, SEP_BOTTOM);
     assert_eq!(rows.rows[i].role, ROW_SEPARATOR);
-    assert_eq!(
-        index_of(&rows, SETTINGS),
-        rows.rows.len() - 1,
-        "settings is still last"
-    );
 }
 
 #[test]
 fn nothing_unknown_in_range_is_no_section_and_no_separator() {
     // The steady state: the only access point in range is the joined
-    // one, so the section and its separator are absent and the frame is the
-    // menu of known networks alone.
+    // one, so the section and the separator above it are absent and the
+    // frame is the menu of known networks alone.
     let quiet = fixture();
     assert!(quiet.visible.is_empty(), "{:?}", quiet.visible);
     let rows = decoded(3, &quiet);
-    assert!(!rows.rows.iter().any(|row| row.id == SEP_VISIBLE));
+    assert!(!rows.rows.iter().any(|row| row.id == SEP_BOTTOM));
     assert_eq!(
         rows.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
         vec![
@@ -723,8 +689,6 @@ fn nothing_unknown_in_range_is_no_section_and_no_separator() {
             SEP_TOP,
             quiet.networks[0].row,
             quiet.networks[1].row,
-            SEP_BOTTOM,
-            SETTINGS
         ]
     );
 }
@@ -788,14 +752,15 @@ fn the_section_is_capped_at_ten_and_they_are_the_ten_strongest() {
             .collect::<Vec<_>>(),
         "the ten strongest, strongest first"
     );
-    // The weakest four are simply not rows, and the frame is still well formed.
+    // The weakest four are simply not rows, and the frame is still well formed:
+    // the ten unmarked rows are the ten in range.
     let rows = decoded(4, &state);
     assert_eq!(
         rows.rows
             .iter()
             .filter(|row| row.flags == 0 && row.role == ROW_MENU)
             .count(),
-        11
+        MAX_VISIBLE
     );
 }
 
@@ -828,7 +793,7 @@ fn an_in_range_row_id_is_the_ssid_and_holds_still_while_the_strength_moves() {
         );
     }
     assert_eq!(weak.visible[0].row & model::VISIBLE, model::VISIBLE);
-    for fixed in [ITEM, WIFI, SEP_TOP, SEP_BOTTOM, SETTINGS, SEP_VISIBLE] {
+    for fixed in 1..=6 {
         assert_ne!(weak.visible[0].row, fixed);
     }
 

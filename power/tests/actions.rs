@@ -6,12 +6,11 @@
 use caustics_bar_abi::buffer::{
     ACTION_ACTIVATE, ACTION_MIDDLE, ACTION_SECONDARY, ACTION_SET_VALUE,
 };
-use caustics_power::actions::{Call, Op, SETTINGS_PANEL, dry_run, op_for};
+use caustics_power::actions::{Call, Op, dry_run, op_for};
 use caustics_power::niri;
 use caustics_power::rows::{
     MAX_PROFILES, ROW_BATTERY, ROW_BRIGHTNESS, ROW_LOCK, ROW_LOG_OUT, ROW_MODES_SEP, ROW_POWER,
-    ROW_PROFILE_BASE, ROW_RESTART, ROW_SEP, ROW_SETTINGS, ROW_SETTINGS_SEP, ROW_SHUTDOWN,
-    ROW_STATE, ROW_SUSPEND,
+    ROW_PROFILE_BASE, ROW_RESTART, ROW_SEP, ROW_SHUTDOWN, ROW_STATE, ROW_SUSPEND,
 };
 
 #[test]
@@ -134,12 +133,8 @@ fn the_battery_menu_rows_map_to_their_ops() {
         op_for(ROW_PROFILE_BASE + MAX_PROFILES as u32, ACTION_ACTIVATE, 0.0),
         None
     );
-    assert_eq!(
-        op_for(ROW_SETTINGS, ACTION_ACTIVATE, 0.0),
-        Some(Op::Settings)
-    );
-    // The state row is disabled and the separators are separators.
-    for row in [ROW_STATE, ROW_MODES_SEP, ROW_SETTINGS_SEP] {
+    // The state row is disabled and the separator is a separator.
+    for row in [ROW_STATE, ROW_MODES_SEP] {
         assert_eq!(op_for(row, ACTION_ACTIVATE, 0.0), None, "row {row}");
     }
     // A value on any other row is nothing.
@@ -150,27 +145,6 @@ fn the_battery_menu_rows_map_to_their_ops() {
 fn the_battery_menu_ops_name_their_calls() {
     assert_eq!(Op::Brightness(3.0).call(), Call::SetBrightness);
     assert_eq!(Op::Profile(1).call(), Call::SetProfile);
-    assert_eq!(Op::Settings.call(), Call::Settings(SETTINGS_PANEL));
-    assert_eq!(SETTINGS_PANEL, caustics_sidecar::settings::Panel::Power);
-}
-
-/// The settings row names a panel, never a program: `$CAUSTICS_SETTINGS` wins,
-/// the first known program on `PATH` follows, and with neither there is
-/// nothing to run (the click is witnessed and nothing starts).
-#[test]
-fn the_settings_program_is_the_override_or_the_first_found_or_none() {
-    use caustics_sidecar::settings::resolve;
-    use std::ffi::OsStr;
-
-    let found = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
-    let gnome = Some(OsStr::new("gnome-control-center"));
-    let chosen = resolve(SETTINGS_PANEL, gnome, None, found(&[])).expect("an override is taken");
-    assert_eq!(chosen.describe(), "gnome-control-center power");
-    let niri = Some(OsStr::new("niri"));
-    let chosen = resolve(SETTINGS_PANEL, None, niri, found(&["cosmic-settings"]))
-        .expect("cosmic-settings is on PATH");
-    assert_eq!(chosen.describe(), "cosmic-settings power");
-    assert_eq!(resolve(SETTINGS_PANEL, None, niri, found(&[])), None);
 }
 
 /// Log Out reads niri's reply, so an `Err` is witnessed as one rather

@@ -1,7 +1,6 @@
 //! The one frame this sidecar publishes: `APPLET_NETWORK`, one bar item, the
-//! Wi-Fi switch, a radio row per known Wi-Fi network, the networks in range
-//! that no profile claims, and the settings row when there is a settings
-//! program to open.
+//! Wi-Fi switch, a radio row per known Wi-Fi network and the networks in range
+//! that no profile claims.
 //!
 //! Whole-state, like every rows frame: there is never a delta to track, and a
 //! restart of either end needs no replay.
@@ -23,15 +22,9 @@ pub const ITEM: u32 = 1;
 pub const WIFI: u32 = 2;
 pub const SEP_TOP: u32 = 3;
 pub const SEP_BOTTOM: u32 = 4;
-pub const SETTINGS: u32 = 5;
-/// Between the networks in range and the settings row. Absent with that
-/// section, so a menu with nothing unknown in range has no empty gap. Its id is 6, after `SETTINGS`, because ids are never
-/// renumbered.
-pub const SEP_VISIBLE: u32 = 6;
+// 5 was the settings row and 6 the separator above it; ids are never reused.
 
 pub const WIFI_LABEL: &str = "Wi-Fi";
-pub const SETTINGS_LABEL: &str = "Network Settings";
-pub const SETTINGS_ICON: &str = "preferences-system-network-symbolic";
 
 /// No rows at all: the frame that says "there is no NetworkManager". The chip
 /// disappears and the bar's health line still says `running`; a missing
@@ -46,11 +39,8 @@ pub fn empty(revision: u32) -> Rows {
 /// published — everything but its `revision` — which is how a `Strength`
 /// signal every six seconds turns into no frame at all.
 ///
-/// `settings` says whether a settings program can be named
-/// ([`crate::actions::settings_available`]). Without one the settings row is
-/// left out, and so is any separator that would then end the menu: a row
-/// that opens nothing is worse than no row.
-pub fn picture(revision: u32, state: &Snapshot, settings: bool) -> Rows {
+/// A separator only ever stands between two sections, so none ends the menu.
+pub fn picture(revision: u32, state: &Snapshot) -> Rows {
     let mut rows = RowsBuilder::new(APPLET_NETWORK, revision);
     let item = rows.item(ITEM, None, Some(state.icon()), -1.0, RFLAG_HAS_MENU);
 
@@ -61,7 +51,7 @@ pub fn picture(revision: u32, state: &Snapshot, settings: bool) -> Rows {
             0
         };
     rows.menu(item, WIFI, Some(WIFI_LABEL), None, switch);
-    if settings || !state.networks.is_empty() || !state.visible.is_empty() {
+    if !state.networks.is_empty() || !state.visible.is_empty() {
         rows.separator(item, SEP_TOP);
     }
 
@@ -85,7 +75,7 @@ pub fn picture(revision: u32, state: &Snapshot, settings: bool) -> Rows {
             flags,
         );
     }
-    if !state.networks.is_empty() && (settings || !state.visible.is_empty()) {
+    if !state.networks.is_empty() && !state.visible.is_empty() {
         rows.separator(item, SEP_BOTTOM);
     }
 
@@ -102,12 +92,6 @@ pub fn picture(revision: u32, state: &Snapshot, settings: bool) -> Rows {
             Some(model::bucket(Some(network.strength))),
             0,
         );
-    }
-    if settings {
-        if !state.visible.is_empty() {
-            rows.separator(item, SEP_VISIBLE);
-        }
-        rows.menu(item, SETTINGS, Some(SETTINGS_LABEL), Some(SETTINGS_ICON), 0);
     }
     rows.build()
 }

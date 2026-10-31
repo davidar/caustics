@@ -1,7 +1,6 @@
 //! The one frame this sidecar publishes: `APPLET_AUDIO`, one bar item and
 //! its menu: the slider, the two mutes, the Output and Input submenus with
-//! one radio row per device, and the settings row when there is a settings
-//! program to open.
+//! one radio row per device.
 //!
 //! Whole-state, like every rows frame: there is never a delta to track, and a
 //! restart of either end needs no replay. The ids are constants, so a volume
@@ -26,14 +25,13 @@ pub const ROW_VOLUME: u32 = 2;
 pub const ROW_MUTE: u32 = 3;
 pub const ROW_MIC: u32 = 4;
 pub const ROW_SEP: u32 = 5;
-pub const ROW_SETTINGS: u32 = 6;
-/// The two device submenus, the separator between them
-/// and the settings row, and the disabled row a submenu with nothing in it
-/// carries. Ids are never renumbered, so these take the numbers after the six above: a menu open
-/// across the sidecar's upgrade holds its level by id.
+// 6 was the settings row; ids are never reused.
+/// The two device submenus, and the disabled row a submenu with nothing in it
+/// carries. Ids are never renumbered, so these take the numbers after the six
+/// above: a menu open across the sidecar's upgrade holds its level by id.
 pub const ROW_OUTPUT: u32 = 7;
 pub const ROW_INPUT: u32 = 8;
-pub const ROW_SEP_DEVICES: u32 = 9;
+// 9 was the separator above the settings row; ids are never reused.
 pub const ROW_NO_OUTPUT: u32 = 10;
 pub const ROW_NO_INPUT: u32 = 11;
 
@@ -71,7 +69,6 @@ pub const VOLUME_MAX: f32 = 100.0;
 pub const LABEL_VOLUME: &str = "Volume";
 pub const LABEL_MUTE: &str = "Mute";
 pub const LABEL_MIC: &str = "Mute microphone";
-pub const LABEL_SETTINGS: &str = "Sound Settings";
 pub const LABEL_OUTPUT: &str = "Output";
 pub const LABEL_INPUT: &str = "Input";
 pub const LABEL_NO_DEVICE: &str = "No device";
@@ -89,7 +86,6 @@ pub const ICON_OVERAMPLIFIED: &str = "audio-volume-overamplified-symbolic";
 /// each icon only has to say what the row is *about*: the speaker for the
 /// sink's mute, the microphone for the source's.
 pub const ICON_MIC: &str = "audio-input-microphone-symbolic";
-pub const ICON_SETTINGS: &str = "preferences-system-symbolic";
 /// The two submenus' icons, both in Adwaita's `devices/`. The device rows under them carry none: the radio mark is the
 /// row's whole state.
 pub const ICON_OUTPUT: &str = "audio-speakers-symbolic";
@@ -112,13 +108,8 @@ pub fn icon_for(percent: f32, muted: bool) -> &'static str {
 /// The whole picture. `None` is the empty frame: no `wpctl`, or no default
 /// sink. The chip disappears and the bar's health line still says `running`;
 /// a missing sound server costs this chip and nothing else.
-///
-/// `settings` says whether a settings program can be named
-/// ([`crate::actions::settings_available`]). Without one the settings row and
-/// the separator above it are left out: a row that opens nothing is worse
-/// than no row.
-pub fn picture(revision: u32, audio: Option<&Audio>, devices: &Devices, settings: bool) -> Frame {
-    toasting(revision, audio, devices, settings, Flagged::NONE)
+pub fn picture(revision: u32, audio: Option<&Audio>, devices: &Devices) -> Frame {
+    toasting(revision, audio, devices, Flagged::NONE)
 }
 
 /// The same picture, with the on-screen display's bits (`crate::osd`): the
@@ -126,13 +117,7 @@ pub fn picture(revision: u32, audio: Option<&Audio>, devices: &Devices, settings
 /// `RFLAG_ATTENTION`, which is what the caustic opens a toast from
 /// (docs/abi.md, **Toasts**). Ids, order and every other flag are the plain
 /// picture's, so a toast's slider follows the volume in place.
-pub fn toasting(
-    revision: u32,
-    audio: Option<&Audio>,
-    devices: &Devices,
-    settings: bool,
-    osd: Flagged,
-) -> Frame {
+pub fn toasting(revision: u32, audio: Option<&Audio>, devices: &Devices, osd: Flagged) -> Frame {
     let mut rows = RowsBuilder::new(APPLET_AUDIO, revision);
     let Some(audio) = audio else {
         return rows.frame();
@@ -195,16 +180,6 @@ pub fn toasting(
         RFLAG_SUBMENU,
     );
     choices(&mut rows, input, KIND_INPUT, &devices.inputs, ROW_NO_INPUT);
-    if settings {
-        rows.separator(item, ROW_SEP_DEVICES);
-        rows.menu(
-            item,
-            ROW_SETTINGS,
-            Some(LABEL_SETTINGS),
-            Some(ICON_SETTINGS),
-            0,
-        );
-    }
     rows.frame()
 }
 

@@ -7,9 +7,7 @@ use caustics_bar_abi::wire::{
 };
 
 use crate::history::{DEFAULT_ACTION, History};
-use crate::rows::{INDEX_DISMISS, ROW_CHIP, ROW_CLEAR, ROW_DND, ROW_SETTINGS, split_action_row};
-use crate::witness;
-use caustics_sidecar::settings::{self, Panel};
+use crate::rows::{INDEX_DISMISS, ROW_CHIP, ROW_CLEAR, ROW_DND, split_action_row};
 
 /// One thing to do.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -21,7 +19,6 @@ pub enum Op {
     MenuClose,
     ToggleDnd,
     ClearAll,
-    Settings,
     /// `ActionInvoked(id, key)` when `key` is some, then
     /// `NotificationClosed(id, 2)` unless `keep` (a resident notification
     /// whose action was invoked).
@@ -35,16 +32,6 @@ pub enum Op {
     ToastShown {
         id: u32,
     },
-}
-
-/// The settings page the last row opens; which program shows it is
-/// `caustics_sidecar::settings`' choice.
-pub const SETTINGS_PANEL: Panel = Panel::Notifications;
-
-/// Whether a settings program can be named for [`SETTINGS_PANEL`]; the
-/// picture leaves the settings row out when none can.
-pub fn settings_available() -> bool {
-    settings::settings_command(SETTINGS_PANEL).is_some()
 }
 
 /// The table. `None` is a row that does nothing for that kind of click.
@@ -72,7 +59,6 @@ pub fn op_for(history: &History, row: u32, kind: u32) -> Option<Op> {
             })
         }
         (ROW_CLEAR, ACTION_ACTIVATE) => Some(Op::ClearAll),
-        (ROW_SETTINGS, ACTION_ACTIVATE) => Some(Op::Settings),
         (row, ACTION_ACTIVATE) => match split_action_row(row) {
             Some((id, INDEX_DISMISS)) => history.get(id).map(|_| Op::Invoke {
                 id,
@@ -109,13 +95,4 @@ pub fn op_for(history: &History, row: u32, kind: u32) -> Option<Op> {
         },
         _ => None,
     }
-}
-
-/// The settings page, detached (`caustics_sidecar::settings::open_settings`),
-/// and one witness line saying where it went.
-pub fn spawn_settings() {
-    witness(&format!(
-        "settings: {}",
-        settings::open_settings(SETTINGS_PANEL)
-    ));
 }

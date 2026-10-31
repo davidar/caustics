@@ -276,7 +276,7 @@ fn decoded(osd: Flagged) -> Rows {
     let mut bytes = Vec::new();
     wire::write(
         &mut bytes,
-        &toasting(3, Some(&audio), &devices(50, 60), true, osd),
+        &toasting(3, Some(&audio), &devices(50, 60), osd),
     )
     .expect("writing to a Vec");
     match wire::read(&mut bytes.as_slice()) {

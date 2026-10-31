@@ -8,7 +8,7 @@
 //! (`DBUS_SYSTEM_BUS_ADDRESS`, which zbus honours and every sidecar
 //! inherits): the sidecar then sees an 87% battery discharging with 2 h 13 m
 //! left, no power-profiles daemon and no logind — and, with no backlight, its
-//! menu is the state row and the settings row.
+//! menu is the state row alone.
 //!
 //! Not a test of UPower: a fixture with the six properties the sidecar reads.
 //! It serves until it is stopped.

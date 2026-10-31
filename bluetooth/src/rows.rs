@@ -1,6 +1,6 @@
 //! The one frame this sidecar publishes: `APPLET_BLUETOOTH`, a chip, the
 //! adapter's on/off row, one row per paired device, one per device in range
-//! that is not paired yet (while the menu is open), and the settings row.
+//! that is not paired yet (while the menu is open).
 //!
 //! Whole-state, like every rows frame: there is never a delta to track, and a
 //! restart of either end needs no replay.
@@ -30,21 +30,17 @@ use crate::bluez::State;
 pub const ROW_CHIP: u32 = 1;
 /// "Bluetooth": `CHECKABLE`, `CHECKED` when the adapter is powered.
 pub const ROW_POWER: u32 = 2;
-/// Between the toggle and the devices.
+/// Between the toggle and the devices, written only when a device is listed.
 pub const ROW_SEP_DEVICES: u32 = 3;
-/// Between the devices and Settings, written only when there was a device
-/// and there is a settings row.
-pub const ROW_SEP_SETTINGS: u32 = 4;
-/// "Bluetooth Settings": opens the settings program's Bluetooth page
-/// (`caustics_sidecar::settings`); written only when there is one to open.
-pub const ROW_SETTINGS: u32 = 5;
+// 4 was the separator above the settings row and 5 the settings row; ids are
+// never reused.
 /// Between the paired devices and the devices in range, written only when
-/// there are both. Its id is 6, after `ROW_SETTINGS`, because ids are never
-/// renumbered.
+/// there are both. Its id is 6, after the retired 4 and 5, because ids are
+/// never renumbered.
 pub const ROW_SEP_NEARBY: u32 = 6;
 
 /// The bit every device row id carries, so no derived id can ever equal one of
-/// the constants above.
+/// the constants above or the retired ids.
 pub const DEVICE_ID_BIT: u32 = 0x100;
 /// The bit a device in range's row id carries and a paired device's never
 /// does, so the two lists cannot share an id.
@@ -59,7 +55,6 @@ pub const ICON_OFF: &str = "bluetooth-disabled-symbolic";
 pub const ICON_DEVICE: &str = "bluetooth-symbolic";
 
 pub const POWER_LABEL: &str = "Bluetooth";
-pub const SETTINGS_LABEL: &str = "Bluetooth Settings";
 
 /// A paired device's row id: FNV-1a over its address, with [`DEVICE_ID_BIT`]
 /// set and [`NEARBY_ID_BIT`] clear.
@@ -91,12 +86,7 @@ fn fnv1a(address: &str) -> u32 {
 /// The whole picture. No adapter is a frame with **no rows**: the chip
 /// disappears and the bar's health line still says `running`; a missing
 /// BlueZ costs this chip and nothing else.
-///
-/// `settings` says whether a settings program can be named
-/// ([`crate::actions::settings_available`]). Without one the settings row is
-/// left out, and so is any separator that would then end the menu: a row
-/// that opens nothing is worse than no row.
-pub fn picture(revision: u32, state: &State, settings: bool) -> Frame {
+pub fn picture(revision: u32, state: &State) -> Frame {
     let mut rows = RowsBuilder::new(APPLET_BLUETOOTH, revision);
     let Some(adapter) = state.adapter.as_ref() else {
         return rows.frame();
@@ -112,8 +102,7 @@ pub fn picture(revision: u32, state: &State, settings: bool) -> Frame {
         flags |= RFLAG_CHECKED;
     }
     rows.menu(chip, ROW_POWER, Some(POWER_LABEL), None, flags);
-    let listed = !state.devices.is_empty() || !state.nearby.is_empty();
-    if settings || listed {
+    if !state.devices.is_empty() || !state.nearby.is_empty() {
         rows.separator(chip, ROW_SEP_DEVICES);
     }
 
@@ -160,12 +149,6 @@ pub fn picture(revision: u32, state: &State, settings: bool) -> Frame {
             Some(icon),
             0,
         );
-    }
-    if settings {
-        if listed {
-            rows.separator(chip, ROW_SEP_SETTINGS);
-        }
-        rows.menu(chip, ROW_SETTINGS, Some(SETTINGS_LABEL), None, 0);
     }
 
     rows.frame()

@@ -1,9 +1,9 @@
 //! The dispatch: each row id, with each action kind, to the command it would
 //! run — asserted against the *description* of the call, so no test ever moves
-//! the volume, mutes a microphone or opens a settings window.
+//! the volume or mutes a microphone.
 
-use caustics_audio::actions::{Call, Op, SETTINGS_PANEL, TOGGLE, op_for, percent};
-use caustics_audio::rows::{ROW_AUDIO, ROW_MIC, ROW_MUTE, ROW_SEP, ROW_SETTINGS, ROW_VOLUME};
+use caustics_audio::actions::{Call, Op, TOGGLE, op_for, percent};
+use caustics_audio::rows::{ROW_AUDIO, ROW_MIC, ROW_MUTE, ROW_SEP, ROW_VOLUME};
 use caustics_audio::wpctl::{SINK, SOURCE};
 use caustics_bar_abi::buffer::{
     ACTION_ACTIVATE, ACTION_MIDDLE, ACTION_SECONDARY, ACTION_SET_VALUE,
@@ -83,41 +83,12 @@ fn a_middle_click_on_the_chip_is_the_mute() {
 }
 
 #[test]
-fn the_last_row_spawns_the_sound_page() {
-    assert_eq!(
-        op_for(ROW_SETTINGS, ACTION_ACTIVATE, 0.0),
-        Some(Op::Settings)
-    );
-    assert_eq!(Op::Settings.call(), Call::Settings(SETTINGS_PANEL));
-    assert_eq!(SETTINGS_PANEL, caustics_sidecar::settings::Panel::Sound);
-}
-
-/// The settings row names a panel, never a program: `$CAUSTICS_SETTINGS` wins,
-/// the first known program on `PATH` follows, and with neither there is
-/// nothing to run (the click is witnessed and nothing starts).
-#[test]
-fn the_settings_program_is_the_override_or_the_first_found_or_none() {
-    use caustics_sidecar::settings::resolve;
-    use std::ffi::OsStr;
-
-    let found = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
-    let gnome = Some(OsStr::new("gnome-control-center"));
-    let chosen = resolve(SETTINGS_PANEL, gnome, None, found(&[])).expect("an override is taken");
-    assert_eq!(chosen.describe(), "gnome-control-center sound");
-    let niri = Some(OsStr::new("niri"));
-    let chosen = resolve(SETTINGS_PANEL, None, niri, found(&["cosmic-settings"]))
-        .expect("cosmic-settings is on PATH");
-    assert_eq!(chosen.describe(), "cosmic-settings sound");
-    assert_eq!(resolve(SETTINGS_PANEL, None, niri, found(&[])), None);
-}
-
-#[test]
 fn every_op_has_its_own_witness_name() {
-    let names: Vec<&str> = [Op::SetVolume(1), Op::MuteSink, Op::MuteSource, Op::Settings]
+    let names: Vec<&str> = [Op::SetVolume(1), Op::MuteSink, Op::MuteSource]
         .iter()
         .map(|op| op.name())
         .collect();
-    assert_eq!(names, vec!["set-volume", "mute", "mute-mic", "settings"]);
+    assert_eq!(names, vec!["set-volume", "mute", "mute-mic"]);
 }
 
 #[test]
@@ -128,7 +99,7 @@ fn the_rows_that_perform_nothing_perform_nothing() {
     // A kind on a row that has no meaning for it: a slider that is activated,
     // a checkbox that is dragged, a right click on anything.
     assert_eq!(op_for(ROW_VOLUME, ACTION_ACTIVATE, 0.0), None);
-    for row in [ROW_AUDIO, ROW_MUTE, ROW_MIC, ROW_SEP, ROW_SETTINGS] {
+    for row in [ROW_AUDIO, ROW_MUTE, ROW_MIC, ROW_SEP] {
         assert_eq!(
             op_for(row, ACTION_SET_VALUE, 50.0),
             None,
@@ -140,7 +111,7 @@ fn the_rows_that_perform_nothing_perform_nothing() {
             "row {row} secondary"
         );
     }
-    for row in [ROW_VOLUME, ROW_MUTE, ROW_MIC, ROW_SEP, ROW_SETTINGS] {
+    for row in [ROW_VOLUME, ROW_MUTE, ROW_MIC, ROW_SEP] {
         assert_eq!(op_for(row, ACTION_MIDDLE, 0.0), None, "row {row} middle");
     }
 }

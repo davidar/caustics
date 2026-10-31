@@ -1,6 +1,6 @@
 //! The one frame this sidecar publishes: `APPLET_NOTIFY`, a bell chip with the
 //! unread count, and a menu of do-not-disturb, the history newest first, and
-//! clear-all, and the settings row when there is a settings program.
+//! clear-all.
 //!
 //! Whole-state, like every rows frame. **Ids are stable**: the fixed rows have
 //! constants, a notification's row is its own notification id — which
@@ -24,9 +24,7 @@ pub const ROW_CHIP: u32 = 0xFFFF_0000;
 pub const ROW_DND: u32 = 0xFFFF_0001;
 /// "Clear all".
 pub const ROW_CLEAR: u32 = 0xFFFF_0002;
-/// "Notification settings…": the settings program's notifications page
-/// (`caustics_sidecar::settings`), written only when there is one to open.
-pub const ROW_SETTINGS: u32 = 0xFFFF_0003;
+// 0xFFFF_0003 was the settings row; ids are never reused.
 /// Below do-not-disturb.
 pub const ROW_SEP_TOP: u32 = 0xFFFF_0004;
 /// Above clear-all.
@@ -79,7 +77,6 @@ pub const ICON_DND: &str = "notifications-disabled-symbolic";
 pub const DND_LABEL: &str = "Do Not Disturb";
 pub const EMPTY_LABEL: &str = "No notifications";
 pub const CLEAR_LABEL: &str = "Clear all";
-pub const SETTINGS_LABEL: &str = "Notification settings…";
 pub const DISMISS_LABEL: &str = "Dismiss";
 /// A `default` action whose label is empty.
 pub const OPEN_LABEL: &str = "Open";
@@ -109,10 +106,6 @@ pub struct View {
     /// daemon compares against to tell an age-only change from a real one
     /// ([`worth_sending`]).
     pub ages: bool,
-    /// A settings program can be named
-    /// ([`crate::actions::settings_available`]). Without one there is no
-    /// settings row: a row that opens nothing is worse than no row.
-    pub settings: bool,
 }
 
 /// Whether `next` — the frame and its ageless twin (`View::ages` false) — is
@@ -169,10 +162,7 @@ pub fn picture(revision: u32, history: &History, view: View) -> (Rows, Vec<(Stri
     rows.separator(chip, ROW_SEP_TOP);
     budget.take(2, DND_LABEL.len());
     // What always comes after the notifications, reserved now.
-    budget.take(
-        3,
-        CLEAR_LABEL.len() + SETTINGS_LABEL.len() + EMPTY_LABEL.len(),
-    );
+    budget.take(2, CLEAR_LABEL.len() + EMPTY_LABEL.len());
 
     let rows_shown = history.entries().len().min(MENU_MAX).max(1);
     let body_max = (BODIES_BUDGET / rows_shown).min(crate::markup::BODY_MAX);
@@ -248,9 +238,6 @@ pub fn picture(revision: u32, history: &History, view: View) -> (Rows, Vec<(Stri
         0
     };
     rows.menu(chip, ROW_CLEAR, Some(CLEAR_LABEL), None, clear);
-    if view.settings {
-        rows.menu(chip, ROW_SETTINGS, Some(SETTINGS_LABEL), None, 0);
-    }
     (rows.build(), pixmaps)
 }
 

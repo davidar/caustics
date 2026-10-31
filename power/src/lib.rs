@@ -341,7 +341,7 @@ fn publish(
     state: &Picture,
     loud: bool,
 ) -> Result<(), i32> {
-    let frame = rows::picture(revision, state, actions::settings_available());
+    let frame = rows::picture(revision, state);
     if let Err(err) = wire::write(out, &frame) {
         return Err(write_failed(&err));
     }

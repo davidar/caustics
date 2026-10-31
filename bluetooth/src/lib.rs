@@ -2,10 +2,10 @@
 //!
 //! BlueZ's adapter and its paired devices as **one `WIRE_ROWS` frame** with
 //! `applet = APPLET_BLUETOOTH`: a chip, an on/off row, a row per paired device,
-//! while the menu is open a row per device in range that is not paired yet,
-//! and Settings when there is a settings program, with actions back by row id
-//! on stdin (docs/abi.md, *Rows*, *Action*). Nothing here knows about Wayland,
-//! the GPU, or the bar's internals.
+//! and while the menu is open a row per device in range that is not paired
+//! yet, with actions back by row id on stdin (docs/abi.md, *Rows*,
+//! *Action*). Nothing here knows about Wayland, the GPU, or the bar's
+//! internals.
 //!
 //! **Pairing** is a click on a device in range: `Pair()`, and BlueZ asks the
 //! session's pairing agent whatever the pairing needs. That agent is
@@ -168,7 +168,7 @@ async fn leave(conn: Option<&Connection>, discovery: &mut actions::Discovery) {
 
 /// Write the whole picture. `false` means stdout is gone and so are we.
 fn publish(out: &mut impl std::io::Write, revision: u32, state: &State) -> bool {
-    let frame = rows::picture(revision, state, actions::settings_available());
+    let frame = rows::picture(revision, state);
     if let Err(err) = wire::write(out, &frame) {
         if err.kind() == std::io::ErrorKind::BrokenPipe {
             witness("stdout closed; exiting");

@@ -9,9 +9,8 @@
 //!
 //! The battery's menu, top to bottom: the state row (disabled — it is read,
 //! not clicked), the brightness slider when there is a backlight, the power
-//! modes as radio rows when a power-profiles daemon answers, and
-//! "Power settings…" when there is a settings program. Every id is a constant, or a constant plus a profile's
-//! index, so a brightness tick changes the slider's `value` and nothing else —
+//! modes as radio rows when a power-profiles daemon answers. Every id is a
+//! constant, or a constant plus a profile's index, so a brightness tick changes the slider's `value` and nothing else —
 //! and the bar treats a frame whose ids, roles, parents, flags and label and
 //! icon ranges are unchanged as one `write_buffer` (docs/abi.md, *Rows*).
 
@@ -43,8 +42,8 @@ pub const ROW_BATTERY: u32 = 8;
 pub const ROW_STATE: u32 = 9;
 pub const ROW_BRIGHTNESS: u32 = 10;
 pub const ROW_MODES_SEP: u32 = 11;
-pub const ROW_SETTINGS_SEP: u32 = 12;
-pub const ROW_SETTINGS: u32 = 13;
+// 12 was the separator above the settings row and 13 the row; ids are never
+// reused.
 /// A power mode's row id is this plus its index in the daemon's `Profiles`,
 /// which is the same list in the same order for the daemon's whole life.
 pub const ROW_PROFILE_BASE: u32 = 0x100;
@@ -65,9 +64,6 @@ pub const MENU: [(u32, &str, &str); 5] = [
 
 /// The battery menu's fixed labels, in one place because the tests read them.
 pub const LABEL_BRIGHTNESS: &str = "Brightness";
-pub const LABEL_SETTINGS: &str = "Power settings…";
-/// `preferences-system-symbolic`, as `caustics-audio`'s settings row has.
-pub const SETTINGS_ICON: &str = "preferences-system-symbolic";
 
 /// Where the separator goes: before this many rows of [`MENU`] have been
 /// written, i.e. between Log Out and Suspend.
@@ -87,11 +83,8 @@ pub struct Picture {
     pub osd: bool,
 }
 
-/// The whole frame. `settings` says whether a settings program can be named
-/// ([`crate::actions::settings_available`]); without one the battery menu
-/// ends without "Power settings…" and the separator above it, since a row
-/// that opens nothing is worse than no row.
-pub fn picture(revision: u32, picture: &Picture, settings: bool) -> Frame {
+/// The whole frame.
+pub fn picture(revision: u32, picture: &Picture) -> Frame {
     let mut rows = RowsBuilder::new(APPLET_POWER, revision);
     let button = rows.item(ROW_POWER, None, Some(POWER_ICON), -1.0, RFLAG_HAS_MENU);
     for (i, (id, label, icon)) in MENU.iter().enumerate() {
@@ -153,16 +146,6 @@ pub fn picture(revision: u32, picture: &Picture, settings: bool) -> Frame {
                 RFLAG_RADIO | checked,
             );
         }
-    }
-    if settings {
-        rows.separator(chip, ROW_SETTINGS_SEP);
-        rows.menu(
-            chip,
-            ROW_SETTINGS,
-            Some(LABEL_SETTINGS),
-            Some(SETTINGS_ICON),
-            0,
-        );
     }
     rows.frame()
 }

@@ -2,8 +2,8 @@
 //!
 //! PipeWire's default sink and source as **one `WIRE_ROWS` frame** with
 //! `applet = APPLET_AUDIO`: a chip whose icon is the volume bucket, a slider,
-//! two mute checkboxes, the Output and Input submenus, and the settings row
-//! when there is a settings program, with actions back by row id on stdin
+//! two mute checkboxes and the Output and Input submenus, with actions back
+//! by row id on stdin
 //! (docs/abi.md, *Rows*, *Action*). Nothing here knows about Wayland, the GPU,
 //! or the bar's internals.
 //!
@@ -205,9 +205,10 @@ async fn serve() -> i32 {
                     // from (`actions::admit`).
                     Some(op) => match actions::admit(op, sound.devices()) {
                         Ok(op) => {
-                            if actions::writes(op) {
-                                osd.own_write(Instant::now());
-                            }
+                            // Every op writes something the on-screen
+                            // display would show, so the change it brings
+                            // round is this sidecar's own, not a toast.
+                            osd.own_write(Instant::now());
                             actions::perform(op).await;
                         }
                         Err(why) => witness(&why),
@@ -250,7 +251,7 @@ fn publish(out: &mut impl std::io::Write, revision: u32, sound: &Sound, osd: Fla
     let audio = sound.audio();
     let none = wpctl::Devices::default();
     let devices = sound.devices().unwrap_or(&none);
-    let frame = rows::toasting(revision, audio, devices, actions::settings_available(), osd);
+    let frame = rows::toasting(revision, audio, devices, osd);
     if let Err(err) = wire::write(out, &frame) {
         if err.kind() == std::io::ErrorKind::BrokenPipe {
             witness("stdout closed; exiting");

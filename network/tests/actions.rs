@@ -1,7 +1,6 @@
 //! The dispatch: each row id, with each action kind, to the call it would
 //! make — asserted against the *description* of the call, so no test ever
-//! joins a network, leaves one, switches off a radio or opens a settings
-//! window.
+//! joins a network, leaves one or switches off a radio.
 //!
 //! The picture these run against is the one parsed from the fixture walk, for
 //! the same reason `frames.rs` uses it: the row ids are derived from the
@@ -17,10 +16,10 @@ use caustics_bar_abi::wire::{
     ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE, ACTION_SECONDARY,
     ACTION_SET_VALUE,
 };
-use caustics_network::actions::{Call, Join, Op, SETTINGS_PANEL, dry_run, op_for, profile};
+use caustics_network::actions::{Call, Join, Op, dry_run, op_for, profile};
 use caustics_network::model::{self, Network, Primary, Security, Snapshot, Visible};
 use caustics_network::nm::{self, SettingsByPath};
-use caustics_network::rows::{ITEM, SEP_BOTTOM, SEP_TOP, SEP_VISIBLE, SETTINGS, WIFI};
+use caustics_network::rows::{ITEM, SEP_BOTTOM, SEP_TOP, WIFI};
 use zbus::zvariant::Value;
 
 const MANAGED: &[u8] = include_bytes!("data/managed-objects.bin");
@@ -153,34 +152,12 @@ fn each_op_names_the_call_it_would_make() {
         Call::ActivateConnection(PATH_OTHER.to_owned()),
         "the device and the specific object stay \"/\": NM picks both"
     );
-    assert_eq!(Op::Settings.call(), Call::Settings(SETTINGS_PANEL));
-    assert_eq!(SETTINGS_PANEL, caustics_sidecar::settings::Panel::Network);
-}
-
-/// The settings row names a panel, never a program: `$CAUSTICS_SETTINGS` wins,
-/// the first known program on `PATH` follows, and with neither there is
-/// nothing to run (the click is witnessed and nothing starts).
-#[test]
-fn the_settings_program_is_the_override_or_the_first_found_or_none() {
-    use caustics_sidecar::settings::resolve;
-    use std::ffi::OsStr;
-
-    let found = |names: &'static [&'static str]| move |name: &str| names.contains(&name);
-    let gnome = Some(OsStr::new("gnome-control-center"));
-    let chosen = resolve(SETTINGS_PANEL, gnome, None, found(&[])).expect("an override is taken");
-    assert_eq!(chosen.describe(), "gnome-control-center wifi");
-    let niri = Some(OsStr::new("niri"));
-    let chosen = resolve(SETTINGS_PANEL, None, niri, found(&["cosmic-settings"]))
-        .expect("cosmic-settings is on PATH");
-    assert_eq!(chosen.describe(), "cosmic-settings network");
-    assert_eq!(resolve(SETTINGS_PANEL, None, niri, found(&[])), None);
 }
 
 #[test]
 fn every_op_has_its_own_witness_name() {
     assert_eq!(Op::Wireless(true).name(), "wi-fi on");
     assert_eq!(Op::Wireless(false).name(), "wi-fi off");
-    assert_eq!(Op::Settings.name(), "settings");
     assert_eq!(
         Op::Activate {
             path: PATH_OTHER.to_owned(),
@@ -189,15 +166,6 @@ fn every_op_has_its_own_witness_name() {
         .name(),
         "activate \"hotspot example\"",
         "quoted, because an SSID may have spaces in it"
-    );
-}
-
-#[test]
-fn the_settings_row_spawns_and_nothing_else_does() {
-    let state = fixture();
-    assert_eq!(
-        op_for(&state, SETTINGS, ACTION_ACTIVATE),
-        Some(Op::Settings)
     );
 }
 
@@ -211,8 +179,12 @@ fn the_rows_that_perform_nothing_perform_nothing() {
             "separator {row}"
         );
     }
-    // An id this applet never wrote — including one in the derived range.
+    // An id this applet never wrote — including one in the derived range,
+    // and the two retired ones of the settings row and its separator.
     assert_eq!(op_for(&state, 9999, ACTION_ACTIVATE), None);
+    for retired in [5, 6] {
+        assert_eq!(op_for(&state, retired, ACTION_ACTIVATE), None);
+    }
     assert_eq!(
         op_for(&state, model::row_id("no such profile"), ACTION_ACTIVATE),
         None
@@ -220,7 +192,7 @@ fn the_rows_that_perform_nothing_perform_nothing() {
     // And every row of an empty picture, which is what "no NetworkManager"
     // publishes: nothing can be clicked because nothing is drawn.
     let nothing = Snapshot::default();
-    for row in [ITEM, WIFI, SEP_TOP, SEP_BOTTOM, SETTINGS] {
+    for row in [ITEM, WIFI, SEP_TOP, SEP_BOTTOM] {
         assert_eq!(op_for(&nothing, row, ACTION_MIDDLE).is_some(), row == ITEM);
     }
 }
@@ -228,7 +200,7 @@ fn the_rows_that_perform_nothing_perform_nothing() {
 #[test]
 fn only_activate_and_the_chips_middle_click_perform() {
     let state = with_other_in_range();
-    let rows: Vec<u32> = [WIFI, SETTINGS]
+    let rows: Vec<u32> = [WIFI]
         .into_iter()
         .chain(state.networks.iter().map(|n| n.row))
         .collect();
@@ -285,7 +257,7 @@ fn the_menu_opening_is_a_scan_of_every_wifi_device_and_closing_stops_it() {
 
     // The row the notice carries is the chip's, but it is the *menu* that is
     // being talked about, so the row is not what decides (docs/abi.md, *Action*).
-    for row in [ITEM, WIFI, SETTINGS, 9999] {
+    for row in [ITEM, WIFI, 9999] {
         assert_eq!(
             op_for(&state, row, ACTION_MENU_OPEN),
             Some(Op::Scan {
@@ -374,7 +346,7 @@ fn a_click_on_a_network_in_range_joins_it() {
     );
     assert_eq!(op_for(&state, state.networks[0].row, ACTION_ACTIVATE), None);
     assert_eq!(
-        op_for(&state, SEP_VISIBLE, ACTION_ACTIVATE),
+        op_for(&state, SEP_BOTTOM, ACTION_ACTIVATE),
         None,
         "its separator does nothing"
     );

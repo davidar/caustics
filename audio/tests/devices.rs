@@ -21,8 +21,8 @@
 use caustics_audio::actions::{Call, Op, admit, op_for};
 use caustics_audio::rows::{
     DEVICE_ID_MASK, ICON_INPUT, ICON_OUTPUT, KIND_INPUT, KIND_OUTPUT, LABEL_INPUT, LABEL_NO_DEVICE,
-    LABEL_OUTPUT, ROW_INPUT, ROW_NO_INPUT, ROW_NO_OUTPUT, ROW_OUTPUT, ROW_SETTINGS, device_of,
-    device_row, picture,
+    LABEL_OUTPUT, ROW_INPUT, ROW_NO_INPUT, ROW_NO_OUTPUT, ROW_OUTPUT, device_of, device_row,
+    picture,
 };
 use caustics_audio::wpctl::{Audio, Device, Devices, is_monitor, parse_status};
 use caustics_bar_abi::buffer::{
@@ -59,7 +59,7 @@ fn device(id: u32, label: &str, default: bool) -> Device {
 /// parent that is an item or a submenu) included.
 fn decoded(devices: &Devices) -> Rows {
     let mut bytes = Vec::new();
-    wire::write(&mut bytes, &picture(1, Some(&AUDIO), devices, true)).expect("writing to a Vec");
+    wire::write(&mut bytes, &picture(1, Some(&AUDIO), devices)).expect("writing to a Vec");
     match wire::read(&mut bytes.as_slice()) {
         Ok(Some(Frame::Rows(rows))) => rows,
         other => panic!("expected a rows frame, got {other:?}"),
@@ -280,9 +280,12 @@ fn one_device_is_still_a_submenu_with_its_one_row() {
     );
     // The device rows carry no icon: the radio mark is their state.
     assert_eq!(rows.icon(index_of(&rows, (1 << 16) | 60)), None);
-    // Output and Input come after the volume rows and before the settings row.
+    // Output and Input come after the volume rows, Input last.
     assert!(index_of(&rows, ROW_OUTPUT) < index_of(&rows, ROW_INPUT));
-    assert!(index_of(&rows, ROW_INPUT) < index_of(&rows, ROW_SETTINGS));
+    assert_eq!(
+        rows.rows.iter().rposition(|row| row.parent == 0),
+        Some(index_of(&rows, ROW_INPUT))
+    );
 }
 
 #[test]
@@ -471,12 +474,7 @@ fn a_device_click_is_checked_against_the_list_it_came_from() {
     assert!(admit(Op::SetOutput(4242), Some(&devices)).is_err());
     assert!(admit(Op::SetOutput(95), None).is_err());
     // Every other op passes through, lists or none.
-    for op in [
-        Op::SetVolume(40),
-        Op::MuteSink,
-        Op::MuteSource,
-        Op::Settings,
-    ] {
+    for op in [Op::SetVolume(40), Op::MuteSink, Op::MuteSource] {
         assert_eq!(admit(op, None), Ok(op));
     }
 }

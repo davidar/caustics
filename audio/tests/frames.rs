@@ -12,8 +12,8 @@
 
 use caustics_audio::rows::{
     ICON_HIGH, ICON_LOW, ICON_MEDIUM, ICON_MUTED, ICON_OVERAMPLIFIED, LABEL_MIC, LABEL_MUTE,
-    LABEL_SETTINGS, LABEL_VOLUME, ROW_AUDIO, ROW_INPUT, ROW_MIC, ROW_MUTE, ROW_OUTPUT, ROW_SEP,
-    ROW_SEP_DEVICES, ROW_SETTINGS, ROW_VOLUME, VOLUME_MAX, VOLUME_MIN, icon_for, picture,
+    LABEL_VOLUME, ROW_AUDIO, ROW_INPUT, ROW_MIC, ROW_MUTE, ROW_OUTPUT, ROW_SEP, ROW_VOLUME,
+    VOLUME_MAX, VOLUME_MIN, icon_for, picture,
 };
 use caustics_audio::subscribe::is_wakeup;
 use caustics_audio::wpctl::{Audio, Devices, parse_status, parse_volume};
@@ -42,14 +42,8 @@ fn decoded(revision: u32, audio: Option<&Audio>) -> Rows {
 
 /// The same, with the device lists given.
 fn decoded_with(revision: u32, audio: Option<&Audio>, devices: &Devices) -> Rows {
-    decoded_full(revision, audio, devices, true)
-}
-
-/// The same, saying whether a settings program can be named.
-fn decoded_full(revision: u32, audio: Option<&Audio>, devices: &Devices, settings: bool) -> Rows {
     let mut bytes = Vec::new();
-    wire::write(&mut bytes, &picture(revision, audio, devices, settings))
-        .expect("writing to a Vec");
+    wire::write(&mut bytes, &picture(revision, audio, devices)).expect("writing to a Vec");
     match wire::read(&mut bytes.as_slice()) {
         Ok(Some(Frame::Rows(rows))) => rows,
         other => panic!("expected a rows frame, got {other:?}"),
@@ -159,8 +153,8 @@ fn the_recorded_reading_is_the_whole_menu() {
     assert_eq!(rows.applet, APPLET_AUDIO);
     assert_eq!(rows.revision, 7);
     // The chip, the slider, two mutes, a separator, Output and its one sink,
-    // Input and its one source, a separator, the settings row.
-    assert_eq!(rows.rows.len(), 11);
+    // Input and its one source.
+    assert_eq!(rows.rows.len(), 9);
 
     let chip = &rows.rows[0];
     assert_eq!(chip.id, ROW_AUDIO);
@@ -188,8 +182,6 @@ fn the_recorded_reading_is_the_whole_menu() {
             (1 << 16) | 60,
             ROW_INPUT,
             (2 << 16) | 61,
-            ROW_SEP_DEVICES,
-            ROW_SETTINGS,
         ]
     );
     for i in 1..rows.rows.len() {
@@ -227,24 +219,7 @@ fn the_recorded_reading_is_the_whole_menu() {
 
     assert_eq!(rows.rows[4].role, ROW_SEPARATOR);
     assert_eq!(rows.label(4), None);
-    let settings = index_of(&rows, ROW_SETTINGS);
-    assert_eq!(settings, rows.rows.len() - 1, "the settings row is last");
-    assert_eq!(rows.rows[settings].role, ROW_MENU);
-    assert_eq!(rows.label(settings).as_deref(), Some(LABEL_SETTINGS));
-    assert_eq!(
-        rows.rows[settings].flags, 0,
-        "the settings row performs on a plain activate"
-    );
-}
-
-/// With no settings program to name, the settings row and the separator above
-/// it are not written, and the menu ends at the Input submenu.
-#[test]
-fn no_settings_program_is_no_settings_row() {
-    let rows = decoded_full(1, Some(&recorded()), &parse_status(STATUS), false);
-    let ids: Vec<u32> = rows.rows.iter().map(|row| row.id).collect();
-    assert!(!ids.contains(&ROW_SETTINGS), "{ids:?}");
-    assert!(!ids.contains(&ROW_SEP_DEVICES), "{ids:?}");
+    // The menu ends at the Input submenu.
     let last_top_level = rows
         .rows
         .iter()

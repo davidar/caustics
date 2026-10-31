@@ -2,10 +2,9 @@
 //!
 //! NetworkManager's Wi-Fi state as **one `WIRE_ROWS` frame** with
 //! `applet = APPLET_NETWORK`: one bar item whose icon is the default route, a
-//! Wi-Fi switch, one radio row per known Wi-Fi profile, the access points in
-//! range that no profile claims, and the settings row when there is a
-//! settings program — with actions back by row id on stdin (docs/abi.md
-//! *Rows*, *Action*). Nothing here knows about Wayland, the GPU, or the bar's
+//! Wi-Fi switch, one radio row per known Wi-Fi profile and the access points
+//! in range that no profile claims, with actions back by row id on stdin
+//! (docs/abi.md *Rows*, *Action*). Nothing here knows about Wayland, the GPU, or the bar's
 //! internals.
 //!
 //! **The radio is only asked while the menu is open.** NM ages its idle scan
@@ -172,9 +171,7 @@ async fn serve() -> i32 {
                 // default snapshot so an action that arrives anyway decides
                 // nothing.
                 let candidate = match &next {
-                    Some(state) => {
-                        rows::picture(revision + 1, state, actions::settings_available())
-                    }
+                    Some(state) => rows::picture(revision + 1, state),
                     None => rows::empty(revision + 1),
                 };
                 state = next.unwrap_or_default();
