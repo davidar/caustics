@@ -14,6 +14,8 @@
 //!   to a second address, given an alias of its own, `Icon = audio-headset`
 //!   and `Connected = true`. One paired device is too thin to show that two
 //!   rows keep their own ids.
+//! - `managed-objects-discovering.bin`: the first body with the adapter
+//!   discovering and three unpaired devices in range, one of them nameless.
 //!
 //! Deserialising bytes is the point: the reply's nested `a{oa{sa{sv}}}` is
 //! where a hand-written reader goes wrong. Everything past the deserialiser is
@@ -27,8 +29,9 @@ use caustics_bar_abi::wire::{
 };
 use caustics_bluetooth::bluez::{Device, State, parse_managed_objects};
 use caustics_bluetooth::rows::{
-    DEVICE_ID_BIT, ICON_DEVICE, ICON_OFF, ICON_ON, POWER_LABEL, ROW_CHIP, ROW_POWER,
-    ROW_SEP_DEVICES, ROW_SEP_SETTINGS, ROW_SETTINGS, SETTINGS_LABEL, device_row, picture,
+    DEVICE_ID_BIT, ICON_DEVICE, ICON_OFF, ICON_ON, NEARBY_ID_BIT, POWER_LABEL, ROW_CHIP, ROW_POWER,
+    ROW_SEP_DEVICES, ROW_SEP_NEARBY, ROW_SEP_SETTINGS, ROW_SETTINGS, SETTINGS_LABEL, device_row,
+    nearby_row, picture,
 };
 
 mod synth;
@@ -37,6 +40,8 @@ mod synth;
 const ONE_DEVICE: &[u8] = include_bytes!("data/managed-objects.bin");
 /// The same body with a second, connected device in it.
 const TWO_DEVICES: &[u8] = include_bytes!("data/managed-objects-two-devices.bin");
+/// The first body with the adapter discovering and devices in range.
+const DISCOVERING: &[u8] = include_bytes!("data/managed-objects-discovering.bin");
 
 const TAG_DEVICE: &str = synth::TAG_ADDRESS;
 const BUDS_DEVICE: &str = synth::BUDS_ADDRESS;
@@ -49,6 +54,7 @@ fn the_fixtures_are_the_synthesisers_output() {
     for (name, committed) in [
         ("managed-objects.bin", ONE_DEVICE),
         ("managed-objects-two-devices.bin", TWO_DEVICES),
+        ("managed-objects-discovering.bin", DISCOVERING),
     ] {
         let written = synth::fixtures()
             .into_iter()
@@ -368,6 +374,21 @@ fn a_device_row_id_comes_from_the_address_and_never_hits_a_fixed_id() {
         assert_eq!(id & DEVICE_ID_BIT, DEVICE_ID_BIT, "{address:?}");
         assert!(id >= DEVICE_ID_BIT, "{address:?} gave {id}");
         assert!(!fixed.contains(&id), "{address:?} collided with a fixed id");
+        let near = nearby_row(address);
+        assert!(
+            !fixed.contains(&near),
+            "{address:?} collided with a fixed id"
+        );
+        assert_eq!(near & NEARBY_ID_BIT, NEARBY_ID_BIT);
+        assert_eq!(
+            id & NEARBY_ID_BIT,
+            0,
+            "a paired device's id never has the bit"
+        );
+        assert_ne!(
+            id, near,
+            "a device in range never shares a paired device's id"
+        );
     }
     // The same address is the same id, a different one is a different id: what
     // makes a row survive a device connecting and a frame being rebuilt.
@@ -387,6 +408,7 @@ fn a_device_with_no_alias_falls_back_to_its_address() {
             alias: "02:11:22:33:44:55".to_owned(),
             ..Device::default()
         }],
+        ..State::default()
     };
     let rows = decoded(1, &state);
     let i = index_of(&rows, device_row("02:11:22:33:44:55"));
@@ -399,4 +421,94 @@ fn a_device_with_no_alias_falls_back_to_its_address() {
     let rows = decoded(2, &state);
     let i = index_of(&rows, device_row("02:11:22:33:44:55"));
     assert_eq!(rows.label(i).as_deref(), Some("Bo\u{fffd}se"));
+}
+
+// ---------------------------------------------------------------------------
+// Devices in range
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_discovering_adapter_lists_the_named_devices_in_range_strongest_first() {
+    let state = state(DISCOVERING);
+    let adapter = state.adapter.as_ref().expect("an adapter");
+    assert!(adapter.discovering);
+    assert_eq!(state.radios, vec!["/org/bluez/hci0".to_owned()]);
+    assert_eq!(
+        state.devices.len(),
+        1,
+        "the paired tag is still the one paired"
+    );
+
+    let nearby: Vec<(&str, Option<i16>)> = state
+        .nearby
+        .iter()
+        .map(|d| (d.alias.as_str(), d.rssi))
+        .collect();
+    assert_eq!(
+        nearby,
+        vec![
+            (synth::SPEAKER_NAME, Some(-48)),
+            (synth::PHONE_NAME, Some(-71)),
+        ],
+        "the nameless advertiser is left out though it is the loudest"
+    );
+    assert_eq!(state.nearby[0].icon, "audio-card");
+    assert_eq!(state.nearby[0].path, synth::SPEAKER_PATH);
+}
+
+#[test]
+fn an_adapter_that_is_not_discovering_lists_none() {
+    // The devices a discovery found stay on the bus for a while after it
+    // stopped; the list is only for while it runs, so they are not rows.
+    let stopped = state(&synth::in_range_body(false));
+    assert!(!stopped.adapter.as_ref().expect("an adapter").discovering);
+    assert!(stopped.nearby.is_empty(), "{:?}", stopped.nearby);
+    assert_eq!(stopped.devices.len(), 1, "the paired tag stays");
+    let rows = decoded(1, &stopped);
+    assert!(rows.rows.iter().all(|row| row.id != ROW_SEP_NEARBY));
+}
+
+#[test]
+fn the_devices_in_range_follow_the_paired_ones_under_their_own_separator() {
+    let state = state(DISCOVERING);
+    let rows = decoded(1, &state);
+    let ids: Vec<u32> = rows.rows.iter().map(|row| row.id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            ROW_CHIP,
+            ROW_POWER,
+            ROW_SEP_DEVICES,
+            device_row(TAG_DEVICE),
+            ROW_SEP_NEARBY,
+            nearby_row(synth::SPEAKER_ADDRESS),
+            nearby_row(synth::PHONE_ADDRESS),
+            ROW_SEP_SETTINGS,
+            ROW_SETTINGS,
+        ]
+    );
+    let speaker = index_of(&rows, nearby_row(synth::SPEAKER_ADDRESS));
+    assert_eq!(rows.label(speaker).as_deref(), Some(synth::SPEAKER_NAME));
+    assert_eq!(rows.icon(speaker), Some("audio-card"));
+    assert_eq!(rows.rows[speaker].flags, 0, "no tick: it is not paired");
+    assert_eq!(rows.rows[speaker].role, ROW_MENU);
+    let phone = index_of(&rows, nearby_row(synth::PHONE_ADDRESS));
+    assert_eq!(rows.icon(phone), Some(ICON_DEVICE));
+
+    // No paired device: the devices in range come straight after the first
+    // separator, with no second one.
+    let mut alone = state.clone();
+    alone.devices.clear();
+    let rows = decoded_with(2, &alone, false);
+    let ids: Vec<u32> = rows.rows.iter().map(|row| row.id).collect();
+    assert_eq!(
+        ids,
+        vec![
+            ROW_CHIP,
+            ROW_POWER,
+            ROW_SEP_DEVICES,
+            nearby_row(synth::SPEAKER_ADDRESS),
+            nearby_row(synth::PHONE_ADDRESS),
+        ]
+    );
 }

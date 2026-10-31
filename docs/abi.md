@@ -1076,9 +1076,11 @@ writes rather than copies, on `ACT_POPUP_OPEN`/`ACT_POPUP_CLOSE` with a slot
 (*The action ring*): the bar tells the sidecar that owns a menu when it opens and when it
 closes. `row` is the item whose menu it is, the same row both times; `pos`,
 `button` and `value` are zero. **A sidecar may ignore both**, and
-`caustics-tray` and `caustics-bluetooth` do, without a witness. Three
+`caustics-tray` does, without a witness. Four
 sidecars want them: `caustics-network`, which scans for the access points in
-range while its menu is up and stops when it closes; `caustics-power`, which
+range while its menu is up and stops when it closes; `caustics-bluetooth`,
+which asks BlueZ to discover the devices in range on every powered adapter
+while its menu is up and stops when it closes; `caustics-power`, which
 polls the backlight when the battery's menu opens and once a second while it
 stays up, and never on a clock while it is closed; and both it and
 `caustics-audio`, which raise no on-screen display toast while their menu is

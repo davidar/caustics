@@ -2,9 +2,16 @@
 //!
 //! BlueZ's adapter and its paired devices as **one `WIRE_ROWS` frame** with
 //! `applet = APPLET_BLUETOOTH`: a chip, an on/off row, a row per paired device,
+//! while the menu is open a row per device in range that is not paired yet,
 //! and Settings when there is a settings program, with actions back by row id
 //! on stdin (docs/abi.md, *Rows*, *Action*). Nothing here knows about Wayland,
 //! the GPU, or the bar's internals.
+//!
+//! **Pairing** is a click on a device in range: `Pair()`, and BlueZ asks the
+//! session's pairing agent whatever the pairing needs. That agent is
+//! `caustics-pairing`, a sink of the canvas (pairing/README.md), so a passkey
+//! to confirm or a PIN to type is asked on the canvas's prompt and never
+//! reaches this process or the bar.
 //!
 //! Why a separate process is the bar's membership test (docs/architecture.md,
 //! *Sidecars*): this owns no Wayland object and none of the bar's fds — it owns
@@ -13,7 +20,7 @@
 //!
 //! The split into a library and a two-line `main.rs` is so `bluetooth/tests/`
 //! can drive the frame and the dispatch from synthesised bus bytes; no test ever
-//! connects, disconnects, or touches `Powered`.
+//! connects, disconnects, pairs, discovers, or touches `Powered`.
 
 pub mod actions;
 pub mod bluez;
@@ -104,6 +111,8 @@ async fn serve() -> i32 {
     if !publish(&mut out, revision, &state) {
         return 0;
     }
+    // Which adapters are discovering for this menu (`actions::Discovery`).
+    let mut discovery = actions::Discovery::default();
 
     loop {
         tokio::select! {
@@ -115,19 +124,28 @@ async fn serve() -> i32 {
                     continue;
                 }
                 state = next;
+                // An adapter powered while the menu is open looks too.
+                for op in discovery.changed(&state) {
+                    actions::perform(conn.as_ref(), op).await;
+                }
                 revision += 1;
                 if !publish(&mut out, revision, &state) {
+                    leave(conn.as_ref(), &mut discovery).await;
                     return 0;
                 }
             }
             action = incoming.recv() => match action {
                 None => {
                     witness("stdin closed; exiting");
+                    leave(conn.as_ref(), &mut discovery).await;
                     return 0;
                 }
-                // The bar's two menu notices, which this applet has no use
-                // for (`actions::is_menu_notice`).
-                Some(action) if actions::is_menu_notice(action.kind) => {}
+                // The bar's two menu notices: discovery while it is open.
+                Some(action) if actions::is_menu_notice(action.kind) => {
+                    for op in discovery.notice(action.kind, &state).unwrap_or_default() {
+                        actions::perform(conn.as_ref(), op).await;
+                    }
+                }
                 Some(action) => match actions::op_for(&state, action.row, action.kind) {
                     Some(op) => actions::perform(conn.as_ref(), op).await,
                     None => witness(&format!(
@@ -137,6 +155,14 @@ async fn serve() -> i32 {
                 },
             },
         }
+    }
+}
+
+/// Stop the discovery this sidecar started before it goes. BlueZ would stop
+/// it anyway when this connection closes; asking says so in the journal.
+async fn leave(conn: Option<&Connection>, discovery: &mut actions::Discovery) {
+    for op in discovery.close() {
+        actions::perform(conn, op).await;
     }
 }
 
@@ -153,10 +179,11 @@ fn publish(out: &mut impl std::io::Write, revision: u32, state: &State) -> bool 
     }
     match state.adapter.as_ref() {
         Some(adapter) => witness(&format!(
-            "published rev={revision} powered={} devices={} connected={}",
+            "published rev={revision} powered={} devices={} connected={} in-range={}",
             adapter.powered,
             state.devices.len(),
-            state.connected()
+            state.connected(),
+            state.nearby.len()
         )),
         None => witness(&format!("published rev={revision} no adapter")),
     }

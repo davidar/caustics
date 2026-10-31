@@ -9,12 +9,14 @@
 //! on whether that device is connected.
 
 use caustics_bar_abi::buffer::{
-    ACTION_ACTIVATE, ACTION_MIDDLE, ACTION_SECONDARY, ACTION_SET_VALUE,
+    ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE, ACTION_SECONDARY,
+    ACTION_SET_VALUE,
 };
-use caustics_bluetooth::actions::{Call, Op, SETTINGS_PANEL, op_for};
+use caustics_bluetooth::actions::{Call, Discovery, Op, SETTINGS_PANEL, op_for};
 use caustics_bluetooth::bluez::{ADAPTER, Adapter, CONNECT, DISCONNECT, Device, State};
 use caustics_bluetooth::rows::{
-    ROW_CHIP, ROW_POWER, ROW_SEP_DEVICES, ROW_SEP_SETTINGS, ROW_SETTINGS, device_row,
+    ROW_CHIP, ROW_POWER, ROW_SEP_DEVICES, ROW_SEP_NEARBY, ROW_SEP_SETTINGS, ROW_SETTINGS,
+    device_row, nearby_row,
 };
 
 const HCI0: &str = "/org/bluez/hci0";
@@ -22,14 +24,19 @@ const MOUSE_ADDRESS: &str = "02:00:00:00:EE:01";
 const BUDS_ADDRESS: &str = "02:00:00:00:EE:02";
 const MOUSE_PATH: &str = "/org/bluez/hci0/dev_02_00_00_00_EE_01";
 const BUDS_PATH: &str = "/org/bluez/hci0/dev_02_00_00_00_EE_02";
+const SPEAKER_ADDRESS: &str = "02:00:00:00:EE:03";
+const SPEAKER_PATH: &str = "/org/bluez/hci0/dev_02_00_00_00_EE_03";
+const HCI1: &str = "/org/bluez/hci1";
 
-/// One adapter, one idle mouse, one connected pair of buds.
+/// One adapter, discovering, one idle mouse, one connected pair of buds, and
+/// a speaker in range.
 fn state(powered: bool) -> State {
     State {
         adapter: Some(Adapter {
             path: HCI0.to_owned(),
             name: "workstation".to_owned(),
             powered,
+            discovering: powered,
         }),
         devices: vec![
             Device {
@@ -38,6 +45,7 @@ fn state(powered: bool) -> State {
                 alias: "MX Master".to_owned(),
                 icon: "input-mouse".to_owned(),
                 connected: false,
+                rssi: None,
             },
             Device {
                 path: BUDS_PATH.to_owned(),
@@ -45,9 +53,27 @@ fn state(powered: bool) -> State {
                 alias: "Pixel Buds".to_owned(),
                 icon: "audio-headset".to_owned(),
                 connected: true,
+                rssi: None,
             },
         ],
+        nearby: vec![Device {
+            path: SPEAKER_PATH.to_owned(),
+            address: SPEAKER_ADDRESS.to_owned(),
+            alias: "Example Speaker".to_owned(),
+            icon: "audio-card".to_owned(),
+            connected: false,
+            rssi: Some(-50),
+        }],
+        radios: if powered {
+            vec![HCI0.to_owned()]
+        } else {
+            Vec::new()
+        },
     }
+}
+
+fn speaker_row() -> u32 {
+    nearby_row(SPEAKER_ADDRESS)
 }
 
 fn mouse_row() -> u32 {
@@ -184,6 +210,18 @@ fn every_op_says_what_it_is_in_its_witness() {
             path: BUDS_PATH.to_owned(),
             alias: "Pixel Buds".to_owned(),
         },
+        Op::Pair {
+            path: SPEAKER_PATH.to_owned(),
+            alias: "Example Speaker".to_owned(),
+        },
+        Op::Forget {
+            adapter: HCI0.to_owned(),
+            path: BUDS_PATH.to_owned(),
+            alias: "Pixel Buds".to_owned(),
+        },
+        Op::Discover {
+            adapter: HCI0.to_owned(),
+        },
         Op::Settings,
     ]
     .iter()
@@ -196,6 +234,9 @@ fn every_op_says_what_it_is_in_its_witness() {
             "power off",
             "connect MX Master",
             "disconnect Pixel Buds",
+            "pair Example Speaker",
+            "forget Pixel Buds",
+            "discover on /org/bluez/hci0",
             "settings"
         ]
     );
@@ -240,15 +281,140 @@ fn with_no_adapter_nothing_at_all_performs() {
 }
 
 #[test]
-fn only_activate_and_the_chip_s_middle_click_perform() {
+fn only_activate_and_middle_clicks_perform() {
     let state = state(true);
     for kind in [ACTION_SECONDARY, ACTION_SET_VALUE] {
-        for row in [ROW_CHIP, ROW_POWER, ROW_SETTINGS, mouse_row(), buds_row()] {
+        for row in [
+            ROW_CHIP,
+            ROW_POWER,
+            ROW_SETTINGS,
+            mouse_row(),
+            buds_row(),
+            speaker_row(),
+        ] {
             assert_eq!(op_for(&state, row, kind), None, "row {row} kind {kind}");
         }
     }
-    // A middle click is the radio on the chip and nothing on a menu row.
-    for row in [ROW_POWER, ROW_SETTINGS, mouse_row(), buds_row()] {
+    // A middle click is the radio on the chip, a paired device's forgetting,
+    // and nothing on the other menu rows.
+    for row in [ROW_POWER, ROW_SETTINGS, ROW_SEP_NEARBY, speaker_row()] {
         assert_eq!(op_for(&state, row, ACTION_MIDDLE), None, "row {row}");
     }
+}
+
+#[test]
+fn a_device_in_range_pairs_and_a_middle_click_forgets_a_paired_one() {
+    let state = state(true);
+    assert_eq!(
+        op_for(&state, speaker_row(), ACTION_ACTIVATE),
+        Some(Op::Pair {
+            path: SPEAKER_PATH.to_owned(),
+            alias: "Example Speaker".to_owned()
+        })
+    );
+    // Even a connected one, and with the radio off: forgetting needs no radio.
+    for (s, row, path, alias) in [
+        (state.clone(), buds_row(), BUDS_PATH, "Pixel Buds"),
+        (off(), mouse_row(), MOUSE_PATH, "MX Master"),
+    ] {
+        assert_eq!(
+            op_for(&s, row, ACTION_MIDDLE),
+            Some(Op::Forget {
+                adapter: HCI0.to_owned(),
+                path: path.to_owned(),
+                alias: alias.to_owned()
+            })
+        );
+    }
+    assert_eq!(
+        Op::Pair {
+            path: SPEAKER_PATH.to_owned(),
+            alias: "Example Speaker".to_owned()
+        }
+        .call(),
+        Call::PairTrustConnect {
+            path: SPEAKER_PATH.to_owned()
+        }
+    );
+    assert_eq!(
+        Op::Forget {
+            adapter: HCI0.to_owned(),
+            path: BUDS_PATH.to_owned(),
+            alias: "Pixel Buds".to_owned()
+        }
+        .call(),
+        Call::RemoveDevice {
+            adapter: HCI0.to_owned(),
+            device: BUDS_PATH.to_owned()
+        }
+    );
+    // A device in range with the radio off is not paired.
+    assert_eq!(op_for(&off(), speaker_row(), ACTION_ACTIVATE), None);
+}
+
+fn off() -> State {
+    state(false)
+}
+
+#[test]
+fn discovery_runs_on_every_powered_adapter_while_the_menu_is_open() {
+    let mut state = state(true);
+    state.radios.push(HCI1.to_owned());
+    let mut discovery = Discovery::default();
+    // Nothing while closed.
+    assert_eq!(discovery.changed(&state), vec![]);
+    assert_eq!(
+        discovery.notice(ACTION_MENU_OPEN, &state),
+        Some(vec![
+            Op::Discover {
+                adapter: HCI0.to_owned()
+            },
+            Op::Discover {
+                adapter: HCI1.to_owned()
+            },
+        ])
+    );
+    assert!(discovery.is_open());
+    // The same picture again starts nothing twice.
+    assert_eq!(discovery.changed(&state), vec![]);
+    // An adapter powered off has stopped by itself; powered again, it starts.
+    state.radios.retain(|r| r != HCI1);
+    assert_eq!(discovery.changed(&state), vec![]);
+    state.radios.push(HCI1.to_owned());
+    assert_eq!(
+        discovery.changed(&state),
+        vec![Op::Discover {
+            adapter: HCI1.to_owned()
+        }]
+    );
+    assert_eq!(
+        discovery.notice(ACTION_MENU_CLOSE, &state),
+        Some(vec![
+            Op::StopDiscovery {
+                adapter: HCI0.to_owned()
+            },
+            Op::StopDiscovery {
+                adapter: HCI1.to_owned()
+            },
+        ])
+    );
+    assert!(!discovery.is_open());
+    assert_eq!(discovery.close(), vec![], "nothing left to stop");
+    assert_eq!(discovery.notice(ACTION_ACTIVATE, &state), None);
+    assert_eq!(
+        Op::Discover {
+            adapter: HCI0.to_owned()
+        }
+        .call(),
+        Call::StartDiscovery {
+            adapter: HCI0.to_owned()
+        }
+    );
+    assert_eq!(
+        Op::StopDiscovery {
+            adapter: HCI0.to_owned()
+        }
+        .describe(),
+        "stop discovery on /org/bluez/hci0"
+    );
 }

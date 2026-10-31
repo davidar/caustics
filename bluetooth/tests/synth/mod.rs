@@ -13,7 +13,12 @@
 //! - `managed-objects-two-devices.bin`: the same, plus a second device (the
 //!   first one's properties at another address, with an alias of its own,
 //!   `Icon = audio-headset` and `Connected = true`), so two rows can be seen to
-//!   keep their own ids.
+//!   keep their own ids;
+//! - `managed-objects-discovering.bin`: the first body with the adapter
+//!   `Discovering`, and three unpaired devices in range as a discovery finds
+//!   them: a speaker with a `Name`, an `Icon` and a strong `RSSI`, a phone
+//!   with a `Name` and a weaker one, and a nameless advertiser whose `Alias`
+//!   is BlueZ's dashed address, which the list leaves out.
 //!
 //! The bodies are deterministic (every map here is ordered), so `frames.rs`
 //! checks that the committed files are this module's output, and `live.rs`'s
@@ -41,6 +46,15 @@ pub const TAG_NAME: &str = "Example Tag";
 pub const BUDS_ADDRESS: &str = "02:5E:00:00:0B:20";
 pub const BUDS_PATH: &str = "/org/bluez/hci0/dev_02_5E_00_00_0B_20";
 pub const BUDS_ALIAS: &str = "Example Buds";
+/// The devices in range, in the discovering body only.
+pub const SPEAKER_ADDRESS: &str = "02:5E:00:00:0B:40";
+pub const SPEAKER_PATH: &str = "/org/bluez/hci0/dev_02_5E_00_00_0B_40";
+pub const SPEAKER_NAME: &str = "Example Speaker";
+pub const PHONE_ADDRESS: &str = "02:5E:00:00:0B:50";
+pub const PHONE_PATH: &str = "/org/bluez/hci0/dev_02_5E_00_00_0B_50";
+pub const PHONE_NAME: &str = "example phone";
+pub const BEACON_ADDRESS: &str = "02:5E:00:00:0B:60";
+pub const BEACON_PATH: &str = "/org/bluez/hci0/dev_02_5E_00_00_0B_60";
 
 const HCI0: &str = "/org/bluez/hci0";
 
@@ -63,7 +77,7 @@ fn interfaces<const N: usize>(entries: [(&'static str, Props); N]) -> Interfaces
     entries.into_iter().collect()
 }
 
-fn adapter() -> Interfaces {
+fn adapter(discovering: bool) -> Interfaces {
     interfaces([
         (
             "org.bluez.Adapter1",
@@ -75,7 +89,7 @@ fn adapter() -> Interfaces {
                 ("Connectable", Value::from(false)),
                 ("Discoverable", Value::from(false)),
                 ("DiscoverableTimeout", Value::from(180u32)),
-                ("Discovering", Value::from(false)),
+                ("Discovering", Value::from(discovering)),
                 ("Manufacturer", Value::from(70u16)),
                 ("Modalias", s("usb:v1D6Bp0246d0557")),
                 ("Name", s(ADAPTER_NAME)),
@@ -190,7 +204,50 @@ fn tag() -> Props {
     ])
 }
 
+/// An unpaired device as a discovery lists it: `RSSI` while it is heard, a
+/// `Name` when it advertises one, and `Alias` BlueZ's fallback.
+fn in_range(address: &'static str, name: Option<&str>, icon: Option<&str>, rssi: i16) -> Props {
+    let mut device = props([
+        (
+            "Adapter",
+            Value::from(ObjectPath::try_from(HCI0).expect("an object path")),
+        ),
+        ("Address", s(address)),
+        ("AddressType", s("public")),
+        (
+            "Alias",
+            s(&name.map_or_else(|| address.replace(':', "-"), str::to_owned)),
+        ),
+        ("Blocked", Value::from(false)),
+        ("Bonded", Value::from(false)),
+        ("Connected", Value::from(false)),
+        ("LegacyPairing", Value::from(false)),
+        ("Paired", Value::from(false)),
+        ("RSSI", Value::from(rssi)),
+        ("ServicesResolved", Value::from(false)),
+        ("Trusted", Value::from(false)),
+    ]);
+    if let Some(name) = name {
+        device.insert("Name", s(name));
+    }
+    if let Some(icon) = icon {
+        device.insert("Icon", s(icon));
+    }
+    device
+}
+
 fn body(two_devices: bool) -> Vec<u8> {
+    body_of(two_devices, false, false)
+}
+
+/// The discovering body's devices in range under an adapter that says
+/// `discovering`: `false` is BlueZ's picture shortly after a discovery
+/// stopped, when the devices it found are still listed.
+pub fn in_range_body(discovering: bool) -> Vec<u8> {
+    body_of(false, discovering, true)
+}
+
+fn body_of(two_devices: bool, discovering: bool, in_range_devices: bool) -> Vec<u8> {
     let mut objects: BTreeMap<ObjectPath<'static>, Interfaces> = BTreeMap::new();
     let mut put = |path: &'static str, interfaces: Interfaces| {
         objects.insert(
@@ -206,7 +263,7 @@ fn body(two_devices: bool) -> Vec<u8> {
             ("org.freedesktop.DBus.Introspectable", Props::new()),
         ]),
     );
-    put(HCI0, adapter());
+    put(HCI0, adapter(discovering));
     put(
         TAG_PATH,
         interfaces([
@@ -224,6 +281,29 @@ fn body(two_devices: bool) -> Vec<u8> {
         buds.insert("Connected", Value::from(true));
         put(BUDS_PATH, interfaces([("org.bluez.Device1", buds)]));
     }
+    if in_range_devices {
+        put(
+            SPEAKER_PATH,
+            interfaces([(
+                "org.bluez.Device1",
+                in_range(SPEAKER_ADDRESS, Some(SPEAKER_NAME), Some("audio-card"), -48),
+            )]),
+        );
+        put(
+            PHONE_PATH,
+            interfaces([(
+                "org.bluez.Device1",
+                in_range(PHONE_ADDRESS, Some(PHONE_NAME), None, -71),
+            )]),
+        );
+        put(
+            BEACON_PATH,
+            interfaces([(
+                "org.bluez.Device1",
+                in_range(BEACON_ADDRESS, None, None, -30),
+            )]),
+        );
+    }
     to_bytes(Context::new_dbus(LE, 0), &objects)
         .expect("the body serialises")
         .bytes()
@@ -235,5 +315,6 @@ pub fn fixtures() -> Vec<(&'static str, Vec<u8>)> {
     vec![
         ("managed-objects.bin", body(false)),
         ("managed-objects-two-devices.bin", body(true)),
+        ("managed-objects-discovering.bin", in_range_body(true)),
     ]
 }
