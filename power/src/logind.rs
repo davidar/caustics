@@ -192,6 +192,24 @@ pub fn unanswered(session: &str) -> String {
     )
 }
 
+/// Log Out where there is no niri: `Session.Terminate()` on this uid's own
+/// graphical session, found as the lock and polkit sidecars find theirs
+/// (`caustics_sidecar::session`). `Ok` carries which session and how it was
+/// found, for the witness.
+pub async fn terminate_own_session(conn: &Connection) -> Result<String, String> {
+    use caustics_sidecar::session;
+
+    let (id, how) = session::session_id(conn).await?;
+    let proxy = session::session(conn, &id)
+        .await
+        .map_err(|e| format!("session {id} ({how}): {e}"))?;
+    proxy
+        .terminate()
+        .await
+        .map_err(|e| format!("session {id} ({how}): {e}"))?;
+    Ok(format!("ended session {id}, found by {how}"))
+}
+
 /// Our own uid, without a `libc` dependency: `/proc/self`'s owner is the
 /// process's **effective** uid, and `std::os::unix` reads it. That is the
 /// real one for this sidecar, which is never setuid; a process whose two

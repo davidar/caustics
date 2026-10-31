@@ -53,7 +53,9 @@ process, with a cache keyed on the bytes it compiles). Every D-Bus signal
 stream is drained by a task that awaits nothing else. The power menu's
 Lock reads each session's `LockedHint` for three seconds after asking
 logind, and says when it stayed false (no locker listens to logind's `Lock`,
-or the one that does sets no hint) instead of witnessing a lock.
+or the one that does sets no hint) instead of witnessing a lock. Log Out
+without `$NIRI_SOCKET` ends the user's own session through logind's
+`Session.Terminate` rather than doing nothing, and says which way it went.
 
 **The canvas** (`caustics-canvas`, docs/canvas.md). A second host of a
 caustic on the same mechanism (`caustics-host`): the wallpaper on every

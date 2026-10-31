@@ -8,8 +8,10 @@ rust-version.workspace = true
 
 [dependencies]
 # The witness line, and the drain every zbus stream is handed to the moment
-# it exists (docs/architecture.md, *Rules*).
-caustics-sidecar = { path = "../sidecar", features = ["drain"] }
+# it exists (docs/architecture.md, *Rules*); and `session`: which login
+# session Log Out ends where there is no niri to quit, found as the lock and
+# polkit sidecars find theirs.
+caustics-sidecar = { path = "../sidecar", features = ["drain", "session"] }
 # The wire, and nothing else about the bar: this binary writes rows frames
 # and reads action frames (docs/abi.md, *Rows*, *Action*).
 caustics-bar-abi = { path = "../bar/abi" }
@@ -32,4 +34,4 @@ zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
 
 [dev-dependencies]
 # The private `dbus-daemon` the deadlock test starts (`tests/drain.rs`).
-caustics-sidecar = { path = "../sidecar", features = ["drain", "test-bus"] }
+caustics-sidecar = { path = "../sidecar", features = ["drain", "session", "test-bus"] }

@@ -33,7 +33,13 @@ fn each_op_names_the_logind_call_or_the_niri_line() {
     assert_eq!(Op::Shutdown.call(), Call::Logind("PowerOff"));
     // Lock is the session walk, not one method — its own variant says so.
     assert_eq!(Op::Lock.call(), Call::LogindLockWalk);
-    assert_eq!(Op::LogOut.call(), Call::Niri(niri::QUIT));
+    assert_eq!(Op::LogOut.call_with(true), Call::Niri(niri::QUIT));
+    // Without a niri to ask, Log Out ends the user's own session through
+    // logind instead of being a click that does nothing.
+    assert_eq!(Op::LogOut.call_with(false), Call::LogindTerminate);
+    for op in [Op::Lock, Op::Suspend, Op::Restart, Op::Shutdown] {
+        assert_eq!(op.call_with(true), op.call_with(false), "{op:?}");
+    }
     assert_eq!(
         niri::QUIT,
         r#"{"Action":{"Quit":{"skip_confirmation":false}}}"#

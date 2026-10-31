@@ -48,6 +48,9 @@ pub enum Call {
     LogindLockWalk,
     /// The one line written to `$NIRI_SOCKET`.
     Niri(&'static str),
+    /// `login1.Session.Terminate()` on this uid's own graphical session:
+    /// Log Out where `$NIRI_SOCKET` is unset ([`logind::terminate_own_session`]).
+    LogindTerminate,
     /// `login1.Session.SetBrightness("backlight", <name>, v)` on
     /// `session/auto` ([`crate::backlight`]).
     SetBrightness,
@@ -84,11 +87,20 @@ impl Op {
         }
     }
 
-    /// The call this op makes.
+    /// The call this op makes in this process's environment: Log Out's
+    /// depends on whether `$NIRI_SOCKET` is set.
     pub fn call(self) -> Call {
+        self.call_with(std::env::var_os(niri::SOCKET_ENV).is_some())
+    }
+
+    /// The call this op makes, given whether there is a niri to ask. With
+    /// one, Log Out is niri's `Quit` (and niri's own "really quit?"); without
+    /// one it is logind ending this user's own session.
+    pub fn call_with(self, niri: bool) -> Call {
         match self {
             Op::Lock => Call::LogindLockWalk,
-            Op::LogOut => Call::Niri(niri::QUIT),
+            Op::LogOut if niri => Call::Niri(niri::QUIT),
+            Op::LogOut => Call::LogindTerminate,
             Op::Suspend => Call::Logind("Suspend"),
             Op::Restart => Call::Logind("Reboot"),
             Op::Shutdown => Call::Logind("PowerOff"),
@@ -162,14 +174,22 @@ pub async fn perform(conn: Option<&Connection>, op: Op, dry: bool) {
         witness(&format!("{}: dry run", op.name()));
         return;
     }
-    let outcome = match op.call() {
-        // The compositor's socket, not the bus: Log Out works on a machine
-        // with no system bus at all, and fails on one with no niri. Blocking
-        // socket I/O, so off the runtime's one thread.
-        Call::Niri(_) => match tokio::task::spawn_blocking(niri::quit).await {
-            Ok(outcome) => outcome,
-            Err(e) => Err(format!("the niri call did not finish ({e})")),
-        },
+    let call = op.call();
+    let outcome = match call {
+        // The compositor's socket, not the bus: Log Out under niri works on a
+        // machine with no system bus at all. Blocking socket I/O, so off the
+        // runtime's one thread.
+        Call::Niri(_) => {
+            witness(&format!(
+                "{}: by niri's Quit over ${}",
+                op.name(),
+                niri::SOCKET_ENV
+            ));
+            match tokio::task::spawn_blocking(niri::quit).await {
+                Ok(outcome) => outcome,
+                Err(e) => Err(format!("the niri call did not finish ({e})")),
+            }
+        }
         Call::Settings(panel) => {
             witness(&format!(
                 "{}: {}",
@@ -181,11 +201,21 @@ pub async fn perform(conn: Option<&Connection>, op: Op, dry: bool) {
         Call::SetBrightness | Call::SetProfile => {
             Err("the loop performs this one, not the table".to_owned())
         }
-        Call::Logind(_) | Call::LogindLockWalk => match conn {
+        Call::Logind(_) | Call::LogindLockWalk | Call::LogindTerminate => match conn {
             None => Err("there is no system bus".to_owned()),
-            Some(conn) => match op.call() {
+            Some(conn) => match call {
                 Call::LogindLockWalk => logind::lock(conn).await,
                 Call::Logind(member) => logind::call(conn, member).await,
+                Call::LogindTerminate => {
+                    witness(&format!(
+                        "{}: ${} is unset, so by logind's Session.Terminate",
+                        op.name(),
+                        niri::SOCKET_ENV
+                    ));
+                    logind::terminate_own_session(conn)
+                        .await
+                        .map(|done| witness(&format!("{}: {done}", op.name())))
+                }
                 _ => unreachable!("the other arms are above"),
             },
         },

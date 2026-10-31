@@ -1,4 +1,4 @@
-//! Log Out: niri's `Quit` over `$NIRI_SOCKET` (the one
+//! Log Out under niri: niri's `Quit` over `$NIRI_SOCKET` (the one
 //! row of this menu that is not D-Bus at all).
 //!
 //! The sidecar that owns the menu owns what its rows do, so `caustics-power`

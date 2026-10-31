@@ -45,6 +45,10 @@ pub trait Session {
 
     fn set_locked_hint(&self, locked: bool) -> zbus::Result<()>;
 
+    /// End the session: every process in it is killed. logind lets a user
+    /// end their own sessions without asking polkit.
+    fn terminate(&self) -> zbus::Result<()>;
+
     /// `loginctl lock-session`, the idle timer, the lid: lock now.
     #[zbus(signal)]
     fn lock(&self) -> zbus::Result<()>;
