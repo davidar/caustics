@@ -80,6 +80,8 @@ frames the host copies and the caustic lays out.
   conversation and the fingerprint reader.
 - **`caustics-polkit`**: the authentication agent's registration and the
   polkit helper.
+- **`caustics-secrets`**: NetworkManager's secret agent, which asks for a
+  network's passphrase and hands it to NetworkManager.
 - **`caustics-greet`**: greetd's protocol, the session list, the last choice.
 
 The greeter is the same host started by the display manager with only the
@@ -350,6 +352,10 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   service that keeps the fingerprint module off the unlock path avoids its
   timeout; that, and the reader itself, are the sidecar's own settings
   (environment variables on its unit), never the host's.
+- **`caustics-secrets`**: answer NetworkManager's `GetSecrets` for a
+  connection whose secret it has not got, one `PROMPT_SECRET` per request,
+  and return the answer in the method's reply; it stores nothing
+  (secrets/README.md).
 - **`caustics-greet`**: length-prefixed JSON on `$GREETD_SOCK`:
   `create_session{username}` → `auth_message{type, text}` round trips via
   `post_auth_message_response{response}` → `start_session{cmd, env}`. greetd
@@ -414,6 +420,18 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   `caustics-canvasctl lock --wait` returns when the host has said `locked`, the moment the hint
   is set, which is the before-sleep hold. Nothing unlocks but a sink success: not a signal, not a reload, not
   a compositor event.
+- **network secrets**: serve `org.freedesktop.NetworkManager.SecretAgent`
+  at `/org/freedesktop/NetworkManager/SecretAgent` on the system bus and
+  call `AgentManager.RegisterWithCapabilities` from that same connection,
+  which is the one NetworkManager calls back on. Handle `GetSecrets`
+  (a prompt only with `ALLOW_INTERACTION`; the connection's name as the
+  title; a "wrong password" line first when `REQUEST_NEW` says the last
+  answer was refused) and `CancelGetSecrets`. One prompt at a time; the
+  rest queue. The bar's network sidecar joins a network it has no profile
+  for by `AddAndActivateConnection2` with no secret in the profile, so
+  NetworkManager asks the agent; a join that ends before it ever
+  connected deletes the profile it added. The bar never holds the
+  passphrase.
 - **greet**: the display manager's `default_session.command` runs the host
   as the greeter user inside the compositor it starts, with
   `$CAUSTICS_SIDECARS` naming only the greet sidecar. Needs nothing from a
@@ -454,6 +472,7 @@ process holding a secret is the canvas host, and the bar is not it.
 | a fade | mid-fade | the waiting client gets EOF on the socket and exits 1; the idle stage locks anyway |
 | `caustics-lock` | locked | the host stays locked (it never unlocks on its own); the sidecar restarts, reads `LockedHint`, resumes the conversation |
 | the fingerprint reader | locked | the password keeps working; the sidecar releases what it held and claims the reader again after a pause that doubles from 1 s to 30 s while its window stays open (a resume from suspend is the usual cause; fprintd reports a sensor disabled for heat the same way, so the pause starts again from 1 s only after a verify that was live for a minute); fprintd itself dying releases its claim, and the next claim starts it again; the machine going to sleep closes the window, and none opens until the resume, so no claim races the suspend |
+| `caustics-secrets` | mid-prompt | the host takes the prompt down with its pipe; NetworkManager's call fails, so the join fails and the bar's network sidecar deletes the profile it added; the sidecar restarts and registers again |
 | `caustics-polkit` | mid-prompt | the host takes the prompt down with its pipe; polkitd times out the request; the caller sees "not authorized"; the sidecar restarts and re-registers |
 | the host | greeting | the display manager restarts it; nothing was logged in |
 
@@ -482,10 +501,13 @@ suspend cycle and a relogin.
    through a suspend.
 5. **Greeter.** The greet sidecar, the session chooser, last-session
    memory.
-6. **Later.** A NetworkManager secret-agent sidecar: joining a new Wi-Fi
-   network is the one thing left in the session that needs a settings
-   program. The bar lists networks, NetworkManager asks the agent for the
-   passphrase, the bar never holds it.
+6. **Network secrets.** Built: `caustics-secrets`, NetworkManager's secret
+   agent, and the bar's network sidecar joining a network in range by
+   asking NetworkManager to add a profile with no secret in it. Joining a
+   new Wi-Fi network was the one thing left in the session that needed a
+   settings program; now the bar lists networks, NetworkManager asks the
+   agent for the passphrase, and the bar never holds it. 802.1X networks
+   still need a profile made elsewhere.
 
 ## Open questions
 

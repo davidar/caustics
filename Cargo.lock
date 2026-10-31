@@ -432,6 +432,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "caustics-secrets"
+version = "0.1.0"
+dependencies = [
+ "caustics-bar-abi",
+ "caustics-sidecar",
+ "tokio",
+ "zbus",
+ "zeroize",
+]
+
+[[package]]
 name = "caustics-sidecar"
 version = "0.1.0"
 dependencies = [

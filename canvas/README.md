@@ -160,6 +160,30 @@ then `systemctl --user daemon-reload && systemctl --user restart
 caustics-canvas`. Removing the file (and starting the previous agent again)
 undoes it.
 
+### Enabling the secret agent
+
+`caustics-secrets` (secrets/README.md) is NetworkManager's secret agent as a
+sink of the canvas: when the bar joins a Wi-Fi network the machine has
+never joined, NetworkManager asks it for the passphrase, and it asks on the
+canvas's prompt and hands the answer to NetworkManager alone. Like the
+polkit agent it is installed with the set and not in the canvas's default
+sidecars. Another secret agent of the same user (a desktop's applet) may
+stay: NetworkManager asks the user's agents one at a time until one gives
+the secret, so the two do not fight, and stopping the other makes the
+canvas the one that asks. Add it to the sidecars the drop-in names, beside
+any sink already there:
+
+```ini
+# ~/.config/systemd/user/caustics-canvas.service.d/secrets.conf
+[Service]
+Environment=CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload caustics-glyphs caustics-secrets"
+```
+
+One `CAUSTICS_SIDECARS` is in force, the last drop-in's, so with the polkit
+agent or the lock enabled too, one file names them all. Then
+`systemctl --user daemon-reload && systemctl --user restart
+caustics-canvas`.
+
 ## The lock
 
 `caustics-lock` (lock/README.md) is the session's locker as a sidecar of
