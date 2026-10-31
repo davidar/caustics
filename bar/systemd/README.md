@@ -73,8 +73,12 @@ and `systemctl --user daemon-reload` is the whole edit cycle.
 
 ## The unit
 
-`caustics-bar.service` is `PartOf` and `WantedBy` `graphical-session.target`. What
-it sets, and why:
+`caustics-bar.service` is `PartOf` and `WantedBy` `graphical-session.target`, so
+the session must reach that target with the display in the user manager's
+environment (README.md, *Build and install*): `niri-session` and uwsm do
+both; a plain compositor configuration runs `systemctl --user
+import-environment WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP` and starts
+a session target from its startup. What the unit sets, and why:
 
 - `Restart=always`, `RestartSec=1`, at most ten starts a minute. Exit 1, a
   Wayland protocol error or a fatal dispatch failure, is a restart: a dead bar
@@ -221,7 +225,7 @@ worth knowing:
 | `redraw: still animating after N s: …` (WARN) | something has not settled; the caustic's `stall:` lines follow, naming what is still moving |
 | `items: table capped at …` (WARN) | the caustic could not fit everything it built; some of the bar is not drawn |
 | `caffeine: inhibitor held` / `released` | the idle-inhibit chip was clicked |
-| `favourites: seeded from the built-in list` / `favourites: N read from …` / `favourites: wrote N to …` | where the dock's pinned list came from, and a Pin or Unpin |
+| `favourites: none yet (… does not exist); Pin on a dock entry adds the first` / `favourites: N read from …` / `favourites: wrote N to …` | where the dock's pinned list came from, and a Pin or Unpin |
 | `activation: token for row=…` / `activation: no token (…)` | a notification's click and the compositor's answer |
 | `shape watchdog: …` | a runaway shape pass: nothing is shaped until the font arena is written again, and the health line says `shape=STOPPED (watchdog)` |
 | `gpu: the device is gone (…)` | exit 3; the unit leaves it down |
@@ -258,11 +262,10 @@ moves it.
 `$XDG_STATE_HOME/caustics/bar/favourites` (`~/.local/state/caustics/bar/favourites`),
 one app id per line, in dock order, written when you pick **Pin** or
 **Unpin** on a dock entry's right-click menu. Until the first pin there is no
-file and the dock shows a seed list compiled into the bar
-(`DEFAULT_FAVOURITES` in `bar/src/facts.rs`; it names COSMIC's applications,
-so pin your own). Once the file exists it is the whole truth, and deleting it
-goes back to the seed. The bar reads it once, at startup: a hand edit takes
-effect at the next restart.
+file and no favourites: the dock shows the running windows alone
+(`DEFAULT_FAVOURITES` in `bar/src/facts.rs` is empty). Once the file exists it
+is the whole truth, and deleting it goes back to none. The bar reads it once,
+at startup: a hand edit takes effect at the next restart.
 
 ## The first start after a bind-group change
 

@@ -42,6 +42,10 @@ compiled-in default:
 cpu cpu-temp mem net disk gpu
 ```
 
+`gpu` reads AMD (drm sysfs) and NVIDIA (NVML) devices; on Intel graphics it
+has no source yet and the default set carries a row of gaps there. Drop the
+word from the list to lose the row.
+
 So the way to change what the bar shows is a systemd drop-in on the *bar's*
 unit that sets the sidecar's environment:
 

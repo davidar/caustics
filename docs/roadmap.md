@@ -7,7 +7,8 @@ CHANGELOG.md.
 ## The tree
 
 1. **The VM target as this project's own.** `bar/targets/vm.sh` and
-   `bar/vm-run.sh` source topaz-os's test harness and boot its image
+   `bar/vm-run.sh` source the test harness of topaz-os (the maintainer's own
+   Fedora-based image for a niri session) and boot its image
    (docs/testing.md, *The VM target*). Two steps, in order. First, move every
    step whose evidence never needed a compositor (a click cycles a dock
    entry, a menu row opens a level, a slider tick is one write, an applet's
@@ -21,9 +22,7 @@ CHANGELOG.md.
 2. **Small rough edges.** A network in range with no saved profile still
    opens the settings program on click; it should prompt or do nothing. The
    oracle's module comment and the drop-in quote one vendor's Vulkan driver
-   file by name. `DEFAULT_FAVOURITES` seeds a
-   COSMIC application set; it is documented, but a first-run default for
-   other desktops would be kinder.
+   file by name.
 
 ## Packaging
 

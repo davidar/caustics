@@ -118,9 +118,9 @@ running bar keeps its own set's sidecars even after a newer set is installed.
 |---|---|
 | **Rust** | 1.88 or newer (edition 2024; the workspace declares `rust-version`). |
 | **Slang** | Nothing to install. The compiler runs in process, through the text engine's `punchcutter-slang`, which carries a pinned [Slang release](https://github.com/shader-slang/slang/releases) (**2026.14.1**) inside the binaries that compile: the bar's build script, the tests and `caustics-reload`. The first build downloads that release once, checks its SHA-256 and keeps it under `~/.cache/shader-slang/`; for an offline build, point `SLANG_RELEASE_ARCHIVE` at a local copy of the release archive. `spirv-val` checks every compiled module when it is installed. |
-| **Libraries** | `libwayland-client` at link time (your distribution's `libwayland-dev` or equivalent). Fontconfig and an icon theme at run time. |
+| **Libraries** | `libwayland-client` at link time (your distribution's `libwayland-dev` or equivalent). Fontconfig and an icon theme at run time; `libxkbcommon` at run time for the canvas, which types nothing without it (canvas/README.md). |
 | **GPU** | Vulkan, through wgpu with SPIR-V passthrough. The bar asks for a low-power adapter and **refuses an adapter named NVIDIA** (a status bar must not keep a discrete GPU awake) unless `CAUSTICS_BAR_ALLOW_DGPU=1` is set; an NVIDIA-only machine sets that, or uses Mesa's lavapipe. Tested on AMD integrated graphics (RADV) and on lavapipe. |
-| **Compositor** | `wlr-layer-shell` and `ext-foreign-toplevel-list` (required, for the bar and the dock); `xdg-activation` (a notification's click raising its app) and `idle-inhibit` (the caffeine toggle), each optional. **niri** for the rest: which window is focused or urgent, focusing, closing and launching from the dock, and the overview button go through niri's IPC socket (`$NIRI_SOCKET`). Without it the dock lists windows but cannot act on them. Hover previews need `ext-image-copy-capture` with the foreign-toplevel capture source, which at the time of writing is in a patched niri rather than upstream's; without it there are no previews and nothing else changes. |
+| **Compositor** | `wlr-layer-shell` and `ext-foreign-toplevel-list` (required, for the bar and the dock); `xdg-activation` (a notification's click raising its app) and `idle-inhibit` (the caffeine toggle), each optional. **niri** for the rest: which window is focused or urgent, focusing, closing and launching from the dock, and the overview button go through niri's IPC socket (`$NIRI_SOCKET`). Without it the dock lists windows but cannot act on them, and the power menu's Log Out ends the session through logind instead of asking niri to quit. Hover previews need `ext-image-copy-capture` with the foreign-toplevel capture source, which at the time of writing is in a patched niri rather than upstream's; without it there are no previews and nothing else changes. |
 
 **Session services**, one sidecar each. Any of them can be missing:
 
@@ -128,8 +128,8 @@ running bar keeps its own set's sidecars even after a newer set is installed.
 |---|---|---|
 | NetworkManager (system bus) | `caustics-network` | no network chip |
 | BlueZ (system bus) | `caustics-bluetooth` | no Bluetooth chip |
-| UPower, logind, power-profiles-daemon (or tuned-ppd), a backlight | `caustics-power` | no battery chip, no power menu; no brightness slider without a backlight |
-| PipeWire or PulseAudio, with `pactl` and `wpctl` | `caustics-audio` | no audio chip |
+| UPower, logind, power-profiles-daemon (or tuned-ppd), a backlight | `caustics-power` | no battery chip, no power menu; no brightness slider without a backlight. The menu's **Lock** row asks logind, which only signals: a locker must listen (`caustics-lock`, canvas/README.md *Enabling the lock*, or another hooked to logind's `Lock`), else the row does nothing and the journal says so |
+| PipeWire with WirePlumber (`wpctl`) and `pactl` (Debian and Ubuntu: `pulseaudio-utils`) | `caustics-audio` | no audio chip; PulseAudio alone has no `wpctl` |
 | a session bus | `caustics-tray` | no tray (`caustics-tray` is the StatusNotifierWatcher when the name is free, and a host on the existing watcher when it is not) |
 | the session bus's `org.freedesktop.Notifications` name | `caustics-notify` | see below |
 | `/proc`, hwmon, drm sysfs; NVML on NVIDIA | `caustics-sysmon` | no charts (an absent sensor is a gap in its chart) |
@@ -151,6 +151,17 @@ systemctl --user link "$PWD/bar/systemd/caustics-bar.service"
 systemctl --user enable --now caustics-bar
 journalctl --user -u caustics-bar -f                        # every decision is one line
 ```
+
+The unit is `WantedBy` `graphical-session.target`, so two things must be true
+of the session, and a session started by `niri-session` or uwsm makes them
+so: the user manager knows the display (`systemctl --user import-environment
+WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP`, run by the compositor's
+startup) and it reaches that target (a `sway-session.target` or uwsm's,
+which pull `graphical-session.target` in). A plain sway or Hyprland
+configuration does both with one `exec` line. Without them `enable --now`
+starts a bar with no display, which exits and runs into its start limit, and
+nothing starts the bar at the next login; `systemctl --user show-environment`
+says whether `WAYLAND_DISPLAY` is there.
 
 `bar/install.sh` builds the workspace in release mode, checks that all sixteen
 binaries came from that build, installs them into
@@ -206,8 +217,8 @@ validator. After a `git pull`, your edits are a merge like any other.
 
 Two things are not tunables. **The dock's favourites** are state, at
 `~/.local/state/caustics/bar/favourites`, written by **Pin** and **Unpin** on a
-dock entry's right-click menu. Until the first pin a compiled-in list seeds
-the dock; it names COSMIC's applications, so pin your own. **A sidecar's
+dock entry's right-click menu. Until the first pin the dock shows only the
+running windows. **A sidecar's
 settings are its own**: `$CAUSTICS_SYSMON_CHARTS` picks the charts and
 `$PUNCHCUTTER_FONT` the font (the text engine reads it), both set on the
 unit. The "Settings…" rows open

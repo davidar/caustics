@@ -313,8 +313,9 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
 
 ### Sinks
 
-- **`caustics-polkit`**: spawn `/usr/lib/polkit-1/polkit-agent-helper-1
-  <user>`, write the cookie, answer the helper's PAM conversation lines
+- **`caustics-polkit`**: spawn polkit's `polkit-agent-helper-1 <user>` (found
+  where the distribution installed it, or `$CAUSTICS_POLKIT_HELPER`), write
+  the cookie, answer the helper's PAM conversation lines
   (`PAM_PROMPT_ECHO_OFF`, `PAM_PROMPT_ECHO_ON`, `PAM_TEXT_INFO`,
   `PAM_ERROR_MSG`) through the host's prompt. The helper reports to polkitd
   itself (`AuthenticationAgentResponse2`); the agent learns only success or
@@ -358,16 +359,17 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
 
 ### How each job is wired
 
-- **wallpaper**: the session's wallpaper unit runs the host. Whatever
-  schedules the wallpaper (a script that follows the schedule the
-  distribution ships) sends `show <image> fade <seconds>` to
+- **wallpaper**: the session runs the host as a user unit. Whatever
+  schedules the wallpaper (a timer following a day and night schedule, a
+  script, a single `show` from the compositor's startup) sends
+  `show <image> fade <seconds>` to
   `caustics-wallpaper`'s socket, with the duration the schedule names:
   seconds for a dissolve, hours for a real slow fade. `caustics-canvasctl`
   is the client for scripts.
 - **fade**: the idle timer's warning stage runs
 
   ```sh
-  caustics-canvasctl dim 1 over 10 --wait && systemctl suspend
+  ~/.local/bin/caustics-canvasctl dim 1 over 10 --wait && systemctl suspend
   ```
 
   and, on resume, `caustics-canvasctl undim`. The client keeps chayang's exit
@@ -467,8 +469,8 @@ suspend cycle and a relogin.
    into a library both the bar and the canvas are clients of. No behaviour
    change to the bar; its SPIR-V byte-identical before and after.
 1. **Host + wallpaper.** The safest first target: a bug is a wrong picture.
-   Replaces swaybg behind the session's wallpaper unit and gives the
-   schedule its cross-fade.
+   Replaces swaybg behind whatever the session schedules its wallpaper
+   with, and gives that schedule its cross-fade.
 2. **Fade.** `dim`/`undim` on the overlay, cancelled by input, replacing
    chayang.
 3. **Prompt core + polkit.** Built. The first job that takes a password; a

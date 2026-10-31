@@ -418,7 +418,8 @@ niri, a headless sway and a GPU.
 ## The VM target
 
 `bar/targets/vm.sh` drives the same steps in a virtual machine: a topaz-os
-guest booted by that project's test harness, reached over ssh, driven with QMP for the
+guest (the maintainer's own Fedora-based image for a niri session, a separate
+project) booted by that project's test harness, reached over ssh, driven with QMP for the
 pointer and the keyboard and screendumped through VNC. Its `keys` and `key`
 send QMP key names (`send-key` per character, `input-send-event` for a press
 or release held across calls), and the guest's own keymap turns them into
