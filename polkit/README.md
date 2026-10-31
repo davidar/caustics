@@ -47,7 +47,7 @@ From the sidecar's own environment:
 
 | variable | default | |
 |---|---|---|
-| `CAUSTICS_POLKIT_HELPER` | `/usr/lib/polkit-1/polkit-agent-helper-1` | the helper to spawn |
+| `CAUSTICS_POLKIT_HELPER` | the first `polkit-agent-helper-1` in `/usr/lib/polkit-1`, `/usr/libexec/polkit-1`, `/usr/lib/policykit-1` or `/run/wrappers/bin` | the helper to spawn; the start's journal line says which was found and where, or that none was |
 | `CAUSTICS_POLKIT_DRY_RUN` | unset | `1`: touch no system bus at all, and serve the agent on the session bus for any caller, so a test can play polkitd |
 
 `tests/fake-helper.sh` is the helper the tests use: it speaks the line

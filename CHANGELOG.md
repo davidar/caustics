@@ -96,7 +96,11 @@ polkitd, turns each request into a prompt conversation with the canvas host
 over two new wire kinds, `Prompt` and `Answer`, drives polkit's own helper
 with what was typed, and reports the outcome; one conversation at a time,
 the rest queued. The typed bytes are zeroed by every copy the wire makes
-and are never logged. A dry run touches no system bus, for the tests. The
+and are never logged. A dry run touches no system bus, for the tests.
+polkit's helper is looked for where distributions install it
+(`/usr/lib/polkit-1`, `/usr/libexec/polkit-1`, `/usr/lib/policykit-1`,
+`/run/wrappers/bin`), the start's journal line says which it found or that
+it found none, and `CAUSTICS_POLKIT_HELPER` still names one outright. The
 two kinds moved the ABI hash, so the whole set (now fifteen binaries) is
 rebuilt and installed together. The canvas answers it since its prompt
 (below), with the sink added to the canvas's set by a drop-in.

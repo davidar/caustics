@@ -51,23 +51,91 @@
 //! polkit 127 can also run the helper as a socket-activated service
 //! (`/run/polkit/agent-helper.socket`): the agent connects, writes the user
 //! name and a newline, then the cookie, and the lines are the same. That
-//! socket is disabled by default on the distribution this was written on, and
+//! socket is disabled by default on Fedora 44, where this was written, and
 //! this sidecar spawns the setuid helper only.
+//!
+//! # Where the helper is
+//!
+//! Distributions put it in different places, so it is looked for
+//! ([`choose`]): `CAUSTICS_POLKIT_HELPER` names one outright, and otherwise
+//! the first of [`DIRS`] that has a `polkit-agent-helper-1` is the one.
 //!
 //! **Nothing a helper line says is written to a witness.** A line names its
 //! kind and its length at most; the text goes to the host as a `Prompt`, and
 //! the answers go to the helper and nowhere else.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{ExitStatus, Stdio};
 
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::{Child, ChildStdin, Command};
 use zeroize::Zeroizing;
 
-/// The helper polkit installs, where it installs it.
-pub const DEFAULT_PATH: &str = "/usr/lib/polkit-1/polkit-agent-helper-1";
+/// The helper's file name.
+pub const NAME: &str = "polkit-agent-helper-1";
+
+/// The directories polkit's helper is installed in, in the order they are
+/// looked in: polkit's own default (Fedora, Arch, Debian 12 and later, Ubuntu
+/// 24.04 and later), openSUSE's, the older Debian and Ubuntu package's, and
+/// NixOS's setuid wrappers.
+pub const DIRS: [&str; 4] = [
+    "/usr/lib/polkit-1",
+    "/usr/libexec/polkit-1",
+    "/usr/lib/policykit-1",
+    "/run/wrappers/bin",
+];
+
+/// The setting that names the helper outright.
+pub const OVERRIDE_ENV: &str = "CAUSTICS_POLKIT_HELPER";
+
+/// Where the helper [`choose`] settled on came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    /// `CAUSTICS_POLKIT_HELPER` named it.
+    Override,
+    /// The first of the directories looked in that had it.
+    Found,
+    /// None of them had it. The path is polkit's own default, so a request
+    /// fails at the spawn with the error saying so.
+    Missing,
+}
+
+/// The helper to spawn: `over` when it is set and not empty, else the first
+/// `dir/polkit-agent-helper-1` that is a file, else [`Source::Missing`] and
+/// the first directory's.
+pub fn choose<D: AsRef<Path>>(over: Option<OsString>, dirs: &[D]) -> (PathBuf, Source) {
+    if let Some(path) = over.filter(|path| !path.is_empty()) {
+        return (PathBuf::from(path), Source::Override);
+    }
+    if let Some(path) = dirs
+        .iter()
+        .map(|dir| dir.as_ref().join(NAME))
+        .find(|path| path.is_file())
+    {
+        return (path, Source::Found);
+    }
+    (Path::new(DIRS[0]).join(NAME), Source::Missing)
+}
+
+/// The witness's words for a [`choose`], naming the directories looked in.
+pub fn describe<D: AsRef<Path>>(path: &Path, source: &Source, dirs: &[D]) -> String {
+    let looked = dirs
+        .iter()
+        .map(|dir| dir.as_ref().display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    match source {
+        Source::Override => format!("the helper is {} ({OVERRIDE_ENV})", path.display()),
+        Source::Found => format!(
+            "the helper is {} (the first of {looked} that has {NAME})",
+            path.display()
+        ),
+        Source::Missing => format!(
+            "no {NAME} in any of {looked}; every request fails until {OVERRIDE_ENV} names it"
+        ),
+    }
+}
 
 /// `PAM_MAX_RESP_SIZE`: the helper's `fgets` buffer.
 pub const PAM_MAX_RESP_SIZE: usize = 512;

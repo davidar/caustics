@@ -45,8 +45,11 @@
 //! From this process's own environment, never the host's (docs/architecture.md,
 //! *Configuration is the caustic*):
 //!
-//! - `CAUSTICS_POLKIT_HELPER`: the helper to spawn, default
-//!   `/usr/lib/polkit-1/polkit-agent-helper-1`.
+//! - `CAUSTICS_POLKIT_HELPER`: the helper to spawn. Unset, it is the first
+//!   `polkit-agent-helper-1` in [`helper::DIRS`] (polkit's own
+//!   `/usr/lib/polkit-1`, then `/usr/libexec/polkit-1`,
+//!   `/usr/lib/policykit-1` and `/run/wrappers/bin`), and the start's
+//!   witness says which, or that there was none.
 //! - `CAUSTICS_POLKIT_DRY_RUN=1`: the **dry run**. The system bus is not
 //!   touched at all: nothing registers with polkitd, and the agent object is
 //!   served on the *session* bus instead, taking a call from any
@@ -92,8 +95,10 @@ pub fn witness(line: &str) {
 /// The sidecar's settings, from its environment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Settings {
-    /// `CAUSTICS_POLKIT_HELPER`, or [`helper::DEFAULT_PATH`].
+    /// `CAUSTICS_POLKIT_HELPER`, or the first helper in [`helper::DIRS`].
     pub helper: PathBuf,
+    /// Where [`Settings::helper`] came from.
+    pub helper_source: helper::Source,
     /// `CAUSTICS_POLKIT_DRY_RUN=1`.
     pub dry_run: bool,
 }
@@ -101,24 +106,28 @@ pub struct Settings {
 impl Settings {
     pub fn from_env() -> Settings {
         Settings::from_vars(
-            std::env::var_os("CAUSTICS_POLKIT_HELPER"),
+            std::env::var_os(helper::OVERRIDE_ENV),
             std::env::var_os("CAUSTICS_POLKIT_DRY_RUN"),
         )
     }
 
-    /// The rule, apart from the environment: an empty helper is the default,
-    /// and only `1` is a dry run.
+    /// The rule, apart from the environment: an empty helper is looked for
+    /// in [`helper::DIRS`], and only `1` is a dry run.
     pub fn from_vars(
         helper: Option<std::ffi::OsString>,
         dry_run: Option<std::ffi::OsString>,
     ) -> Settings {
+        let (helper, helper_source) = helper::choose(helper, &helper::DIRS);
         Settings {
-            helper: helper
-                .filter(|path| !path.is_empty())
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from(helper::DEFAULT_PATH)),
+            helper,
+            helper_source,
             dry_run: dry_run.is_some_and(|v| v == "1"),
         }
+    }
+
+    /// The witness's words for the helper.
+    pub fn helper_line(&self) -> String {
+        helper::describe(&self.helper, &self.helper_source, &helper::DIRS)
     }
 }
 
@@ -234,9 +243,9 @@ async fn dry_run(
     };
     witness(&format!(
         "dry run: the agent is at {} {PATH} on the session bus; the system bus is not touched; \
-         the helper is {}",
+         {}",
         conn.unique_name().map_or("?", |n| n.as_str()),
-        settings.helper.display()
+        settings.helper_line()
     ));
     let conductor = Conductor::new(settings.helper, sink, events.clone());
     serve(&conn, false, events, conductor, inbox).await
@@ -279,8 +288,8 @@ async fn earnest(
         return idle(inbox).await;
     }
     witness(&format!(
-        "the authentication agent of session {session} ({how}), locale {locale}; the helper is {}",
-        settings.helper.display()
+        "the authentication agent of session {session} ({how}), locale {locale}; {}",
+        settings.helper_line()
     ));
     let _again = reregister(&conn, session.clone(), locale);
     let code = Conductor::new(settings.helper, sink, events)
