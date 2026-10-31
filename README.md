@@ -164,7 +164,7 @@ starts a bar with no display, which exits and runs into its start limit, and
 nothing starts the bar at the next login; `systemctl --user show-environment`
 says whether `WAYLAND_DISPLAY` is there.
 
-`bar/install.sh` builds the workspace in release mode, checks that all eighteen
+`bar/install.sh` builds the workspace in release mode, checks that all nineteen
 binaries came from that build, installs them into
 `~/.local/lib/caustics-bar/<abi-hash>/`, moves the symlink, restarts the unit if
 it is installed, and prints the bar's first `set:` and `health` lines.

@@ -238,7 +238,7 @@ held until the device pairs. The answer goes into the method's reply and
 nowhere else, and a PIN's copy is zeroed once sent; BlueZ's cancel takes
 the prompt down. The agent is opt-in, like the secret agent
 (canvas/README.md, *Enabling the pairing agent*). No wire or buffer
-contract changed; the set is now eighteen binaries.
+contract changed; the set grows by one binary.
 
 **Pipelines off the loop.** Both hosts build their caustic's pipelines on
 two compile workers instead of on their event loops, one at a time in the

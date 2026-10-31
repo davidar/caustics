@@ -11,7 +11,7 @@ down when it refuses to run, and sends its log to the journal.
 bar/install.sh
 ```
 
-The script builds the whole workspace in release mode, checks that all eighteen
+The script builds the whole workspace in release mode, checks that all nineteen
 binaries came out of *that* build, reads the set's name out of the bar it just
 built (`caustics-bar --abi-hash`), installs the ones that changed into
 `~/.local/lib/caustics-bar/<hash>/`, moves the `~/.local/bin/caustics-bar` symlink on

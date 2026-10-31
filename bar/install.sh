@@ -2,7 +2,7 @@
 # Install the bar and its sidecars as one **set** (docs/architecture.md, *The ABI*).
 #
 # A set is a directory: `<prefix>/lib/caustics-bar/<abi-hash>/` holds the
-# eighteen binaries, and `<prefix>/bin/caustics-bar` is a symlink into it, as
+# nineteen binaries, and `<prefix>/bin/caustics-bar` is a symlink into it, as
 # are `caustics-canvas` and `caustics-canvasctl`. The bar resolves
 # its own path (`current_exe`) and looks for its sidecars beside itself, so a
 # bar started through that link runs its own set's sidecars — and a sidecar
@@ -41,7 +41,7 @@ UNIT=caustics-bar
 CANVAS_UNIT=caustics-canvas
 DROPIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT.service.d"
 
-# The eighteen, in the order the hosts name them: the bar, then `SIDECARS` in
+# The nineteen, in the order the hosts name them: the bar, then `SIDECARS` in
 # `bar/src/feeders/pipe.rs`; then the canvas host, its own sidecar (`SIDECARS`
 # in `canvas/src/sidecars.rs`, whose other is `caustics-reload`, above), its
 # client, `caustics-polkit`, the canvas's polkit sink, which the canvas does
@@ -190,7 +190,7 @@ done
 
 # Older sets are left alone, deliberately: a bar that is still running holds
 # its own set's path, and a sidecar of its that crashes respawns out of it. A
-# set is small (eighteen binaries) and removing one by hand is `rm -r` on a
+# set is small (nineteen binaries) and removing one by hand is `rm -r` on a
 # directory named after a hash nothing is running.
 kept=$(find "$PREFIX/lib/caustics-bar" -mindepth 1 -maxdepth 1 -type d | wc -l)
 [[ "$kept" -gt 1 ]] && say "$((kept - 1)) older set(s) kept; a running bar holds its own"

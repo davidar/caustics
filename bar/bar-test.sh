@@ -413,7 +413,7 @@ trap 'exit 130' INT TERM
 # --- step 1: build ----------------------------------------------------------
 
 say "1. build"
-# All eighteen binaries (the bar spawns each sidecar from beside itself, and
+# All nineteen binaries (the bar spawns each sidecar from beside itself, and
 # the canvas its own), the rows demo, the sink sidecars' fake host, and the
 # lock's fake fprintd.
 if (cd "$REPO" &&
@@ -495,7 +495,7 @@ gscp "$GLYPHS_SIDECAR" tester@127.0.0.1:.local/bin/caustics-glyphs && pass "glyp
 gscp "$RELOAD_SIDECAR" tester@127.0.0.1:.local/bin/caustics-reload && pass "reload sidecar" ||
     fail "reload sidecar"
 # The rest of the set: the canvas, its sidecar and client, and its four sinks.
-# The bar starts none of them, but a set is all eighteen, and the install step
+# The bar starts none of them, but a set is all nineteen, and the install step
 # (25d) installs it whole from here.
 for name in caustics-canvas caustics-wallpaper caustics-canvasctl caustics-polkit caustics-lock caustics-secrets caustics-pairing; do
     gscp "$REPO/target/debug/$name" "tester@127.0.0.1:.local/bin/$name" && pass "$name" ||
@@ -4106,7 +4106,7 @@ restart_bar "the compiled-in sidecar set restored"
 say "25d. install.sh installs a whole set, and a bar started through it runs that set"
 # VM only: on a nested run it would install into the developer's home.
 if vm_only "the install script runs only in the guest; on the nested target it would install into the developer's home"; then
-# `--from` mode (the guest has no cargo): the set's name, the eighteen installs,
+# `--from` mode (the guest has no cargo): the set's name, the nineteen installs,
 # the symlink, and a bar started through it finding its own set's sidecars.
 GUEST_HOME=$(gssh 20 'printf %s "$HOME"')
 gscp "$REPO/bar/install.sh" tester@127.0.0.1:install.sh >/dev/null
@@ -4114,15 +4114,15 @@ gssh 20 'chmod +x ~/install.sh; rm -rf ~/caustics-install-test' >/dev/null
 install_out=$(gssh 120 '$HOME/install.sh --from $HOME/.local/bin --prefix $HOME/caustics-install-test 2>&1')
 note "$(printf '%s' "$install_out" | tail -5)"
 assert_contains "the script named the set" "$install_out" "set $BAR_HASH"
-assert_contains "and installed eighteen binaries" "$install_out" "installed 18 of 18 into"
+assert_contains "and installed nineteen binaries" "$install_out" "installed 19 of 19 into"
 assert_contains "and did not restart a unit it does not point at" \
     "$install_out" "not restarting caustics-bar"
 
 installed=$(gssh 20 "ls \$HOME/caustics-install-test/lib/caustics-bar/$BAR_HASH | wc -l")
 if [[ "${installed:-0}" -eq 18 ]]; then
-    pass "eighteen binaries in the set directory"
+    pass "nineteen binaries in the set directory"
 else
-    fail "the set directory holds ${installed:-0} binaries, not eighteen"
+    fail "the set directory holds ${installed:-0} binaries, not nineteen"
 fi
 link=$(gssh 20 'readlink $HOME/caustics-install-test/bin/caustics-bar')
 assert_contains "the symlink points into the set" "$link" "/lib/caustics-bar/$BAR_HASH/caustics-bar"
