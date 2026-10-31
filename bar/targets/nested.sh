@@ -391,7 +391,11 @@ supervise() {
             # cursor to it; written after the launch, it could land behind the
             # bar's first lines and hide them.
             echo "supervisor: Started caustics-bar (pid $BASHPID)."
+            # The Bluetooth sidecar's agent in its dry run, always: the
+            # system bus here is the machine's, and an agent registered
+            # there would take the default from the developer's own bar.
             exec env -u DISPLAY \
+                CAUSTICS_BLUETOOTH_AGENT_DRY_RUN=1 \
                 WAYLAND_DISPLAY="$NESTED_WAYLAND" XDG_RUNTIME_DIR="$NESTED_RT" \
                 NIRI_SOCKET="$NESTED_NIRI_SOCKET" \
                 XDG_CONFIG_HOME="$RUN/xdg/config" XDG_STATE_HOME="$RUN/xdg/state" \
