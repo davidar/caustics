@@ -250,6 +250,14 @@ nothing in the steps knows which target it is on:
 | `fixture_start/stop`, `client_spawn` | `setsid`, tracked by pid |
 | `T_HOME T_CONFIG T_STATE T_CACHE T_BIN T_CAUSTICS …` | the run's scratch tree, `target/debug`, the copy of `caustics/` |
 
+**The displays step** (16d) reads the nested niri's one output through
+`caustics-displays`, opens the chip, descends into the output's submenu
+and checks its rows; clicks its On row and checks the only output on is
+refused and stays on; then clicks Scale 1, checks `niri msg --json
+outputs` and the sidecar's next frame report it, and clicks Scale 2 at the
+bar's new scale to put it back (with `niri msg` as the fallback, since
+every later step assumes scale 2).
+
 **The canvas's steps** (27 to 35) run last: the canvas host as a fixture
 with `CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload"`, its log in
 `$T_HOME/canvas.log`, on an empty workspace so a screenshot below the bar is

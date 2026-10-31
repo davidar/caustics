@@ -1245,7 +1245,10 @@ journal_since() { journal | tail -n +$(($1 + 1)); }
 
 # Click one element of the open popup: its origin from the newest `popup:
 # open` line (logical, bar-relative), the row's rect in popup px. The x
-# fraction's default is exactly the middle of a slider's travel.
+# fraction's default is exactly the middle of a slider's travel. Logical is
+# px over `POPUP_SCALE`, the output's scale (2, but for the displays step's
+# moment at 1).
+POPUP_SCALE=2
 popup_click() { # popup_click <ELEM_NAME> [x fraction, default 0.5] [menu|toast]
     local rect ppos ppx ppy x y frac kind
     frac="${2:-0.5}"
@@ -1262,8 +1265,8 @@ popup_click() { # popup_click <ELEM_NAME> [x fraction, default 0.5] [menu|toast]
         return 1
     fi
     read -r ppx ppy <<<"$ppos"
-    x=$(python3 -c "print(round($ppx * 2 + ${rect[0]} + ${rect[2]} * $frac))")
-    y=$(python3 -c "print(round($bar_origin_y + $ppy * 2 + ${rect[1]} + ${rect[3]} / 2))")
+    x=$(python3 -c "print(round($ppx * $POPUP_SCALE + ${rect[0]} + ${rect[2]} * $frac))")
+    y=$(python3 -c "print(round($bar_origin_y + $ppy * $POPUP_SCALE + ${rect[1]} + ${rect[3]} / 2))")
     note "$1: popup rect ${rect[*]} -> screen $x,$y"
     click_at "$x" "$y"
 }
@@ -2729,6 +2732,167 @@ if wait_for_journal_more "caustics-audio: absent: sink" 20 "$absent_before"; the
 else
     note "no fresh 'caustics-audio: absent: sink' after the unload ($(journal | grep -F 'caustics-audio: ' | tail -1))"
 fi
+fi
+
+say "16d. the displays chip lists niri's output; a scale row sets it through niri, and back"
+# `caustics-displays` reads the nested niri's outputs over `$NIRI_SOCKET`: one
+# output, `$OUTPUT`, at the scale step 3 set. Row ids (`displays/src/rows.rs`):
+# the output is slot 0, so 256 is its row, 257 On, 258 Scale, 259 Mode, 260
+# Rotation, and 272 + k the k-th scale (272 is 1, 276 is 2). A scale change
+# re-lays the bar out at that scale, so the clicks back are scaled by it.
+displays_scale_now() { # the nested niri's scale for $OUTPUT, as niri prints it
+    niri_msg --json outputs 2>/dev/null | python3 -c '
+import json, sys
+o = json.load(sys.stdin).get(sys.argv[1]) or {}
+print((o.get("logical") or {}).get("scale", "off"))' "$OUTPUT"
+}
+displays_chip() { # the chip's centre from its newest layout line
+    local rect
+    rect=($(layout_rect applet-caustics-displays))
+    [[ ${#rect[@]} -eq 4 ]] || return 1
+    displays_cx=$(python3 -c "print(round(${rect[0]} + ${rect[2]} / 2))")
+    displays_cy=$(python3 -c "print(round(${rect[1]} + ${rect[3]} / 2))")
+}
+displays_wait_row() { # displays_wait_row <row id> <seconds>: laid out since the mark
+    local deadline=$((SECONDS + $2))
+    until journal_since "$displays_mark" | grep -q "layout: applet-caustics-displays-$1 target=popup"; do
+        ((SECONDS < deadline)) || return 1
+        sleep 1
+    done
+}
+displays_open_output() { # the chip's menu, then the output's submenu, whose Scale row shows
+    local opens_before
+    opens_before=$(journal_count "popup: open kind=menu")
+    displays_mark=$(journal_lines)
+    click_at "$displays_cx" $((bar_origin_y + displays_cy))
+    wait_for_journal_more "popup: open kind=menu" 8 "$opens_before" || return 1
+    displays_wait_row 256 20 || return 1
+    displays_mark=$(journal_lines)
+    popup_click applet-caustics-displays-256 || return 1
+    displays_wait_row 258 15
+}
+# Scale `<row id>` through the menu; niri must then report `<scale>`.
+displays_set_scale() { # displays_set_scale <row id> <niri's scale>
+    displays_want="$2"
+    if ! displays_open_output; then
+        fail "the displays menu did not open on $OUTPUT's submenu ($(journal_since "${displays_mark:-0}" |
+            grep -oE 'layout: applet-caustics-displays[-0-9]* target=[a-z]+' | sort -u | tr '\n' ' '))"
+        return 1
+    fi
+    displays_mark=$(journal_lines)
+    popup_click applet-caustics-displays-258 || return 1
+    if ! displays_wait_row "$1" 15; then
+        fail "the Scale submenu has no row $1 ($(journal_since "$displays_mark" |
+            grep -oE 'layout: applet-caustics-displays-[0-9]+ target=popup' | sort -u | tr '\n' ' '))"
+        return 1
+    fi
+    shot "displays-scale-$2.png"
+    popup_click "applet-caustics-displays-$1" || return 1
+    wait_until "niri reports scale $2" 10 '[[ "$(displays_scale_now)" == "$displays_want" ]]'
+}
+
+if wait_for_journal "sidecar caustics-displays: rows, applet=8" 30; then
+    pass "its rows frame arrived with applet=8: $(journal |
+        grep -F 'sidecar caustics-displays: rows, applet=8' | tail -1 | sed -n 's/.*feeders::pipe: //p')"
+else
+    fail "no 'sidecar caustics-displays: rows, applet=8 …' ($(journal | grep -F 'caustics-displays' | tail -2 | tr '\n' ' '))"
+fi
+displays_line=$(journal | grep -F 'caustics-displays: published rev=' | tail -1 |
+    sed -n 's/.*caustics-displays: /caustics-displays: /p')
+if grep -qE "outputs=$OUTPUT on [0-9]+x[0-9]+@[0-9.]+ scale=2 Normal" <<<"$displays_line"; then
+    pass "the sidecar read niri's one output: $displays_line"
+else
+    fail "the sidecar's picture is not $OUTPUT on at scale 2: ${displays_line:-no publish line}"
+fi
+
+displays_cx=""
+if wait_for_journal "layout: applet-caustics-displays target=bar" 20 && displays_chip; then
+    pass "the displays chip is on the bar: $(layout_rect applet-caustics-displays)"
+else
+    fail "no 'layout: applet-caustics-displays target=bar'; the chip was not laid out"
+fi
+
+if [[ -n "$displays_cx" ]]; then
+    # The output's submenu: On, the separator, Scale, Mode, Rotation.
+    if displays_open_output; then
+        missing=""
+        for id in 257 259 260 261; do
+            displays_wait_row "$id" 5 || missing="$missing $id"
+        done
+        if [[ -z "$missing" ]]; then
+            pass "$OUTPUT's submenu: On, a separator, Scale, Mode and Rotation (257-261)"
+        else
+            fail "$OUTPUT's submenu lacks row(s)$missing"
+        fi
+        shot displays-output.png
+        # The only output on: On refuses, and niri is asked nothing.
+        refused_before=$(journal_count "caustics-displays: $OUTPUT off: refused")
+        if popup_click applet-caustics-displays-257; then
+            if wait_for_journal_more "caustics-displays: $OUTPUT off: refused" 8 "$refused_before"; then
+                pass "$(journal | grep -F "caustics-displays: $OUTPUT off: refused" | tail -1 |
+                    sed -n 's/.*caustics-displays: /caustics-displays: /p')"
+            else
+                fail "no 'caustics-displays: $OUTPUT off: refused' after clicking the only output's On"
+            fi
+            if [[ "$(displays_scale_now)" == 2.0 ]] && ! journal | jgrep -F "caustics-displays: $OUTPUT off: ok"; then
+                pass "and $OUTPUT is still on at scale 2"
+            else
+                fail "$OUTPUT is $(displays_scale_now) after the refused Off"
+            fi
+        fi
+    else
+        fail "the displays menu did not open on $OUTPUT's submenu"
+    fi
+    sleep 1
+
+    # Scale 1 through the menu, then 2 again the same way.
+    relayout_mark=$(journal_lines)
+    if displays_set_scale 272 1.0; then
+        pass "a click on Scale 1 set it: niri reports $OUTPUT at $(displays_scale_now)"
+        if wait_for_journal "caustics-displays: $OUTPUT scale 1: ok" 8; then
+            pass "caustics-displays: $OUTPUT scale 1: ok"
+        else
+            fail "no 'caustics-displays: $OUTPUT scale 1: ok' ($(journal | grep -F 'caustics-displays: ' | tail -2 | tr '\n' ' '))"
+        fi
+        if wait_until "the sidecar's next frame says scale=1" 10 \
+                'journal | grep -F "caustics-displays: published rev=" | tail -1 | grep -qF " scale=1 "'; then
+            pass "and its next frame says so: $(journal | grep -F 'caustics-displays: published rev=' | tail -1 |
+                sed -n 's/.*caustics-displays: /caustics-displays: /p')"
+        else
+            fail "the sidecar never published scale=1"
+        fi
+        # The bar at scale 1: wait for the chip's new place, then click by it.
+        deadline=$((SECONDS + 20))
+        until journal_since "$relayout_mark" | grep -q "layout: applet-caustics-displays target=bar" &&
+            journal | grep -F "layout: applet-caustics-displays " | tail -1 | grep -q 'target=bar' ||
+            ((SECONDS >= deadline)); do
+            sleep 1
+        done
+        sleep 2
+        displays_chip
+        POPUP_SCALE=1
+        if displays_set_scale 276 2.0; then
+            pass "and a click on Scale 2 set it back: niri reports $OUTPUT at $(displays_scale_now)"
+        else
+            fail "Scale 2 through the menu did not set it back (niri reports $(displays_scale_now))"
+        fi
+        POPUP_SCALE=2
+    else
+        fail "a click on Scale 1 did not reach niri (niri reports $OUTPUT at $(displays_scale_now))"
+    fi
+    # Every later step assumes scale 2: put it back whatever happened above.
+    if [[ "$(displays_scale_now)" != 2.0 ]]; then
+        niri_msg output "$OUTPUT" scale 2 >/dev/null 2>&1
+        note "put $OUTPUT back to scale 2 by niri msg"
+    fi
+    sleep 2
+    # The bar back at scale 2, so later steps read rects at the scale they assume.
+    deadline=$((SECONDS + 20))
+    until journal | grep -F "layout: applet-caustics-displays " | tail -1 | grep -q 'target=bar' ||
+        ((SECONDS >= deadline)); do
+        sleep 1
+    done
+    park_pointer
 fi
 
 say "17. the chart set is the sidecar's, not the bar's"
