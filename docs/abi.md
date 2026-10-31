@@ -994,8 +994,8 @@ never moves.
 
 **Applets.** `RowsHeader.applet` is one of `APPLET_OTHER` 0, `APPLET_AUDIO`
 1, `APPLET_NETWORK` 2, `APPLET_BLUETOOTH` 3, `APPLET_TRAY` 4, `APPLET_POWER`
-5, `APPLET_CAFFEINE` 6 (the bar's own, never on this wire) and
-`APPLET_NOTIFY` 7. The caustic orders the applets by `APPLET_ORDER` in the
+5, `APPLET_CAFFEINE` 6 (the bar's own, never on this wire), `APPLET_NOTIFY`
+7 and `APPLET_DISPLAYS` 8. The caustic orders the applets by `APPLET_ORDER` in the
 tunables; a value it does not name is laid out in `APPLET_OTHER`'s pass.
 
 **Validation** (the reader rejects the frame with one witness): a row count

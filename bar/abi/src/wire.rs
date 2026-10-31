@@ -205,6 +205,10 @@ abi_consts! {
     /// sidecar is the session's `org.freedesktop.Notifications` daemon, and
     /// publishes no chip while another daemon holds that name.
     pub const APPLET_NOTIFY: u32 = 7;
+    /// The outputs, from the `caustics-displays` sidecar: one `ROW_ITEM`
+    /// whose menu is a submenu per niri output (on/off, scale, mode,
+    /// rotation), set over niri's IPC socket.
+    pub const APPLET_DISPLAYS: u32 = 8;
 }
 
 abi_consts! {

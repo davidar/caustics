@@ -119,17 +119,18 @@ public static const uint RIGHT_ORDER[] = { ITEM_APPLET };
 /// The right wing is laid out from the outer edge inwards, so APPLET_POWER
 /// first puts the power button — and the battery beside it, in `caustics-power`'s
 /// own publication order — outermost, where most panels (cosmic-panel among
-/// them) keep them. APPLET_NOTIFY's bell sits just inside the power button
-/// and the battery, APPLET_CAFFEINE inside the bell, then audio, network and
-/// Bluetooth, and APPLET_TRAY last puts the tray's icons innermost.
+/// them) keep them. APPLET_DISPLAYS's monitor sits just inside the battery,
+/// APPLET_NOTIFY's bell inside that, APPLET_CAFFEINE inside the bell, then
+/// audio, network and Bluetooth, and APPLET_TRAY last puts the tray's icons
+/// innermost.
 ///
 /// An order written before a new applet value existed (a fork's, kept through
 /// a merge) still compiles and still shows that applet's chip: `item_in_pass` places an applet value
 /// no pass names in APPLET_OTHER's pass (`bar.slang`), which is the inner end
 /// of the wing. Adding the word here is how it moves to where it belongs.
 public static const uint APPLET_ORDER[] = {
-    APPLET_POWER, APPLET_NOTIFY, APPLET_CAFFEINE, APPLET_AUDIO, APPLET_NETWORK, APPLET_BLUETOOTH,
-    APPLET_TRAY, APPLET_OTHER
+    APPLET_POWER, APPLET_DISPLAYS, APPLET_NOTIFY, APPLET_CAFFEINE, APPLET_AUDIO, APPLET_NETWORK,
+    APPLET_BLUETOOTH, APPLET_TRAY, APPLET_OTHER
 };
 
 /// Whether the clock draws its date block (`Item.aux_block`, `%a %-d %b`) to

@@ -49,6 +49,9 @@ pub const SIDECARS: &[&str] = &[
     // for `org.freedesktop.Notifications`, so beside another daemon it is a
     // running sidecar with no frame.
     "caustics-notify",
+    // The outputs, over niri's IPC socket. Without `$NIRI_SOCKET` it is one
+    // witness and no frame, so no chip.
+    "caustics-displays",
     APPS_SIDECAR,
     GLYPHS_SIDECAR,
     RELOAD_SIDECAR,
