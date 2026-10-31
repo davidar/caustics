@@ -6,13 +6,16 @@
 //! a network. [`perform`] is the only thing here that touches NM, and it takes
 //! the [`Call`] the table already decided.
 
+use std::collections::HashMap;
+
 use zbus::Connection;
+use zbus::zvariant::Value;
 
 use caustics_bar_abi::buffer::{
     ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE,
 };
 
-use crate::model::Snapshot;
+use crate::model::{Security, Snapshot};
 use crate::{bus, rows, witness};
 use caustics_sidecar::settings::{self, Panel};
 
@@ -28,6 +31,18 @@ pub enum Op {
         /// Only for the witness line.
         label: String,
     },
+    /// Join a network in range that no profile claims: NetworkManager adds
+    /// a profile and activates it, and asks its secret agent for anything
+    /// secret.
+    Join(Join),
+    /// A network in range this row cannot join (802.1X, WEP): one witness,
+    /// nothing else.
+    Unjoinable {
+        /// Only for the witness line.
+        label: String,
+        /// What it needs, for the witness line.
+        needs: &'static str,
+    },
     /// Open the settings program's network page.
     Settings,
     /// Ask every Wi-Fi device what is in range. The menu just opened,
@@ -41,6 +56,51 @@ pub enum Op {
     ScanStop,
 }
 
+/// A network to join, as [`Op::Join`] carries it: everything the call names.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Join {
+    /// The SSID's bytes, the new profile's `802-11-wireless.ssid`.
+    pub ssid: Vec<u8>,
+    /// The SSID as text: the new profile's `connection.id`, the title the
+    /// secret agent's prompt wears, and the witness's.
+    pub label: String,
+    /// The Wi-Fi device's object path.
+    pub device: String,
+    /// The access point's object path.
+    pub ap: String,
+    pub security: Security,
+}
+
+/// The new profile [`Join`] asks for (`AddAndActivateConnection2`'s
+/// `connection`): a name, an SSID, infrastructure mode, and for a secured
+/// network the key management and **no secret**, so that NetworkManager
+/// asks its secret agent for it.
+pub fn profile(join: &Join) -> HashMap<&'static str, HashMap<&'static str, Value<'static>>> {
+    let mut profile = HashMap::from([
+        (
+            "connection",
+            HashMap::from([
+                ("id", Value::from(join.label.clone())),
+                ("type", Value::from(crate::nm::TYPE_WIFI)),
+            ]),
+        ),
+        (
+            crate::nm::TYPE_WIFI,
+            HashMap::from([
+                ("ssid", Value::from(join.ssid.clone())),
+                ("mode", Value::from("infrastructure")),
+            ]),
+        ),
+    ]);
+    if let Some(key_mgmt) = join.security.key_mgmt() {
+        profile.insert(
+            "802-11-wireless-security",
+            HashMap::from([("key-mgmt", Value::from(key_mgmt))]),
+        );
+    }
+    profile
+}
+
 /// What an [`Op`] would do, named rather than done: the shape a test asserts
 /// against without a system bus and without touching the machine's connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,6 +110,12 @@ pub enum Call {
     /// `ActivateConnection(connection, "/", "/")` — NM picks the device and
     /// the access point, which is the whole reason this sidecar does not.
     ActivateConnection(String),
+    /// `AddAndActivateConnection2(profile(join), device, ap, {persist:
+    /// "disk"})`, then a watch on the activation that deletes the profile if
+    /// it never connected.
+    AddAndActivate(Join),
+    /// Nothing on the bus: a witness saying what the network needs.
+    Decline(&'static str),
     /// The settings program, detached, on this panel.
     Settings(Panel),
     /// `Device.Wireless.RequestScan({})`, once per Wi-Fi device. A read of the
@@ -77,6 +143,8 @@ impl Op {
             Op::Wireless(true) => "wi-fi on".to_owned(),
             Op::Wireless(false) => "wi-fi off".to_owned(),
             Op::Activate { label, .. } => format!("activate {label:?}"),
+            Op::Join(join) => format!("join {:?}", join.label),
+            Op::Unjoinable { label, .. } => format!("join {label:?}"),
             Op::Settings => "settings".to_owned(),
             Op::Scan { .. } => "scan".to_owned(),
             Op::ScanStop => "scan stop".to_owned(),
@@ -88,6 +156,8 @@ impl Op {
         match self {
             Op::Wireless(to) => Call::SetWirelessEnabled(*to),
             Op::Activate { path, .. } => Call::ActivateConnection(path.clone()),
+            Op::Join(join) => Call::AddAndActivate(join.clone()),
+            Op::Unjoinable { needs, .. } => Call::Decline(needs),
             Op::Settings => Call::Settings(SETTINGS_PANEL),
             Op::Scan { devices } => Call::RequestScan(devices.clone()),
             Op::ScanStop => Call::StopScanning,
@@ -131,17 +201,28 @@ pub fn op_for(state: &Snapshot, row: u32, kind: u32) -> Option<Op> {
                 path: n.path.clone(),
                 label: n.label.clone(),
             })
-            // A network in range that no profile claims: the settings page, the
-            // same as the settings row, because joining a new network is
-            // the settings program's flow and there is no password entry here,
-            // ever. Not `AddAndActivate`, not even for an open network: one
-            // flow, and it is the settings program's.
+            // A network in range that no profile claims: joined, while the
+            // radio is on. NetworkManager adds the profile and asks its secret
+            // agent (the canvas's prompt) for the passphrase, so the bar never
+            // holds it. One that needs more than a passphrase says so and
+            // does nothing.
             .or_else(|| {
-                state
-                    .visible
-                    .iter()
-                    .find(|v| v.row == row)
-                    .map(|_| Op::Settings)
+                let visible = state.visible.iter().find(|v| v.row == row)?;
+                if let Some(needs) = visible.security.unjoinable() {
+                    return Some(Op::Unjoinable {
+                        label: visible.label(),
+                        needs,
+                    });
+                }
+                state.wireless_enabled.then(|| {
+                    Op::Join(Join {
+                        ssid: visible.ssid.clone(),
+                        label: visible.label(),
+                        device: visible.device.clone(),
+                        ap: visible.ap.clone(),
+                        security: visible.security,
+                    })
+                })
             }),
         _ => None,
     }
@@ -203,6 +284,21 @@ pub async fn perform(conn: Option<&Connection>, op: Op, dry: bool) {
             Some(conn) => {
                 let outcome = bus::set_wireless_enabled(conn, to).await;
                 report(&op, outcome);
+            }
+        },
+        Call::Decline(needs) => witness(&format!(
+            "{}: needs a profile ({needs}); not joinable from the bar yet",
+            op.name()
+        )),
+        // Spawned like an activation: the call returns at once, and the watch
+        // after it lasts as long as the activation does.
+        Call::AddAndActivate(join) => match conn {
+            None => witness(&format!("{}: there is no system bus", op.name())),
+            Some(conn) => {
+                let conn = conn.clone();
+                tokio::spawn(async move {
+                    report(&op, bus::join(&conn, &join).await);
+                });
             }
         },
         Call::ActivateConnection(path) => match conn {

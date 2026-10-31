@@ -91,9 +91,9 @@ pub fn picture(revision: u32, state: &Snapshot, settings: bool) -> Rows {
 
     // The networks in range that no profile claims. **No `CHECKABLE` and no
     // `RADIO`**: the missing mark is what tells them from the known ones
-    // above, and it is honest — none of them is a thing this applet can join.
-    // A click opens the settings program's network page, because there is no
-    // password entry in the bar, ever.
+    // above, and it is honest — none of them has a profile yet. A click joins
+    // one (`crate::actions`); the passphrase is asked for by the canvas's
+    // prompt, never here.
     for network in &state.visible {
         rows.menu(
             item,

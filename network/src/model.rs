@@ -23,10 +23,8 @@ pub enum Primary {
     WiFi { strength: u8 },
 }
 
-/// One known Wi-Fi connection: a stored NM profile, which is the only kind of
-/// network this sidecar offers. A network NM does not know is not a row —
-/// there is no password entry here, ever, and joining a new network is the
-/// settings program's job.
+/// One known Wi-Fi connection: a stored NM profile. A network in range that no
+/// profile claims is a [`Visible`] instead.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Network {
     /// The row id, derived from the UUID by [`row_id`]: stable across frames
@@ -50,10 +48,14 @@ pub struct Network {
 /// One access point in range whose SSID matches **no** stored profile: a network
 /// the machine has never joined, offered so the menu says what is *there*.
 ///
-/// It is not a thing this sidecar can join — there is no password entry in the
-/// bar, ever — so a click on its row opens the settings program's network
-/// page, the same as the settings row. It is drawn without a check or a radio, and that
-/// missing mark is the whole difference between it and a known network.
+/// A click on its row **joins** it (`crate::actions`): NetworkManager is asked
+/// to add a profile and activate it, and for a secured network NetworkManager
+/// asks its secret agent for the passphrase, which is the canvas's prompt
+/// (`caustics-secrets`). The passphrase never passes through the bar or this
+/// sidecar. An enterprise (802.1X) or WEP network needs more than one
+/// passphrase or a profile made elsewhere, and its row does nothing but say
+/// so. It is drawn without a check or a radio, and that missing mark is the
+/// whole difference between it and a known network.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Visible {
     /// [`visible_row_id`] over the SSID bytes: stable while the access point
@@ -65,6 +67,77 @@ pub struct Visible {
     pub ssid: Vec<u8>,
     /// The strongest access point with this SSID that the Wi-Fi device can see.
     pub strength: u8,
+    /// That access point's object path: the join's `specific_object`.
+    pub ap: String,
+    /// The Wi-Fi device that sees it: the join's `device`.
+    pub device: String,
+    /// What that access point asks for.
+    pub security: Security,
+}
+
+/// What an access point in range asks of a client, read from its `Flags`,
+/// `WpaFlags` and `RsnFlags` by [`security`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Security {
+    /// Nothing: a profile with no security setting.
+    #[default]
+    Open,
+    /// Enhanced Open (OWE): encrypted, with no secret.
+    Owe,
+    /// WPA or WPA2 with a passphrase: `key-mgmt` `wpa-psk`.
+    Psk,
+    /// WPA3 Personal: `key-mgmt` `sae`.
+    Sae,
+    /// 802.1X: a user, a method, certificates. Not joinable from the bar yet.
+    Enterprise,
+    /// WEP. Not joinable from the bar.
+    Wep,
+}
+
+impl Security {
+    /// The `802-11-wireless-security.key-mgmt` a new profile gets, or `None`
+    /// for one with no security setting at all.
+    pub fn key_mgmt(self) -> Option<&'static str> {
+        match self {
+            Security::Open => None,
+            Security::Owe => Some("owe"),
+            Security::Psk => Some("wpa-psk"),
+            Security::Sae => Some("sae"),
+            Security::Enterprise => Some("wpa-eap"),
+            Security::Wep => Some("none"),
+        }
+    }
+
+    /// Why a click cannot join it, or `None` when it can.
+    pub fn unjoinable(self) -> Option<&'static str> {
+        match self {
+            Security::Enterprise => Some("802.1X"),
+            Security::Wep => Some("WEP"),
+            _ => None,
+        }
+    }
+}
+
+/// An access point's security, as NetworkManager's own clients read it: any
+/// 802.1X key management is enterprise; a passphrase over WPA or WPA2 is
+/// PSK, which a WPA2/WPA3 transition network also takes; SAE alone is WPA3;
+/// OWE alone is Enhanced Open; privacy with no key management is WEP; and
+/// nothing is open.
+pub fn security(flags: u32, wpa: u32, rsn: u32) -> Security {
+    let both = wpa | rsn;
+    if both & (nm::SEC_KEY_MGMT_802_1X | nm::SEC_KEY_MGMT_EAP_SUITE_B_192) != 0 {
+        Security::Enterprise
+    } else if both & nm::SEC_KEY_MGMT_PSK != 0 {
+        Security::Psk
+    } else if rsn & nm::SEC_KEY_MGMT_SAE != 0 {
+        Security::Sae
+    } else if rsn & nm::SEC_KEY_MGMT_OWE != 0 {
+        Security::Owe
+    } else if flags & nm::AP_PRIVACY != 0 {
+        Security::Wep
+    } else {
+        Security::Open
+    }
 }
 
 impl Visible {
@@ -326,12 +399,23 @@ fn visible_networks(managed: &Managed, wifi: Option<&nm::Device>, known: &[&[u8]
         }
         // One row per SSID: a mesh or a dual-band router puts the same name on
         // several access points, and the strongest is the one worth showing.
+        // The strongest is also the one a join names, and whose security it
+        // asks for.
+        let security = security(ap.flags, ap.wpa_flags, ap.rsn_flags);
         match out.iter_mut().find(|v| v.ssid == ap.ssid) {
-            Some(seen) => seen.strength = seen.strength.max(ap.strength),
+            Some(seen) if ap.strength > seen.strength => {
+                seen.strength = ap.strength;
+                seen.ap = ap.path.clone();
+                seen.security = security;
+            }
+            Some(_) => {}
             None => out.push(Visible {
                 row: visible_row_id(&ap.ssid),
                 ssid: ap.ssid.clone(),
                 strength: ap.strength,
+                ap: ap.path.clone(),
+                device: wifi.path.clone(),
+                security,
             }),
         }
     }

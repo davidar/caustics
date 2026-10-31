@@ -20,13 +20,16 @@
 //! one system-bus connection and a menu — so the bar's own sockets stay
 //! Wayland's and the compositor's.
 //!
-//! **There is no password entry here, ever.** A network NM does not already
-//! know is not a row the bar can join; joining a new one is the settings
-//! program's job, and its row opens it.
+//! **There is no password entry here, ever.** A network in range that NM does
+//! not know is joined by asking NM to add and activate a profile with no
+//! secret in it; NM asks its secret agent for the passphrase, and the agent
+//! is the canvas's prompt (`caustics-secrets`), so the passphrase passes
+//! through neither the bar nor this sidecar. A join that ends before it ever
+//! connected deletes the profile it added.
 //!
 //! The split into a library and a two-line `main.rs` is so `network/tests/` can
 //! drive the frame and the dispatch from synthesised bus bytes; no test ever
-//! activates, deactivates, scans or switches a radio.
+//! activates, deactivates, joins, scans or switches a radio.
 
 pub mod actions;
 pub mod bus;

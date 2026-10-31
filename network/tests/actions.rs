@@ -17,10 +17,11 @@ use caustics_bar_abi::wire::{
     ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE, ACTION_SECONDARY,
     ACTION_SET_VALUE,
 };
-use caustics_network::actions::{Call, Op, SETTINGS_PANEL, dry_run, op_for};
-use caustics_network::model::{self, Network, Primary, Snapshot, Visible};
+use caustics_network::actions::{Call, Join, Op, SETTINGS_PANEL, dry_run, op_for, profile};
+use caustics_network::model::{self, Network, Primary, Security, Snapshot, Visible};
 use caustics_network::nm::{self, SettingsByPath};
 use caustics_network::rows::{ITEM, SEP_BOTTOM, SEP_TOP, SEP_VISIBLE, SETTINGS, WIFI};
+use zbus::zvariant::Value;
 
 const MANAGED: &[u8] = include_bytes!("data/managed-objects.bin");
 const WIFI_ACTIVE: &[u8] = include_bytes!("data/settings-wifi-active.bin");
@@ -251,20 +252,24 @@ fn only_activate_and_the_chips_middle_click_perform() {
 /// seconds after a `RequestScan` looks like. Derived, like everything else here
 /// that NM's aged scan list could not show.
 fn with_in_range() -> Snapshot {
+    let state = with_other_in_range();
+    let device = state.wifi[0].clone();
+    let visible = |ssid: &[u8], strength, n, security| Visible {
+        row: model::visible_row_id(ssid),
+        ssid: ssid.to_vec(),
+        strength,
+        ap: format!("/org/freedesktop/NetworkManager/AccessPoint/{n}"),
+        device: device.clone(),
+        security,
+    };
     Snapshot {
         visible: vec![
-            Visible {
-                row: model::visible_row_id(b"CoffeeShop"),
-                ssid: b"CoffeeShop".to_vec(),
-                strength: 70,
-            },
-            Visible {
-                row: model::visible_row_id(b"Neighbour"),
-                ssid: b"Neighbour".to_vec(),
-                strength: 40,
-            },
+            visible(b"CoffeeShop", 70, 801, Security::Psk),
+            visible(b"Neighbour", 40, 802, Security::Sae),
+            visible(b"Library", 35, 803, Security::Open),
+            visible(b"Corp", 30, 804, Security::Enterprise),
         ],
-        ..with_other_in_range()
+        ..state
     }
 }
 
@@ -332,24 +337,31 @@ fn the_menu_opening_is_a_scan_of_every_wifi_device_and_closing_stops_it() {
 }
 
 #[test]
-fn a_click_on_a_network_in_range_opens_the_settings_page() {
-    // There is no password entry in the bar, ever, and joining a network NM does
-    // not know is the settings program's flow. So the click is the
-    // *same* op the settings row makes — not AddAndActivate, not even for an
-    // open network.
+fn a_click_on_a_network_in_range_joins_it() {
+    // A network NM does not know is joined: a new profile with no secret in
+    // it, on the device and access point that see it, and NM asks its secret
+    // agent for the passphrase. The bar never holds it.
     let state = with_in_range();
-    for network in &state.visible {
-        assert_eq!(
-            op_for(&state, network.row, ACTION_ACTIVATE),
-            Some(Op::Settings),
-            "{}",
-            network.label()
-        );
+    let device = state.wifi[0].clone();
+    let coffee = &state.visible[0];
+    let op = op_for(&state, coffee.row, ACTION_ACTIVATE);
+    let join = Join {
+        ssid: b"CoffeeShop".to_vec(),
+        label: "CoffeeShop".to_owned(),
+        device: device.clone(),
+        ap: "/org/freedesktop/NetworkManager/AccessPoint/801".to_owned(),
+        security: Security::Psk,
+    };
+    assert_eq!(op, Some(Op::Join(join.clone())));
+    let op = op.unwrap();
+    assert_eq!(op.call(), Call::AddAndActivate(join));
+    assert_eq!(op.name(), "join \"CoffeeShop\"");
+    for (i, security) in [(1, Security::Sae), (2, Security::Open)] {
+        match op_for(&state, state.visible[i].row, ACTION_ACTIVATE) {
+            Some(Op::Join(join)) => assert_eq!(join.security, security),
+            other => panic!("{}: {other:?}", state.visible[i].label()),
+        }
     }
-    assert_eq!(
-        op_for(&state, state.visible[0].row, ACTION_ACTIVATE),
-        op_for(&state, SETTINGS, ACTION_ACTIVATE)
-    );
 
     // And nothing else about the menu moved: a known network still activates by
     // its object path, the joined one still does nothing.
@@ -376,17 +388,102 @@ fn a_click_on_a_network_in_range_opens_the_settings_page() {
         );
     }
 
-    // An in-range row survives the radio being off in the *picture* only as long
-    // as NM still lists it; either way the click is still just the settings page,
-    // because it never depended on the radio.
+    // With the radio off there is nothing to join on.
     let off = Snapshot {
         wireless_enabled: false,
         ..state
     };
+    assert_eq!(op_for(&off, off.visible[0].row, ACTION_ACTIVATE), None);
+}
+
+#[test]
+fn an_enterprise_network_in_range_says_it_needs_a_profile() {
+    let state = with_in_range();
+    let corp = &state.visible[3];
+    let op = op_for(&state, corp.row, ACTION_ACTIVATE).expect("an op");
     assert_eq!(
-        op_for(&off, off.visible[0].row, ACTION_ACTIVATE),
-        Some(Op::Settings)
+        op,
+        Op::Unjoinable {
+            label: "Corp".to_owned(),
+            needs: "802.1X"
+        }
     );
+    assert_eq!(op.call(), Call::Decline("802.1X"));
+    assert_eq!(op.name(), "join \"Corp\"");
+}
+
+fn key_mgmt(
+    profile: &std::collections::HashMap<&str, std::collections::HashMap<&str, Value<'_>>>,
+) -> Option<String> {
+    match profile.get("802-11-wireless-security")?.get("key-mgmt")? {
+        Value::Str(s) => Some(s.as_str().to_owned()),
+        other => panic!("key-mgmt is {other:?}"),
+    }
+}
+
+#[test]
+fn the_new_profile_names_the_network_and_carries_no_secret() {
+    let join = Join {
+        ssid: b"CoffeeShop".to_vec(),
+        label: "CoffeeShop".to_owned(),
+        device: "/org/freedesktop/NetworkManager/Devices/3".to_owned(),
+        ap: "/org/freedesktop/NetworkManager/AccessPoint/801".to_owned(),
+        security: Security::Psk,
+    };
+    let psk = profile(&join);
+    assert_eq!(psk["connection"]["id"], Value::from("CoffeeShop"));
+    assert_eq!(psk["connection"]["type"], Value::from("802-11-wireless"));
+    assert_eq!(
+        psk["802-11-wireless"]["ssid"],
+        Value::from(b"CoffeeShop".to_vec())
+    );
+    assert_eq!(
+        psk["802-11-wireless"]["mode"],
+        Value::from("infrastructure")
+    );
+    assert_eq!(key_mgmt(&psk).as_deref(), Some("wpa-psk"));
+    // No secret anywhere in it: NM asks the agent.
+    assert_eq!(psk["802-11-wireless-security"].len(), 1);
+    assert_eq!(psk.len(), 3);
+
+    let sae = profile(&Join {
+        security: Security::Sae,
+        ..join.clone()
+    });
+    assert_eq!(key_mgmt(&sae).as_deref(), Some("sae"));
+    let owe = profile(&Join {
+        security: Security::Owe,
+        ..join.clone()
+    });
+    assert_eq!(key_mgmt(&owe).as_deref(), Some("owe"));
+    let open = profile(&Join {
+        security: Security::Open,
+        ..join
+    });
+    assert_eq!(key_mgmt(&open), None);
+    assert_eq!(open.len(), 2, "an open network has no security setting");
+}
+
+#[test]
+fn an_access_points_flags_say_what_it_asks_for() {
+    use caustics_network::model::security;
+    const PRIVACY: u32 = 0x1;
+    const CCMP: u32 = 0x8 | 0x80;
+    assert_eq!(security(0, 0, 0), Security::Open);
+    assert_eq!(security(PRIVACY, 0, 0), Security::Wep);
+    assert_eq!(security(PRIVACY, 0, CCMP | 0x100), Security::Psk);
+    assert_eq!(security(PRIVACY, 0x4 | 0x40 | 0x100, 0), Security::Psk);
+    // WPA2/WPA3 transition takes the passphrase every client has.
+    assert_eq!(security(PRIVACY, 0, CCMP | 0x100 | 0x400), Security::Psk);
+    // The fixture walk's access point: SAE alone.
+    assert_eq!(security(PRIVACY, 0, 1160), Security::Sae);
+    assert_eq!(security(0, 0, CCMP | 0x800), Security::Owe);
+    assert_eq!(security(PRIVACY, 0, CCMP | 0x200), Security::Enterprise);
+    assert_eq!(
+        security(PRIVACY, 0, CCMP | 0x200 | 0x100),
+        Security::Enterprise
+    );
+    assert_eq!(security(PRIVACY, 0, 0x2000), Security::Enterprise);
 }
 
 #[test]

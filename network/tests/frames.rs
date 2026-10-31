@@ -106,6 +106,7 @@ fn with_access_points(extra: &[(&[u8], u8)]) -> Snapshot {
             path,
             ssid: (*ssid).to_vec(),
             strength: *strength,
+            ..Default::default()
         });
     }
     let mut cache = SettingsByPath::new();
@@ -578,6 +579,7 @@ fn an_ssid_is_matched_as_bytes_and_never_as_text() {
         path: ap,
         ssid: ragged.clone(),
         strength: 91,
+        ..Default::default()
     }];
 
     let mut cache = SettingsByPath::new();
@@ -743,6 +745,7 @@ fn an_access_point_no_device_lists_is_not_in_range() {
         path: "/org/freedesktop/NetworkManager/AccessPoint/8000".to_owned(),
         ssid: b"CoffeeShop".to_vec(),
         strength: 70,
+        ..Default::default()
     });
 
     let mut cache = SettingsByPath::new();
@@ -841,4 +844,48 @@ fn an_in_range_row_id_is_the_ssid_and_holds_still_while_the_strength_moves() {
         "{}",
         ragged.visible[0].label()
     );
+}
+
+/// The walk reads an access point's security flags from NM's own layout, and
+/// a network in range carries what a join needs: its access point, its device
+/// and its security.
+#[test]
+fn a_network_in_range_carries_what_a_join_names() {
+    let mut managed = nm::parse_managed_objects(MANAGED).expect("the fixture walk deserialises");
+    let ap = &managed.access_points[0];
+    assert_eq!((ap.flags, ap.wpa_flags, ap.rsn_flags), (1, 0, 1160));
+    assert_eq!(
+        model::security(ap.flags, ap.wpa_flags, ap.rsn_flags),
+        model::Security::Sae
+    );
+
+    let wifi = managed
+        .devices
+        .iter()
+        .position(|d| d.kind == nm::DEVICE_WIFI)
+        .expect("the walk has a Wi-Fi device");
+    let device = managed.devices[wifi].path.clone();
+    for (n, strength, rsn) in [(1u32, 40u8, 0x188u32), (2, 75, 0x188)] {
+        let path = format!("/org/freedesktop/NetworkManager/AccessPoint/95{n}");
+        managed.devices[wifi].access_points.push(path.clone());
+        managed.access_points.push(nm::AccessPoint {
+            path,
+            ssid: b"Mesh".to_vec(),
+            strength,
+            flags: nm::AP_PRIVACY,
+            rsn_flags: rsn,
+            ..Default::default()
+        });
+    }
+    let state = model::build(&managed, &SettingsByPath::new());
+    let mesh = state
+        .visible
+        .iter()
+        .find(|v| v.ssid == b"Mesh")
+        .expect("the mesh is in range");
+    // One row for the two, naming the stronger.
+    assert_eq!(mesh.strength, 75);
+    assert_eq!(mesh.ap, "/org/freedesktop/NetworkManager/AccessPoint/952");
+    assert_eq!(mesh.device, device);
+    assert_eq!(mesh.security, model::Security::Psk);
 }

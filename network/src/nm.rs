@@ -55,6 +55,8 @@ pub const DEVICE_WIFI: u32 = 2;
 pub const ACTIVE_ACTIVATING: u32 = 1;
 /// `NM_ACTIVE_CONNECTION_STATE_ACTIVATED`.
 pub const ACTIVE_ACTIVATED: u32 = 2;
+/// `NM_ACTIVE_CONNECTION_STATE_DEACTIVATED`.
+pub const ACTIVE_DEACTIVATED: u32 = 4;
 
 /// `connection.type` of a Wi-Fi profile.
 pub const TYPE_WIFI: &str = "802-11-wireless";
@@ -103,7 +105,28 @@ pub struct AccessPoint {
     pub ssid: Vec<u8>,
     /// `Strength`, a `y` in 0..=100.
     pub strength: u8,
+    /// `Flags`, `NM_802_11_AP_FLAGS_*`: [`AP_PRIVACY`] is the one read.
+    pub flags: u32,
+    /// `WpaFlags` and `RsnFlags`, `NM_802_11_AP_SEC_*`: the key management
+    /// a join asks for (`crate::model::Security`).
+    pub wpa_flags: u32,
+    pub rsn_flags: u32,
 }
+
+/// `NM_802_11_AP_FLAGS_PRIVACY`: the access point wants some security, which
+/// with no WPA or RSN key management is WEP.
+pub const AP_PRIVACY: u32 = 0x1;
+/// `NM_802_11_AP_SEC_KEY_MGMT_PSK`: WPA or WPA2 with a passphrase.
+pub const SEC_KEY_MGMT_PSK: u32 = 0x100;
+/// `NM_802_11_AP_SEC_KEY_MGMT_802_1X`: enterprise.
+pub const SEC_KEY_MGMT_802_1X: u32 = 0x200;
+/// `NM_802_11_AP_SEC_KEY_MGMT_SAE`: WPA3 Personal.
+pub const SEC_KEY_MGMT_SAE: u32 = 0x400;
+/// `NM_802_11_AP_SEC_KEY_MGMT_OWE` and `…_OWE_TM`: Enhanced Open, encrypted
+/// with no secret.
+pub const SEC_KEY_MGMT_OWE: u32 = 0x800 | 0x1000;
+/// `NM_802_11_AP_SEC_KEY_MGMT_EAP_SUITE_B_192`: enterprise too.
+pub const SEC_KEY_MGMT_EAP_SUITE_B_192: u32 = 0x2000;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Active {
@@ -235,6 +258,9 @@ fn managed(objects: &ManagedWire) -> Managed {
                 path: path.to_owned(),
                 ssid: bytes(props, "Ssid").unwrap_or_default(),
                 strength: byte(props, "Strength").unwrap_or(0),
+                flags: integer(props, "Flags").unwrap_or(0),
+                wpa_flags: integer(props, "WpaFlags").unwrap_or(0),
+                rsn_flags: integer(props, "RsnFlags").unwrap_or(0),
             });
         }
         if let Some(props) = interfaces.get(IF_ACTIVE) {

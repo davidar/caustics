@@ -39,6 +39,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use zbus::zvariant::ObjectPath;
 use zbus::{Connection, MatchRule, MessageStream};
 
+use crate::actions::{self, Join};
 use crate::model::{self, Snapshot};
 use crate::nm::{self, Settings, SettingsByPath};
 use crate::witness;
@@ -106,10 +107,25 @@ trait Manager {
         device: &ObjectPath<'_>,
         specific_object: &ObjectPath<'_>,
     ) -> zbus::Result<zbus::zvariant::OwnedObjectPath>;
+
+    /// `(connection, device, specific_object, options) -> (path, active,
+    /// result)`: add a profile and activate it, in one call.
+    #[allow(clippy::type_complexity)]
+    fn add_and_activate_connection2(
+        &self,
+        connection: HashMap<&str, HashMap<&str, zbus::zvariant::Value<'_>>>,
+        device: &ObjectPath<'_>,
+        specific_object: &ObjectPath<'_>,
+        options: HashMap<&str, zbus::zvariant::Value<'_>>,
+    ) -> zbus::Result<(
+        zbus::zvariant::OwnedObjectPath,
+        zbus::zvariant::OwnedObjectPath,
+        HashMap<String, zbus::zvariant::OwnedValue>,
+    )>;
 }
 
 // ---------------------------------------------------------------------------
-// The two calls a row makes
+// The calls a row makes
 // ---------------------------------------------------------------------------
 
 /// `WirelessEnabled = value`. A polkit denial is an error we witness, not a
@@ -138,6 +154,171 @@ pub async fn activate(conn: &Connection, connection: &str) -> Result<(), String>
         .map(|active| witness(&format!("activating {}", active.as_str())))
         .map_err(|e| e.to_string())
 }
+
+/// How long a join is followed before it is left to NetworkManager: past
+/// NetworkManager's own wait for its secret agent, so a prompt left open
+/// is followed to its end.
+pub const JOIN_WATCH: Duration = Duration::from_secs(300);
+/// How often the activation's `State` is read beside its signal: the object
+/// can go before a signal for it is seen, and gone is an answer too.
+pub const JOIN_POLL: Duration = Duration::from_secs(2);
+
+/// `AddAndActivateConnection2` for a network in range: a new profile, kept on
+/// disk, activated on this device and access point. Then the activation is
+/// followed on a task of its own ([`follow_join`]).
+pub async fn join(conn: &Connection, join: &Join) -> Result<(), String> {
+    let manager = ManagerProxy::new(conn)
+        .await
+        .map_err(|e| format!("no NetworkManager ({e})"))?;
+    let device =
+        ObjectPath::try_from(join.device.as_str()).map_err(|e| format!("{}: {e}", join.device))?;
+    let ap = ObjectPath::try_from(join.ap.as_str()).map_err(|e| format!("{}: {e}", join.ap))?;
+    let options = HashMap::from([("persist", zbus::zvariant::Value::from("disk"))]);
+    let (profile, active, _) = manager
+        .add_and_activate_connection2(actions::profile(join), &device, &ap, options)
+        .await
+        .map_err(|e| e.to_string())?;
+    witness(&format!(
+        "join {:?}: added {}, activating {}",
+        join.label,
+        profile.as_str(),
+        active.as_str()
+    ));
+    tokio::spawn(follow_join(
+        conn.clone(),
+        join.label.clone(),
+        profile.as_str().to_owned(),
+        active.as_str().to_owned(),
+    ));
+    Ok(())
+}
+
+/// Follow a join's activation until it connects or ends. **A join that ends
+/// before it ever connected deletes the profile it added**: a wrong password
+/// given up on, a dismissed prompt (the agent's `UserCanceled`, which
+/// NetworkManager reports as no secrets), a supplicant that failed, so no
+/// dead profile is left behind to be offered as a known network. One that
+/// connected once is kept, whatever happens to it after. The signal stream is
+/// forwarded the moment it exists (docs/architecture.md, *Rules*).
+pub async fn follow_join(conn: Connection, label: String, profile: String, active: String) {
+    let rule = MatchRule::builder()
+        .msg_type(zbus::message::Type::Signal)
+        .sender(nm::SERVICE)
+        .and_then(|b| b.path(active.as_str()))
+        .and_then(|b| b.interface(IF_ACTIVE))
+        .and_then(|b| b.member("StateChanged"))
+        .map(|b| b.build());
+    let (tx, mut changes) = unbounded_channel();
+    let stream = match rule {
+        Ok(rule) => match MessageStream::for_match_rule(rule, &conn, None).await {
+            Ok(stream) => Some(forward(stream, tx, |msg: zbus::Result<zbus::Message>| {
+                msg.ok()?.body().deserialize::<(u32, u32)>().ok()
+            })),
+            Err(e) => {
+                witness(&format!("join {label:?}: following {active}: {e}"));
+                None
+            }
+        },
+        Err(e) => {
+            witness(&format!("join {label:?}: following {active}: {e}"));
+            None
+        }
+    };
+    // While the stream is open its arm is listened to; once it ends (or never
+    // began), the poll is all there is.
+    let mut open = stream.is_some();
+    let deadline = tokio::time::sleep(JOIN_WATCH);
+    tokio::pin!(deadline);
+    let reason = loop {
+        tokio::select! {
+            () = &mut deadline => {
+                witness(&format!(
+                    "join {label:?}: not connected after {} s; the profile is kept",
+                    JOIN_WATCH.as_secs()
+                ));
+                return;
+            }
+            change = changes.recv(), if open => match change {
+                Some((nm::ACTIVE_ACTIVATED, _)) => break None,
+                Some((nm::ACTIVE_DEACTIVATED, reason)) => break Some(Some(reason)),
+                Some(_) => {}
+                None => open = false,
+            },
+            () = tokio::time::sleep(JOIN_POLL) => match active_state(&conn, &active).await {
+                Some(nm::ACTIVE_ACTIVATED) => break None,
+                Some(nm::ACTIVE_DEACTIVATED) | None => break Some(None),
+                Some(_) => {}
+            },
+        }
+    };
+    let Some(reason) = reason else {
+        witness(&format!(
+            "join {label:?}: connected; the profile {profile} is kept"
+        ));
+        return;
+    };
+    let why = reason.map_or_else(
+        || "gone".to_owned(),
+        |r| format!("reason {}", state_reason(r)),
+    );
+    match delete(&conn, &profile).await {
+        Ok(()) => witness(&format!(
+            "join {label:?}: ended before it connected ({why}); deleted the profile {profile}"
+        )),
+        Err(e) => witness(&format!(
+            "join {label:?}: ended before it connected ({why}); deleting {profile}: {e}"
+        )),
+    }
+}
+
+/// The activation's `State`, or `None` when the object is gone.
+async fn active_state(conn: &Connection, active: &str) -> Option<u32> {
+    let reply = conn
+        .call_method(
+            Some(nm::SERVICE),
+            active,
+            Some("org.freedesktop.DBus.Properties"),
+            "Get",
+            &(IF_ACTIVE, "State"),
+        )
+        .await
+        .ok()?;
+    let value: zbus::zvariant::OwnedValue = reply.body().deserialize().ok()?;
+    u32::try_from(value).ok()
+}
+
+/// `Settings.Connection.Delete()` on a profile this sidecar added.
+async fn delete(conn: &Connection, profile: &str) -> Result<(), String> {
+    conn.call_method(Some(nm::SERVICE), profile, Some(CONNECTION), "Delete", &())
+        .await
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// `NMActiveConnectionStateReason` as a word, for the witness.
+pub fn state_reason(reason: u32) -> String {
+    let word = match reason {
+        0 => "unknown",
+        1 => "none",
+        2 => "user-disconnected",
+        3 => "device-disconnected",
+        4 => "service-stopped",
+        5 => "ip-config-invalid",
+        6 => "connect-timeout",
+        7 => "service-start-timeout",
+        8 => "service-start-failed",
+        9 => "no-secrets",
+        10 => "login-failed",
+        11 => "connection-removed",
+        12 => "dependency-failed",
+        13 => "device-realize-failed",
+        14 => "device-removed",
+        _ => return reason.to_string(),
+    };
+    word.to_owned()
+}
+
+const IF_ACTIVE: &str = "org.freedesktop.NetworkManager.Connection.Active";
 
 // ---------------------------------------------------------------------------
 // Reading the picture
