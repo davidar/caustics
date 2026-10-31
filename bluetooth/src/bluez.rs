@@ -137,6 +137,10 @@ impl State {
 trait Adapter1 {
     #[zbus(property)]
     fn set_powered(&self, on: bool) -> zbus::Result<()>;
+    /// Whether other devices can see this adapter and start a pairing with
+    /// it; BlueZ's `DiscoverableTimeout` clears it by itself after a while.
+    #[zbus(property)]
+    fn set_discoverable(&self, on: bool) -> zbus::Result<()>;
     fn set_discovery_filter(&self, filter: HashMap<&str, Value<'_>>) -> zbus::Result<()>;
     fn start_discovery(&self) -> zbus::Result<()>;
     fn stop_discovery(&self) -> zbus::Result<()>;
@@ -340,34 +344,56 @@ async fn device_proxy<'a>(conn: &'a Connection, path: &str) -> Result<Device1Pro
         .map_err(|e| e.to_string())
 }
 
-/// Ask one adapter to look for devices in range: the filter first
-/// (`Transport` `auto`, both radios; `DuplicateData` off, so a device that
-/// keeps advertising is not a signal every time), then `StartDiscovery`. A
-/// filter BlueZ refuses is not a reason to stay blind, so its error is
-/// returned beside a discovery that started anyway.
+/// What [`start_discovery`] could not do beside the discovery it started.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Partly {
+    /// `SetDiscoveryFilter` was refused: the error's name.
+    pub filter: Option<String>,
+    /// `Discoverable` could not be set: the error's name.
+    pub discoverable: Option<String>,
+}
+
+/// Ask one adapter to look for devices in range, and to be seen by them: the
+/// filter first (`Transport` `auto`, both radios; `DuplicateData` off, so a
+/// device that keeps advertising is not a signal every time), then
+/// `StartDiscovery`, then `Discoverable = true`, so a pairing can start from
+/// the other device too while the menu is open (the canvas's pairing agent
+/// takes the question either way). A filter BlueZ refuses is not a reason to
+/// stay blind, nor is a `Discoverable` it refuses a reason to stop looking,
+/// so each is returned beside a discovery that started anyway.
 ///
 /// BlueZ ties the discovery to this connection: it stops by itself when the
-/// process goes.
-pub async fn start_discovery(conn: &Connection, path: &str) -> Result<Option<String>, String> {
+/// process goes. `Discoverable` is not tied, so [`stop_discovery`] clears it,
+/// and BlueZ's own `DiscoverableTimeout` clears it should this process go
+/// first.
+pub async fn start_discovery(conn: &Connection, path: &str) -> Result<Partly, String> {
     let adapter = adapter_proxy(conn, path).await?;
     let filter = HashMap::from([
         ("Transport", Value::from("auto")),
         ("DuplicateData", Value::from(false)),
     ]);
-    let refused = adapter.set_discovery_filter(filter).await.err();
+    let filter = adapter.set_discovery_filter(filter).await.err();
     adapter
         .start_discovery()
         .await
         .map_err(|e| error_name(&e))?;
-    Ok(refused.map(|e| error_name(&e)))
+    let discoverable = adapter.set_discoverable(true).await.err();
+    Ok(Partly {
+        filter: filter.map(|e| error_name(&e)),
+        discoverable: discoverable.map(|e| error_name(&e)),
+    })
 }
 
+/// Stop looking, and stop being seen. The two are independent, so both are
+/// tried; the first error is the one returned.
 pub async fn stop_discovery(conn: &Connection, path: &str) -> Result<(), String> {
-    adapter_proxy(conn, path)
-        .await?
-        .stop_discovery()
+    let adapter = adapter_proxy(conn, path).await?;
+    let stopped = adapter.stop_discovery().await.map_err(|e| error_name(&e));
+    let hidden = adapter
+        .set_discoverable(false)
         .await
-        .map_err(|e| error_name(&e))
+        .map_err(|e| error_name(&e));
+    stopped.and(hidden)
 }
 
 /// `Pair()` on one device: BlueZ asks the session's pairing agent whatever

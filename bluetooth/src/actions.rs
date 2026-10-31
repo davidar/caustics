@@ -202,12 +202,16 @@ pub fn is_menu_notice(kind: u32) -> bool {
     kind == ACTION_MENU_OPEN || kind == ACTION_MENU_CLOSE
 }
 
-/// **The radio looks for devices only while the menu is open.** Discovery
-/// takes the radio's time from the devices already connected (audio stutters
-/// on some adapters), so it starts on `ACTION_MENU_OPEN`, on every powered
-/// adapter, and stops on `ACTION_MENU_CLOSE` and when the sidecar leaves. An
-/// adapter powered while the menu is open is started too; one powered off
-/// has stopped by itself. Pure: the ops it returns are what [`perform`] does.
+/// **The radio looks for devices, and is seen by them, only while the menu
+/// is open.** Discovery takes the radio's time from the devices already
+/// connected (audio stutters on some adapters), and being discoverable is an
+/// invitation that should not stand all day, so both start on
+/// `ACTION_MENU_OPEN`, on every powered adapter, and stop on
+/// `ACTION_MENU_CLOSE` and when the sidecar leaves. An adapter powered while
+/// the menu is open is started too; one powered off has stopped by itself.
+/// A pairing begun from the other device while the menu is open reaches the
+/// session's pairing agent like one begun here. Pure: the ops it returns are
+/// what [`perform`] does.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Discovery {
     open: bool,
@@ -334,9 +338,15 @@ pub async fn perform(conn: Option<&Connection>, op: Op) {
                 return witness(&format!("{}: there is no system bus", op.describe()));
             };
             match bluez::start_discovery(conn, &adapter).await {
-                Ok(None) => witness(&format!("{}: ok", op.describe())),
-                Ok(Some(filter)) => {
-                    witness(&format!("{}: ok, with no filter ({filter})", op.describe()))
+                Ok(partly) => {
+                    let mut line = format!("{}: ok, discoverable", op.describe());
+                    if let Some(filter) = partly.filter {
+                        line.push_str(&format!(", with no filter ({filter})"));
+                    }
+                    if let Some(why) = partly.discoverable {
+                        line = format!("{}: ok, not discoverable ({why})", op.describe());
+                    }
+                    witness(&line);
                 }
                 Err(why) => witness(&format!("{}: {why}", op.describe())),
             }

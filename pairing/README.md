@@ -7,7 +7,8 @@ a passkey, type a PIN or a passkey, allow a pairing or a service) into a
 **prompt conversation** with the canvas host over the wire (docs/abi.md,
 *Prompt*, *Answer*), and hands the answer to BlueZ in the method's reply,
 and nowhere else. Most often the pairing is one the bar's Bluetooth
-sidecar has just started with a click on a device in range
+sidecar has just started with a click on a device in range, or one another
+device began while that menu was open and the adapter discoverable
 (`bluetooth/src/actions.rs`).
 
 ```

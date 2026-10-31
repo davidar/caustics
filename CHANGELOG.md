@@ -223,7 +223,9 @@ binaries.
 
 **The canvas's Bluetooth pairing agent** (`caustics-pairing`,
 pairing/README.md), and pairing from the bar. The bar's Bluetooth menu now
-discovers on every powered adapter while it is open and lists the devices
+discovers on every powered adapter while it is open, is discoverable to
+other devices for the same while (so a pairing can start from a phone, and
+the canvas's agent takes the question), and lists the devices
 in range that are not paired and have a name, strongest signal first,
 below the paired ones; a click pairs one (`Pair`, then `Trusted` and
 `Connect`, each step witnessed, a failure by BlueZ's error name), and a

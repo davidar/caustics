@@ -187,7 +187,9 @@ caustics-canvas`.
 ### Enabling the pairing agent
 
 `caustics-pairing` (pairing/README.md) is BlueZ's pairing agent as a sink
-of the canvas: when the bar pairs a Bluetooth device in range, BlueZ asks it
+of the canvas: when the bar pairs a Bluetooth device in range, or a device
+pairs with this machine while the bar's Bluetooth menu is open (the adapter
+is discoverable for exactly that while), BlueZ asks it
 to confirm a passkey or for a PIN, and it asks on the canvas's prompt and
 hands the answer to BlueZ alone. Like the secret agent it is installed with
 the set and not in the canvas's default sidecars. It registers as BlueZ's

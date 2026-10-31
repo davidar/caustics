@@ -8,7 +8,9 @@
 //! internals.
 //!
 //! **Pairing** is a click on a device in range: `Pair()`, and BlueZ asks the
-//! session's pairing agent whatever the pairing needs. That agent is
+//! session's pairing agent whatever the pairing needs. While the menu is
+//! open the adapter is also discoverable, so the other device can begin the
+//! pairing instead, and the same agent is asked. That agent is
 //! `caustics-pairing`, a sink of the canvas (pairing/README.md), so a passkey
 //! to confirm or a PIN to type is asked on the canvas's prompt and never
 //! reaches this process or the bar.
