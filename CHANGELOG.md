@@ -183,6 +183,29 @@ to take it on in place of the session's previous locker. No wire or
 buffer contract changed. The VM target's set upload gained the canvas's
 five binaries, so its install step's sixteen hold there.
 
+**The canvas's network secret agent** (`caustics-secrets`,
+secrets/README.md), and joining from the bar. A click on a Wi-Fi network in
+range that has no profile no longer opens a settings program: the bar's
+network sidecar asks NetworkManager to add and activate a profile for it
+(`AddAndActivateConnection2`, kept on disk), with the key management the
+access point advertises (WPA-PSK, WPA3's SAE, Enhanced Open or none) and
+no secret, so NetworkManager asks its secret agent. That agent is a new
+sink of the canvas: registered with NetworkManager's agent manager on the
+system bus, it turns each `GetSecrets` that allows interaction into one
+prompt conversation (the network's name as the title, a "wrong password"
+line first when NetworkManager refused the last answer), and returns what
+was typed in the method's reply and nowhere else; a dismissal is
+`UserCanceled`, NetworkManager's cancel takes the prompt down, and a call
+that may not interact gets `NoSecrets` with nothing shown. A WPA-PSK
+passphrase of the wrong length is refused on the panel. The agent stores
+nothing, and the reply's copy of the text is zeroed once it is sent. A
+join that ends before it ever connected deletes the profile it added, so
+a wrong or abandoned password leaves no dead profile; an 802.1X or WEP
+network's row says it needs a profile and does nothing. The agent is
+opt-in, like the polkit agent (canvas/README.md, *Enabling the secret
+agent*). No wire or buffer contract changed; the set is now seventeen
+binaries.
+
 **Pipelines off the loop.** Both hosts build their caustic's pipelines on
 two compile workers instead of on their event loops, one at a time in the
 order a frame needs them, and install each as it lands with a

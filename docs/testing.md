@@ -364,6 +364,19 @@ the right secret unlocks, and the reader is released all the same, three
 claims in two locks.
 The bus and the fake are stopped by PID with the canvas.
 
+**The secret agent's step** (35l) runs `caustics-secrets` in its dry run
+with no system bus at all, the agent object on the run's private session
+bus and `bar/abi/examples/fake_host.rs` on its pipes, as the polkit sink's
+step does. It plays NetworkManager with `busctl --user call … GetSecrets`
+for a WPA-PSK network and checks: the reply to a call that allows
+interaction is the run's secret under `802-11-wireless-security.psk` and
+nothing else, with the connection's name as the title and "Password" as
+the ask; a dismissed prompt fails the call as dismissed; a call without
+`ALLOW_INTERACTION` fails as no secrets and sends the host no frame; no
+log holds the secret; and the agent leaves with its host. The bar's join
+has no nested step, because there is no NetworkManager in the gate; its
+dispatch and the profile it asks for are `network/tests/actions.rs`'s.
+
 ### Adding a step
 
 1. **Decide the tier first.** If what you want to prove is a property of the

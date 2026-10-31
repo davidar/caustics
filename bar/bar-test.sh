@@ -411,17 +411,17 @@ trap 'exit 130' INT TERM
 # --- step 1: build ----------------------------------------------------------
 
 say "1. build"
-# All sixteen binaries (the bar spawns each sidecar from beside itself, and
+# All seventeen binaries (the bar spawns each sidecar from beside itself, and
 # the canvas its own), the rows demo, the sink sidecars' fake host, and the
 # lock's fake fprintd.
 if (cd "$REPO" &&
     cargo build --offline -p caustics-bar -p caustics-sysmon -p caustics-tray -p caustics-power \
         -p caustics-audio -p caustics-network -p caustics-bluetooth -p caustics-notify -p caustics-apps -p caustics-glyphs \
         -p caustics-reload -p caustics-canvas -p caustics-wallpaper -p caustics-polkit \
-        -p caustics-lock &&
+        -p caustics-lock -p caustics-secrets &&
     cargo build --offline -p caustics-bar-abi --example rows_demo --example fake_host &&
     cargo build --offline -p caustics-lock --example fake_fprintd); then
-    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit and lock sinks, the rows_demo example, the fake host and the fake fprintd"
+    pass "cargo build of the bar, its ten sidecars, the canvas, its sidecar and client, the polkit, lock and secrets sinks, the rows_demo example, the fake host and the fake fprintd"
 else
     fail "cargo build of the set, the rows_demo example, the fake host or the fake fprintd"
     exit 1
@@ -465,7 +465,7 @@ gssh 30 'systemctl --user stop caustics-bar 2>/dev/null
         ~/.local/bin/caustics-bluetooth ~/.local/bin/caustics-notify ~/.local/bin/caustics-apps \
         ~/.local/bin/caustics-glyphs ~/.local/bin/caustics-reload \
         ~/.local/bin/caustics-canvas ~/.local/bin/caustics-wallpaper ~/.local/bin/caustics-canvasctl \
-        ~/.local/bin/caustics-polkit ~/.local/bin/caustics-lock \
+        ~/.local/bin/caustics-polkit ~/.local/bin/caustics-lock ~/.local/bin/caustics-secrets \
         ~/.local/bin/rows_demo'
 
 gscp "$BINARY" tester@127.0.0.1:.local/bin/caustics-bar && pass "binary" || fail "binary"
@@ -489,10 +489,10 @@ gscp "$GLYPHS_SIDECAR" tester@127.0.0.1:.local/bin/caustics-glyphs && pass "glyp
     fail "glyphs sidecar"
 gscp "$RELOAD_SIDECAR" tester@127.0.0.1:.local/bin/caustics-reload && pass "reload sidecar" ||
     fail "reload sidecar"
-# The rest of the set: the canvas, its sidecar and client, and its two sinks.
-# The bar starts none of them, but a set is all sixteen, and the install step
+# The rest of the set: the canvas, its sidecar and client, and its three sinks.
+# The bar starts none of them, but a set is all seventeen, and the install step
 # (25d) installs it whole from here.
-for name in caustics-canvas caustics-wallpaper caustics-canvasctl caustics-polkit caustics-lock; do
+for name in caustics-canvas caustics-wallpaper caustics-canvasctl caustics-polkit caustics-lock caustics-secrets; do
     gscp "$REPO/target/debug/$name" "tester@127.0.0.1:.local/bin/$name" && pass "$name" ||
         fail "$name"
 done
@@ -3933,7 +3933,7 @@ restart_bar "the compiled-in sidecar set restored"
 say "25d. install.sh installs a whole set, and a bar started through it runs that set"
 # VM only: on a nested run it would install into the developer's home.
 if vm_only "the install script runs only in the guest; on the nested target it would install into the developer's home"; then
-# `--from` mode (the guest has no cargo): the set's name, the sixteen installs,
+# `--from` mode (the guest has no cargo): the set's name, the seventeen installs,
 # the symlink, and a bar started through it finding its own set's sidecars.
 GUEST_HOME=$(gssh 20 'printf %s "$HOME"')
 gscp "$REPO/bar/install.sh" tester@127.0.0.1:install.sh >/dev/null
@@ -3941,15 +3941,15 @@ gssh 20 'chmod +x ~/install.sh; rm -rf ~/caustics-install-test' >/dev/null
 install_out=$(gssh 120 '$HOME/install.sh --from $HOME/.local/bin --prefix $HOME/caustics-install-test 2>&1')
 note "$(printf '%s' "$install_out" | tail -5)"
 assert_contains "the script named the set" "$install_out" "set $BAR_HASH"
-assert_contains "and installed sixteen binaries" "$install_out" "installed 16 of 16 into"
+assert_contains "and installed seventeen binaries" "$install_out" "installed 17 of 17 into"
 assert_contains "and did not restart a unit it does not point at" \
     "$install_out" "not restarting caustics-bar"
 
 installed=$(gssh 20 "ls \$HOME/caustics-install-test/lib/caustics-bar/$BAR_HASH | wc -l")
-if [[ "${installed:-0}" -eq 16 ]]; then
-    pass "sixteen binaries in the set directory"
+if [[ "${installed:-0}" -eq 17 ]]; then
+    pass "seventeen binaries in the set directory"
 else
-    fail "the set directory holds ${installed:-0} binaries, not sixteen"
+    fail "the set directory holds ${installed:-0} binaries, not seventeen"
 fi
 link=$(gssh 20 'readlink $HOME/caustics-install-test/bin/caustics-bar')
 assert_contains "the symlink points into the set" "$link" "/lib/caustics-bar/$BAR_HASH/caustics-bar"
@@ -5835,6 +5835,105 @@ if [[ "$CANVAS_RUN" -eq 1 && "$LOCK_RUN" -eq 1 ]]; then
     fi
     on_target 5 'rm -f "$XDG_RUNTIME_DIR/fprint-bus"' >/dev/null
     niri_msg action focus-workspace-up >/dev/null 2>&1
+fi
+
+say "35l. the secret agent asks through the wire, and the answer reaches NetworkManager's reply alone"
+# `caustics-secrets` in its dry run (secrets/README.md): the agent object on
+# the run's private session bus, no system bus at all (its address names a
+# socket that does not exist), and `bar/abi/examples/fake_host.rs` on its
+# pipes playing the canvas host, which answers the first ask with the secret
+# and dismisses the second. This step plays NetworkManager with `busctl`. The
+# secret is this run's own, and no log may hold it; the reply is the one
+# place it may be.
+if [[ "$T_NAME" == vm ]]; then
+    printf '  SKIP  %s  %s\n' "$(stamp)" "the secret agent's dry run and its fake host run on the nested target only"
+    SKIPS=$((SKIPS + 1))
+else
+    secrets_secret="gate-$RANDOM$RANDOM-$RANDOM"
+    secrets_log() { on_target 10 'cat "$T_HOME/secrets.log" 2>/dev/null'; }
+    on_target 10 'rm -f "$T_HOME/secrets.log"' >/dev/null
+    fixture_start secrets 'bash -c '"'"'cd "$1" && exec env CAUSTICS_SECRETS_DRY_RUN=1 \
+        DBUS_SYSTEM_BUS_ADDRESS="unix:path=$1/no-system-bus" \
+        FAKE_HOST_SECRET="$3" FAKE_HOST_SCRIPT="text cancel" \
+        "$2/examples/fake_host" "$2/caustics-secrets" >>"$1/secrets.log" 2>&1'"'"' secrets "$T_HOME" "$T_BIN" '"$secrets_secret"
+    secrets_dest=""
+    if wait_until "the secret agent's dry run" 30 'secrets_log | jgrep -F "dry run: the agent is at"'; then
+        secrets_dest=$(secrets_log | sed -n 's/.*dry run: the agent is at \([^ ]*\) .*/\1/p' | tail -1)
+        pass "$(secrets_log | grep -F 'dry run:' | tail -1 | sed 's/^caustics-secrets: //' | cut -c1-140)"
+    else
+        fail "caustics-secrets never said where its agent is: $(secrets_log | tail -3 | tr '\n' '|' | cut -c1-300)"
+    fi
+    # secrets_call <flags>: GetSecrets for a WPA-PSK network as NetworkManager
+    # makes it for a join; the reply and busctl's exit status.
+    secrets_call() {
+        on_target 40 "busctl --user call --timeout=30 '$secrets_dest' \
+            /org/freedesktop/NetworkManager/SecretAgent \
+            org.freedesktop.NetworkManager.SecretAgent GetSecrets \
+            'a{sa{sv}}osasu' 2 connection 2 id s GateNet type s 802-11-wireless \
+            802-11-wireless-security 1 key-mgmt s wpa-psk \
+            /org/freedesktop/NetworkManager/Settings/42 802-11-wireless-security 0 $1 2>&1; echo \"exit=\$?\""
+    }
+    if [[ -n "$secrets_dest" ]]; then
+        reply=$(secrets_call 1)
+        if [[ "$reply" == *"exit=0"* && "$reply" == *"a{sa{sv}} 1 \"802-11-wireless-security\" 1 \"psk\" s \"$secrets_secret\""* ]]; then
+            pass "GetSecrets with ALLOW_INTERACTION returned the secret under 802-11-wireless-security.psk, and nothing else"
+        else
+            fail "the answered call's reply is ${#reply} bytes and is not the secret alone under the setting and key"
+        fi
+        log=$(secrets_log)
+        assert_contains "the title is the connection's name" "$log" \
+            'prompt id=1 kind=title arg=1 message="GateNet"'
+        assert_contains "a PROMPT_SECRET asked for the password" "$log" \
+            'prompt id=1 kind=secret arg=0 message="Password"'
+        assert_contains "the host answered it" "$log" "answered id=1 with text"
+        assert_contains "and PROMPT_DONE said it went into the reply" "$log" 'prompt id=1 kind=done arg=1'
+
+        reply=$(secrets_call 1)
+        if [[ "$reply" != *"exit=0"* && "$reply" == *"dismissed"* ]]; then
+            pass "a dismissed prompt fails the call: $(printf '%s' "$reply" | head -1 | cut -c1-100)"
+        else
+            fail "the dismissed call: $(printf '%s' "$reply" | tr '\n' '|' | cut -c1-200)"
+        fi
+        log=$(secrets_log)
+        assert_contains "the host dismissed the second ask" "$log" "answered id=2 with cancel"
+        assert_contains "and PROMPT_DONE said failure" "$log" 'prompt id=2 kind=done arg=0'
+        assert_contains "the agent returned UserCanceled for it" "$log" "conversation 2: dismissed"
+
+        prompts_before=$(secrets_log | grep -cF 'fake-host: prompt id=')
+        reply=$(secrets_call 0)
+        if [[ "$reply" != *"exit=0"* && "$reply" == *"may not ask"* ]]; then
+            pass "without ALLOW_INTERACTION the call fails as no secrets: $(printf '%s' "$reply" | head -1 | cut -c1-100)"
+        else
+            fail "the call without interaction: $(printf '%s' "$reply" | tr '\n' '|' | cut -c1-200)"
+        fi
+        prompts_after=$(secrets_log | grep -cF 'fake-host: prompt id=')
+        if [[ "$prompts_after" -eq "$prompts_before" ]] &&
+            secrets_log | jgrep -F '"GateNet" 802-11-wireless-security: no interaction allowed (flags 0x0); no secrets'; then
+            pass "and no prompt frame went to the host"
+        else
+            fail "the call without interaction sent $((prompts_after - prompts_before)) prompt frames, or was not witnessed"
+        fi
+    fi
+    leaks=$(on_target 10 "grep -cF -- '$secrets_secret' \"\$T_HOME/secrets.log\"")
+    if [[ "${leaks:-1}" -eq 0 ]] && ! journal | jgrep -F -- "$secrets_secret"; then
+        pass "no witness, no host line and no bar line holds the secret"
+    else
+        fail "the secret is in ${leaks:-?} lines of the agent's log, or in the bar's journal"
+    fi
+    if secrets_log | jgrep -iE 'system-bus|system bus: '; then
+        fail "the dry run spoke of the system bus: $(secrets_log | grep -iE 'system-bus|system bus: ' | head -1 | cut -c1-160)"
+    else
+        pass "the dry run never reached for the system bus"
+    fi
+    # The fake host goes, and the agent leaves with it: stdin's EOF.
+    secrets_pid=$(secrets_log | sed -n 's/^fake-host: started .* as pid \([0-9]*\)$/\1/p' | tail -1)
+    fixture_stop secrets
+    if [[ -n "$secrets_pid" ]] &&
+        wait_until "the secret agent gone" 20 "! on_target 5 'kill -0 $secrets_pid 2>/dev/null'"; then
+        pass "the agent exited when its host went: $(secrets_log | grep -F 'stdin closed' | tail -1 | sed 's/^caustics-secrets: //')"
+    else
+        fail "caustics-secrets (pid ${secrets_pid:-?}) outlived its host"
+    fi
 fi
 
 say "36. verdict"
