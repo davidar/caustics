@@ -2047,8 +2047,11 @@ fi
 # At 640 logical px the drop rule may correctly place none (the left wing is
 # most of the width). So the tunables make room: no dock, the clock in the left
 # wing, the strip alone in the centre (trimming the right wing would drop
-# APPLET_OTHER, which the extra-sidecar step needs). The edit stays until the
-# garbage-sidecar step restores the snapshot.
+# APPLET_OTHER, which the extra-sidecar step needs), and square charts: the
+# centred strip is bounded by the right wing's inner edge on both sides, and
+# with a battery on the right (a laptop's UPower) a 1.6 chart can miss the
+# room by a few px. The edit stays until the garbage-sidecar step restores
+# the snapshot.
 if journal | jgrep -E 'layout: chart-'; then
     pass "the caustic placed a chart with the shipped tunables"
 else
@@ -2063,6 +2066,7 @@ reloads_before=$(journal_count "$SWAPPED")
 on_target 20 'cp $T_CAUSTICS/bar_tunables.slang $T_CAUSTICS/bar_tunables.slang.new
     sed -i -e "s/^public static const uint LEFT_ORDER\[\] = .*/public static const uint LEFT_ORDER[] = { ITEM_OVERVIEW, ITEM_CLOCK };/" \
         -e "s/^public static const uint CENTER_ORDER\[\] = .*/public static const uint CENTER_ORDER[] = { ITEM_CHART };/" \
+        -e "s/^public static const float CHART_ASPECT = .*/public static const float CHART_ASPECT = 1.0;/" \
         $T_CAUSTICS/bar_tunables.slang.new
     mv -f $T_CAUSTICS/bar_tunables.slang.new $T_CAUSTICS/bar_tunables.slang' >/dev/null
 if wait_for_journal_more "$SWAPPED" 60 "$reloads_before"; then
@@ -2755,7 +2759,7 @@ displays_chip() { # the chip's centre from its newest layout line
 }
 displays_wait_row() { # displays_wait_row <row id> <seconds>: laid out since the mark
     local deadline=$((SECONDS + $2))
-    until journal_since "$displays_mark" | grep -q "layout: applet-caustics-displays-$1 target=popup"; do
+    until journal_since "$displays_mark" | jgrep -F "layout: applet-caustics-displays-$1 target=popup"; do
         ((SECONDS < deadline)) || return 1
         sleep 1
     done
@@ -2786,20 +2790,20 @@ displays_set_scale() { # displays_set_scale <row id> <niri's scale>
             grep -oE 'layout: applet-caustics-displays-[0-9]+ target=popup' | sort -u | tr '\n' ' '))"
         return 1
     fi
-    shot "displays-scale-$2.png"
     popup_click "applet-caustics-displays-$1" || return 1
     wait_until "niri reports scale $2" 10 '[[ "$(displays_scale_now)" == "$displays_want" ]]'
 }
 
 if wait_for_journal "sidecar caustics-displays: rows, applet=8" 30; then
-    pass "its rows frame arrived with applet=8: $(journal |
-        grep -F 'sidecar caustics-displays: rows, applet=8' | tail -1 | sed -n 's/.*feeders::pipe: //p')"
+    pass "its rows frame arrived: $(journal | grep -F 'sidecar caustics-displays: rows, applet=8' |
+        tail -1 | sed -n 's/.*sidecar caustics-displays: /sidecar caustics-displays: /p')"
 else
     fail "no 'sidecar caustics-displays: rows, applet=8 …' ($(journal | grep -F 'caustics-displays' | tail -2 | tr '\n' ' '))"
 fi
 displays_line=$(journal | grep -F 'caustics-displays: published rev=' | tail -1 |
     sed -n 's/.*caustics-displays: /caustics-displays: /p')
-if grep -qE "outputs=$OUTPUT on [0-9]+x[0-9]+@[0-9.]+ scale=2 Normal" <<<"$displays_line"; then
+# The transform is the nested niri's own (winit's is Flipped180).
+if grep -qE "outputs=$OUTPUT on [0-9]+x[0-9]+@[0-9.]+ scale=2 " <<<"$displays_line"; then
     pass "the sidecar read niri's one output: $displays_line"
 else
     fail "the sidecar's picture is not $OUTPUT on at scale 2: ${displays_line:-no publish line}"
@@ -2845,8 +2849,14 @@ if [[ -n "$displays_cx" ]]; then
     fi
     sleep 1
 
-    # Scale 1 through the menu, then 2 again the same way.
-    relayout_mark=$(journal_lines)
+    # Scale 1 through the menu, then 2 again the same way. The bar re-lays
+    # itself out at each scale within a frame of niri's change: wait for the
+    # chip's first line after the bar's own "buffer scale changed".
+    displays_relaid() { # displays_relaid <from> <to>
+        journal_since "$scale_mark" | sed -n "/buffer scale changed from=$1 to=$2/,\$p" |
+            jgrep -F "layout: applet-caustics-displays target=bar"
+    }
+    scale_mark=$(journal_lines)
     if displays_set_scale 272 1.0; then
         pass "a click on Scale 1 set it: niri reports $OUTPUT at $(displays_scale_now)"
         if wait_for_journal "caustics-displays: $OUTPUT scale 1: ok" 8; then
@@ -2855,22 +2865,20 @@ if [[ -n "$displays_cx" ]]; then
             fail "no 'caustics-displays: $OUTPUT scale 1: ok' ($(journal | grep -F 'caustics-displays: ' | tail -2 | tr '\n' ' '))"
         fi
         if wait_until "the sidecar's next frame says scale=1" 10 \
-                'journal | grep -F "caustics-displays: published rev=" | tail -1 | grep -qF " scale=1 "'; then
+            'journal | grep -F "caustics-displays: published rev=" | tail -1 | jgrep -F " scale=1 "'; then
             pass "and its next frame says so: $(journal | grep -F 'caustics-displays: published rev=' | tail -1 |
                 sed -n 's/.*caustics-displays: /caustics-displays: /p')"
         else
             fail "the sidecar never published scale=1"
         fi
-        # The bar at scale 1: wait for the chip's new place, then click by it.
-        deadline=$((SECONDS + 20))
-        until journal_since "$relayout_mark" | grep -q "layout: applet-caustics-displays target=bar" &&
-            journal | grep -F "layout: applet-caustics-displays " | tail -1 | grep -q 'target=bar' ||
-            ((SECONDS >= deadline)); do
-            sleep 1
-        done
-        sleep 2
-        displays_chip
+        if wait_until "the bar re-laid out at scale 1" 10 'displays_relaid 2 1'; then
+            displays_chip
+            pass "the bar re-laid itself out at scale 1: the chip at $(layout_rect applet-caustics-displays)"
+        else
+            fail "no chip layout after the bar's 'buffer scale changed from=2 to=1'"
+        fi
         POPUP_SCALE=1
+        scale_mark=$(journal_lines)
         if displays_set_scale 276 2.0; then
             pass "and a click on Scale 2 set it back: niri reports $OUTPUT at $(displays_scale_now)"
         else
@@ -2882,16 +2890,16 @@ if [[ -n "$displays_cx" ]]; then
     fi
     # Every later step assumes scale 2: put it back whatever happened above.
     if [[ "$(displays_scale_now)" != 2.0 ]]; then
+        scale_mark=$(journal_lines)
         niri_msg output "$OUTPUT" scale 2 >/dev/null 2>&1
         note "put $OUTPUT back to scale 2 by niri msg"
     fi
-    sleep 2
-    # The bar back at scale 2, so later steps read rects at the scale they assume.
-    deadline=$((SECONDS + 20))
-    until journal | grep -F "layout: applet-caustics-displays " | tail -1 | grep -q 'target=bar' ||
-        ((SECONDS >= deadline)); do
-        sleep 1
-    done
+    if wait_until "the bar re-laid out at scale 2" 10 'displays_relaid 1 2'; then
+        displays_chip
+        note "the bar is back at scale 2: the chip at $(layout_rect applet-caustics-displays)"
+    else
+        fail "no chip layout after the bar's 'buffer scale changed from=1 to=2'"
+    fi
     park_pointer
 fi
 
