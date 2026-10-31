@@ -32,6 +32,11 @@ Stop whatever drew the wallpaper before (`swaybg`'s unit, or the line in the
 compositor's startup that runs it): two background clients on one output
 draw over each other.
 
+The first picture is one command, `caustics-canvasctl show <file>`; until
+then the canvas is its dim colour. After that nothing has to send one at
+login: the last picture shown comes back by itself, in a restarted canvas
+and in the next session alike.
+
 ## The unit
 
 - `Restart=always`, `RestartSec=1`, at most ten starts a minute, and **no
@@ -99,7 +104,10 @@ nothing is drawn, and the unlock never lands on a dimmed desktop.
 Before any picture
 the canvas is the dim colour; the path last shown is kept in
 `$XDG_RUNTIME_DIR/caustics-canvas.last`, so a restarted canvas shows it
-again. The look (the dim colour, the fade's curve, cover or contain) is
+again, and in `$XDG_STATE_HOME/caustics/canvas/last`
+(`~/.local/state/caustics/canvas/last`), which outlives the session, so the
+first canvas of a fresh login shows it too. A start reads the runtime file
+first; a path that no longer exists is one journal line and no picture. The look (the dim colour, the fade's curve, cover or contain) is
 `caustics/canvas_tunables.slang`: save it and the running canvas changes.
 
 Moving the pointer over the bare desktop, or over the lock screen, stirs a

@@ -74,3 +74,83 @@ fn a_listener_that_closes_during_the_window_is_taken() {
     drop(second);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `$XDG_STATE_HOME` when it is absolute, else `~/.local/state`, and the
+/// file under it beside the bar's favourites.
+#[test]
+fn the_state_file_follows_the_base_directory_rule() {
+    let state = |xdg: Option<&str>, home: Option<&str>| {
+        state_last(xdg.map(Into::into), home.map(Into::into))
+    };
+    assert_eq!(
+        state(Some("/s"), Some("/h")),
+        Some(PathBuf::from("/s/caustics/canvas/last"))
+    );
+    assert_eq!(
+        state(Some("relative"), Some("/h")),
+        Some(PathBuf::from("/h/.local/state/caustics/canvas/last"))
+    );
+    assert_eq!(
+        state(None, Some("/h")),
+        Some(PathBuf::from("/h/.local/state/caustics/canvas/last"))
+    );
+    assert_eq!(state(None, None), None);
+    assert_eq!(state(None, Some("relative")), None);
+}
+
+/// A start reads the runtime file first and the state file after it, so a
+/// fresh login (no runtime file) shows what the last session showed.
+#[test]
+fn the_last_path_is_read_from_the_runtime_file_then_the_state_file() {
+    let dir = std::env::temp_dir().join(format!("caustics-wallpaper-last-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let runtime = dir.join("runtime");
+    let state_home = dir.join("state");
+    std::fs::create_dir_all(&runtime).expect("writable");
+    let last = Last::new(&runtime, state_last(Some(state_home.clone().into()), None));
+    let runtime_file = runtime.join(LAST);
+    let state_file = state_home.join(LAST_STATE);
+    assert_eq!(last.files, vec![runtime_file.clone(), state_file.clone()]);
+
+    // Neither file: nothing to show.
+    assert_eq!(last.read(), None);
+
+    // Keeping a path writes both, the state file's directory included.
+    last.keep(Path::new("/pictures/a b.png"));
+    assert_eq!(
+        std::fs::read_to_string(&runtime_file).unwrap(),
+        "/pictures/a b.png"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&state_file).unwrap(),
+        "/pictures/a b.png"
+    );
+
+    // Both: the runtime file wins.
+    std::fs::write(&state_file, "/pictures/older.png").unwrap();
+    assert_eq!(
+        last.read(),
+        Some((PathBuf::from("/pictures/a b.png"), runtime_file.as_path()))
+    );
+
+    // A fresh login has no runtime file: the state file answers.
+    std::fs::remove_file(&runtime_file).unwrap();
+    assert_eq!(
+        last.read(),
+        Some((PathBuf::from("/pictures/older.png"), state_file.as_path()))
+    );
+
+    // A runtime file that names no absolute path is passed over.
+    std::fs::write(&runtime_file, "relative.png\n").unwrap();
+    assert_eq!(
+        last.read(),
+        Some((PathBuf::from("/pictures/older.png"), state_file.as_path()))
+    );
+
+    // Without a state directory there is only the runtime file.
+    let runtime_only = Last::new(&runtime, None);
+    assert_eq!(runtime_only.files, vec![runtime_file]);
+    assert_eq!(runtime_only.read(), None);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

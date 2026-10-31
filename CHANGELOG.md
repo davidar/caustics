@@ -67,7 +67,8 @@ from `CLOCK_BOOTTIME`, so a fade lands where the clock says across a
 suspend; hot-reloaded from `caustics/canvas*.slang` like the bar. Its
 sidecar `caustics-wallpaper` owns a control socket, decodes PNG, JPEG and
 JPEG XL and fits them to the largest output, re-shows the last picture when
-it or the host restarts, and gives a socket that still answers a short
+it or the host restarts and at the first start of a new session (the path
+is kept under `$XDG_STATE_HOME` as well as the runtime directory), and gives a socket that still answers a short
 window to go away before reading it as another wallpaper's (the previous
 sidecar of a restarted set can answer a probe while it is torn down);
 `caustics-canvasctl` is the client for scripts. The idle fade replaces chayang: a dim is an overlay per

@@ -21,7 +21,9 @@
 //! so a restarted sidecar, or a restarted host with its sidecars, shows the
 //! session's picture again rather than leaving the canvas at its dim colour
 //! (docs/canvas.md, *Failure model*). The runtime directory is the session's
-//! and goes with it.
+//! and goes with it, so the path is also kept in
+//! `$XDG_STATE_HOME/caustics/canvas/last` ([`Last`]), and the first start of a
+//! fresh login shows the picture the last session ended on.
 
 pub mod command;
 pub mod dim;
@@ -51,6 +53,77 @@ pub const SOCKET: &str = "caustics-canvas.sock";
 
 /// The last shown path's file name in `$XDG_RUNTIME_DIR`.
 pub const LAST: &str = "caustics-canvas.last";
+
+/// Where the last shown path outlives the session: this, under
+/// `$XDG_STATE_HOME` (`~/.local/state` when it is unset), beside the bar's
+/// `caustics/bar/favourites`.
+pub const LAST_STATE: &str = "caustics/canvas/last";
+
+/// The state file's path, from `$XDG_STATE_HOME` and `$HOME` as given: the
+/// XDG base-directory rule, where a relative `$XDG_STATE_HOME` is ignored.
+/// `None` with neither.
+pub fn state_last(
+    xdg_state_home: Option<std::ffi::OsString>,
+    home: Option<std::ffi::OsString>,
+) -> Option<PathBuf> {
+    xdg_state_home
+        .map(PathBuf::from)
+        .filter(|dir| dir.is_absolute())
+        .or_else(|| {
+            home.map(PathBuf::from)
+                .filter(|home| home.is_absolute())
+                .map(|home| home.join(".local/state"))
+        })
+        .map(|state| state.join(LAST_STATE))
+}
+
+/// The files the last shown path is kept in, in the order a start reads
+/// them: the session's runtime file first (it is never older than the
+/// state file), then the state file, which is what survives a logout.
+#[derive(Clone, Debug)]
+pub struct Last {
+    pub files: Vec<PathBuf>,
+}
+
+impl Last {
+    /// The runtime file in `runtime`, then the state file if there is one.
+    pub fn new(runtime: &Path, state: Option<PathBuf>) -> Last {
+        let mut files = vec![runtime.join(LAST)];
+        files.extend(state);
+        Last { files }
+    }
+
+    /// The first file that names an absolute path, and that file.
+    pub fn read(&self) -> Option<(PathBuf, &Path)> {
+        self.files.iter().find_map(|file| {
+            let text = std::fs::read_to_string(file).ok()?;
+            let path = PathBuf::from(text.trim_end());
+            path.is_absolute().then_some((path, file.as_path()))
+        })
+    }
+
+    /// Keep `path` in every file, making the state file's directory; one
+    /// witness line for each file that could not be written.
+    pub fn keep(&self, path: &Path) {
+        for file in &self.files {
+            if let Some(dir) = file.parent()
+                && let Err(err) = std::fs::create_dir_all(dir)
+            {
+                witness(&format!(
+                    "could not keep the path in {}: {err}",
+                    file.display()
+                ));
+                continue;
+            }
+            if let Err(err) = std::fs::write(file, path.as_os_str().as_encoded_bytes()) {
+                witness(&format!(
+                    "could not keep the path in {}: {err}",
+                    file.display()
+                ));
+            }
+        }
+    }
+}
 
 /// How long a start waits for the host's output size before it shows the
 /// last picture anyway, fitted to the wire's cap.
@@ -157,7 +230,10 @@ pub fn run() -> i32 {
     }
     drop(sender);
 
-    let last = dir.join(LAST);
+    let last = Last::new(
+        &dir,
+        state_last(std::env::var_os("XDG_STATE_HOME"), std::env::var_os("HOME")),
+    );
     let code = serve(&inbox, &last);
     let _ = std::fs::remove_file(&socket);
     code
@@ -296,25 +372,34 @@ fn client(stream: UnixStream, into: Sender<Input>) {
 }
 
 /// The main loop: one thread owns stdout and the state.
-fn serve(inbox: &Receiver<Input>, last: &Path) -> i32 {
+fn serve(inbox: &Receiver<Input>, last: &Last) -> i32 {
     let mut size: Option<(u32, u32)> = None;
     let mut shown: Option<Shown> = None;
     let mut serial = 0u32;
     // The dim, and the one client that may be waiting on it.
     let mut dims: Dimmer<Sender<String>> = Dimmer::new();
-    // The picture the session last showed, to be shown again once the host
-    // has said how big its outputs are (or after RESTORE_WAIT).
-    let mut restore: Option<(PathBuf, Instant)> = std::fs::read_to_string(last)
-        .ok()
-        .map(|text| PathBuf::from(text.trim_end()))
-        .filter(|path| path.is_absolute())
-        .map(|path| (path, Instant::now() + RESTORE_WAIT));
-    if let Some((path, _)) = &restore {
-        witness(&format!(
-            "the session last showed {}; showing it again",
-            path.display()
-        ));
-    }
+    // The picture the session (or the last session) showed, to be shown
+    // again once the host has said how big its outputs are (or after
+    // RESTORE_WAIT). One that is gone is one line and no picture.
+    let mut restore: Option<(PathBuf, Instant)> = match last.read() {
+        None => None,
+        Some((path, from)) if !path.exists() => {
+            witness(&format!(
+                "the session last showed {} (kept in {}), which is gone; nothing to show",
+                path.display(),
+                from.display()
+            ));
+            None
+        }
+        Some((path, from)) => {
+            witness(&format!(
+                "the session last showed {} (kept in {}); showing it again",
+                path.display(),
+                from.display()
+            ));
+            Some((path, Instant::now() + RESTORE_WAIT))
+        }
+    };
     let stdout = io::stdout();
     loop {
         let wait = restore
@@ -345,8 +430,9 @@ fn serve(inbox: &Receiver<Input>, last: &Path) -> i32 {
                     }
                 }
                 if let Some((path, _)) = restore.take() {
-                    if let Ok(again) = show(&mut out, &path, 0, size, &mut serial, last) {
-                        shown = Some(again);
+                    match show(&mut out, &path, 0, size, &mut serial, last) {
+                        Ok(again) => shown = Some(again),
+                        Err(err) => witness(&format!("{}: {err}; nothing to show", path.display())),
                     }
                 }
             }
@@ -438,8 +524,9 @@ fn serve(inbox: &Receiver<Input>, last: &Path) -> i32 {
             None => {
                 if let Some((path, _)) = restore.take() {
                     witness("no output size from the host yet; fitting to the wire's cap");
-                    if let Ok(again) = show(&mut out, &path, 0, size, &mut serial, last) {
-                        shown = Some(again);
+                    match show(&mut out, &path, 0, size, &mut serial, last) {
+                        Ok(again) => shown = Some(again),
+                        Err(err) => witness(&format!("{}: {err}; nothing to show", path.display())),
                     }
                 }
             }
@@ -462,7 +549,7 @@ fn show(
     fade_ms: u32,
     size: Option<(u32, u32)>,
     serial: &mut u32,
-    last: &Path,
+    last: &Last,
 ) -> Result<Shown, String> {
     let started = Instant::now();
     let pixels = picture::load(path)?;
@@ -481,12 +568,7 @@ fn show(
         from_height,
         started.elapsed().as_millis()
     ));
-    if let Err(err) = std::fs::write(last, path.as_os_str().as_encoded_bytes()) {
-        witness(&format!(
-            "could not keep the path in {}: {err}",
-            last.display()
-        ));
-    }
+    last.keep(path);
     Ok(Shown {
         path: path.to_owned(),
         start_ms,
