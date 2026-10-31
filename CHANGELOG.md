@@ -125,7 +125,10 @@ compositor locked, holds each attempt as one PAM transaction turned into a
 prompt conversation, and asks the host to unlock only after a success; a
 failure or an Escape starts a fresh attempt at once, and logind's `Unlock`
 is ignored. A hint already set at start re-locks before anything else.
-`caustics-canvasctl lock --wait` is the before-sleep hold. A dry run
+`caustics-canvasctl lock --wait` is the before-sleep hold. The PAM service is
+found rather than assumed: the lock's own `caustics-lock` file, else a
+locker's the system already has, else `login`, and the witness says which;
+`CAUSTICS_LOCK_PAM_SERVICE` still names one outright. A dry run
 replaces PAM with one ask, for the tests. A new wire kind, `Lock`, and two
 canvas events, `locked` and `unlocked`, moved the ABI hash, so the whole
 set (now sixteen binaries) is rebuilt and installed together; the canvas

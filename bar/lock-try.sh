@@ -9,7 +9,7 @@
 #   bar/lock-try.sh [picture]                  # the real PAM and the real reader
 #   bar/lock-try.sh --dry-run <secret>         # no PAM: <secret> unlocks
 #   bar/lock-try.sh --fingerprint off          # the password alone
-#   bar/lock-try.sh --pam-service <name>       # /etc/pam.d/<name>, not swaylock
+#   bar/lock-try.sh --pam-service <name>       # /etc/pam.d/<name>, not the one found
 #   bar/lock-try.sh --headless --dry-run <s>   # no window, for checking the script
 #
 # 1. Builds the workspace (`target/debug/`, beside this checkout), then starts
@@ -103,11 +103,24 @@ if [[ -n "$PICTURE" ]]; then
     [[ -f "$PICTURE" ]] || { echo "lock-try: no picture at $PICTURE"; exit 2; }
     PICTURE="$(cd "$(dirname "$PICTURE")" && pwd)/$(basename "$PICTURE")"
 fi
-service="${PAM_SERVICE:-swaylock}"
-if [[ -z "$DRY_SECRET" && ! -e "/etc/pam.d/$service" ]]; then
-    echo "lock-try: there is no /etc/pam.d/$service; PAM would use its 'other' service, which usually denies"
-    echo "lock-try: name one with --pam-service, or take a look with --dry-run <secret>"
-    exit 2
+# The sidecar's own choice, mirrored (lock/README.md, *The PAM service*):
+# the first of these with a file is taken; a name with no file would fall to
+# PAM's 'other' service, which usually denies, so the check here is only for
+# a name given by hand.
+if [[ -n "$PAM_SERVICE" ]]; then
+    if [[ -z "$DRY_SECRET" && ! -e "/etc/pam.d/$PAM_SERVICE" && ! -e "/usr/lib/pam.d/$PAM_SERVICE" ]]; then
+        echo "lock-try: there is no /etc/pam.d/$PAM_SERVICE; PAM would use its 'other' service, which usually denies"
+        echo "lock-try: name one that exists with --pam-service, or take a look with --dry-run <secret>"
+        exit 2
+    fi
+elif [[ -z "$DRY_SECRET" ]]; then
+    found=""
+    for candidate in caustics-lock swaylock hyprlock gtklock waylock login; do
+        for dir in /etc/pam.d /usr/lib/pam.d; do
+            [[ -f "$dir/$candidate" ]] && { found="$dir/$candidate"; break 2; }
+        done
+    done
+    [[ -n "$found" ]] || echo "lock-try: no PAM service file found for the lock; it will use 'login' unseen (lock/README.md, *The PAM service*)"
 fi
 
 RENDER_NODE="${CAUSTICS_NESTED_RENDER_NODE:-$(first_render_node)}"

@@ -141,10 +141,41 @@ From the sidecar's own environment:
 
 | variable | default | |
 |---|---|---|
-| `CAUSTICS_LOCK_PAM_SERVICE` | `swaylock` | the PAM service (`/etc/pam.d/<service>`); `swaylock` is the one a session built on the sway tools already has. Keeping the fingerprint module off the unlock path is that service file's business, and this is how a different one is chosen: the reader is spoken to directly, so a stack that also waits on it only delays the password ask by its timeout |
+| `CAUSTICS_LOCK_PAM_SERVICE` | found | the PAM service (`/etc/pam.d/<service>`). Unset, the first of `caustics-lock`, `swaylock`, `hyprlock`, `gtklock`, `waylock`, `login` with a file under `/etc/pam.d` or `/usr/lib/pam.d` (*The PAM service*, below). Keeping the fingerprint module off the unlock path is that service file's business: the reader is spoken to directly, so a stack that also waits on it only delays the password ask by its timeout |
 | `CAUSTICS_LOCK_FINGERPRINT` | `1` | `0` is no reader: no claim, the password alone. Unset or anything else is the reader verifying while locked |
 | `CAUSTICS_LOCK_FINGERPRINT_WINDOW` | `30,90` | the reader's windows, `idle,cap` in whole seconds: a window stays open `idle` past its last trigger and never longer than `cap` since it opened. Neither is 0; anything else is one witness and the default |
 | `CAUSTICS_LOCK_DRY_RUN_SECRET` | unset | the **dry run**: PAM is not touched, and a conversation is one echo-off ask, `Password: `, compared with these bytes (not in constant time: they are in the environment, which is no secret). Empty is no dry run |
+
+### The PAM service
+
+PAM reads a service's stack from `/etc/pam.d/<service>` (or the vendor
+directory, `/usr/lib/pam.d`), and a name with no file falls to its `other`
+service, which on most systems denies everything without asking: the
+password would never work, and nothing would say why. So the sidecar
+names no service blindly. Unset, it takes the first of these with a file:
+
+1. `caustics-lock`, the lock's own, where its installer wrote one;
+2. `swaylock`, `hyprlock`, `gtklock`, `waylock`: the lockers whose packages
+   ship a service file, each the stack their distribution chose for a
+   screen lock, usually without a fingerprint wait;
+3. `login`, which every system has. Its stack often waits on a fingerprint
+   reader too (`pam_fprintd`), which only delays the password ask by that
+   module's timeout, since the reader is spoken to directly.
+
+The witness says which was taken and from where (`PAM service swaylock
+(/etc/pam.d/swaylock)`), or that none was found and `login` is being used
+unseen. A stack of the lock's own is one line in `/etc/pam.d/caustics-lock`,
+including the distribution's password stack and nothing else:
+
+```
+#%PAM-1.0
+auth    include    password-auth     # Fedora, RHEL and their derivatives
+auth    include    system-auth       # Arch and most others
+@include common-auth                 # Debian, Ubuntu
+```
+
+one of the three lines, whichever the system has under `/etc/pam.d`. The
+lock never writes under `/etc` itself.
 
 The dry run still speaks to logind and fprintd if a system bus answers, so
 a test points `DBUS_SYSTEM_BUS_ADDRESS` at a socket that does not exist, or
@@ -178,6 +209,8 @@ fingerprint: window closed (idle|cap); released  nobody there, or the cap; `rele
 fingerprint: released                           the lock is over, the reader let go
 fingerprint: off (CAUSTICS_LOCK_FINGERPRINT=0)
 fingerprint: CAUSTICS_LOCK_FINGERPRINT_WINDOW=<value> is not idle,cap in seconds; 30,90
+PAM service <name> (/etc/pam.d/<name>)    or `(CAUSTICS_LOCK_PAM_SERVICE)` when named
+PAM service login: no file for any of caustics-lock, swaylock, … under /etc/pam.d or /usr/lib/pam.d; …
 ```
 
 ## In the canvas's set

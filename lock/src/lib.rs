@@ -46,10 +46,13 @@
 //! From this process's own environment, never the host's (docs/architecture.md,
 //! *Configuration is the caustic*):
 //!
-//! - `CAUSTICS_LOCK_PAM_SERVICE`: the PAM service, default `swaylock` (the
-//!   service a session built on the sway tools has). The reader is spoken to
-//!   directly, so the service should keep the fingerprint module off the
-//!   unlock path, or PAM waits on the reader too.
+//! - `CAUSTICS_LOCK_PAM_SERVICE`: the PAM service. Unset, the first of
+//!   [`SERVICE_CANDIDATES`] whose file exists under one of [`PAM_DIRS`] is
+//!   taken: `caustics-lock` (the lock's own, where its installer put one),
+//!   then the lockers distributions ship a service file for, then `login`,
+//!   which every system has. The reader is spoken to directly, so the
+//!   service should keep the fingerprint module off the unlock path, or PAM
+//!   waits on the reader too.
 //! - `CAUSTICS_LOCK_FINGERPRINT`: `0` is no reader; unset or anything else
 //!   is the reader verifying while locked.
 //! - `CAUSTICS_LOCK_FINGERPRINT_WINDOW`: the reader's windows, `idle,cap` in
@@ -79,6 +82,7 @@ pub mod socket;
 use std::ffi::OsString;
 use std::io;
 use std::os::fd::AsFd as _;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use caustics_bar_abi::wire::{self, Frame, Secret};
@@ -98,8 +102,70 @@ pub fn witness(line: &str) {
     WITNESS.line(line)
 }
 
-/// The PAM service when `CAUSTICS_LOCK_PAM_SERVICE` names none.
-pub const DEFAULT_SERVICE: &str = "swaylock";
+/// The PAM services tried, in this order, when `CAUSTICS_LOCK_PAM_SERVICE`
+/// names none: the first whose file exists under one of [`PAM_DIRS`] is the
+/// one. `caustics-lock` first, the service the lock's own installer writes;
+/// then the lockers whose packages ship a service file, each a stack their
+/// distribution chose for a screen lock; `login` last, which every system
+/// has, though its stack may also wait on a fingerprint reader. A name PAM
+/// has no file for falls to its `other` service, which on most systems
+/// denies everything without asking, so nothing here is used unseen.
+pub const SERVICE_CANDIDATES: &[&str] = &[
+    "caustics-lock",
+    "swaylock",
+    "hyprlock",
+    "gtklock",
+    "waylock",
+    "login",
+];
+
+/// Where PAM reads a service's file: the administrator's directory, then the
+/// distribution's vendor directory.
+pub const PAM_DIRS: &[&str] = &["/etc/pam.d", "/usr/lib/pam.d"];
+
+/// How the PAM service was chosen, for the witness.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ServiceOrigin {
+    /// `CAUSTICS_LOCK_PAM_SERVICE` named it; whether its file exists is not
+    /// checked, a deliberate name is PAM's to judge.
+    Named,
+    /// Found as this file, the first of [`SERVICE_CANDIDATES`] present.
+    Found(PathBuf),
+    /// No candidate's file exists; the last candidate, unseen.
+    LastResort,
+}
+
+/// The PAM service: the named one, else the first of [`SERVICE_CANDIDATES`]
+/// with a file in `dirs`, else the last candidate.
+pub fn resolve_service(named: Option<&str>, dirs: &[&Path]) -> (String, ServiceOrigin) {
+    if let Some(name) = named {
+        return (name.to_owned(), ServiceOrigin::Named);
+    }
+    for candidate in SERVICE_CANDIDATES {
+        for dir in dirs {
+            let file = dir.join(candidate);
+            if file.is_file() {
+                return ((*candidate).to_owned(), ServiceOrigin::Found(file));
+            }
+        }
+    }
+    let last = SERVICE_CANDIDATES[SERVICE_CANDIDATES.len() - 1];
+    (last.to_owned(), ServiceOrigin::LastResort)
+}
+
+/// The witness line for a resolved service.
+pub fn describe_service(service: &str, origin: &ServiceOrigin) -> String {
+    match origin {
+        ServiceOrigin::Named => format!("PAM service {service} (CAUSTICS_LOCK_PAM_SERVICE)"),
+        ServiceOrigin::Found(file) => format!("PAM service {service} ({})", file.display()),
+        ServiceOrigin::LastResort => format!(
+            "PAM service {service}: no file for any of {} under {}; a stack of its own \
+             is /etc/pam.d/caustics-lock (lock/README.md, *The PAM service*)",
+            SERVICE_CANDIDATES.join(", "),
+            PAM_DIRS.join(" or ")
+        ),
+    }
+}
 
 /// The title when the user database has no name for this uid.
 pub const UNNAMED_TITLE: &str = "Locked";
@@ -107,8 +173,9 @@ pub const UNNAMED_TITLE: &str = "Locked";
 /// The sidecar's settings, from its environment.
 #[derive(Debug)]
 pub struct Settings {
-    /// `CAUSTICS_LOCK_PAM_SERVICE`, or [`DEFAULT_SERVICE`].
-    pub service: String,
+    /// `CAUSTICS_LOCK_PAM_SERVICE`, when set and not empty; else the
+    /// service is found at start ([`resolve_service`]).
+    pub service: Option<String>,
     /// `CAUSTICS_LOCK_DRY_RUN_SECRET`, when set and not empty.
     pub dry_run: Option<Secret>,
     /// `CAUSTICS_LOCK_FINGERPRINT` is not `0`.
@@ -128,8 +195,8 @@ impl Settings {
         )
     }
 
-    /// The rule, apart from the environment: an empty service is the
-    /// default, an empty secret is no dry run (it would unlock on an empty
+    /// The rule, apart from the environment: an empty service is none
+    /// named, an empty secret is no dry run (it would unlock on an empty
     /// answer), the reader is on unless its variable is `0`, and its windows
     /// are the default when unset or empty.
     pub fn from_vars(
@@ -141,8 +208,7 @@ impl Settings {
         Settings {
             service: service
                 .and_then(|s| s.into_string().ok())
-                .filter(|s| !s.is_empty())
-                .unwrap_or_else(|| DEFAULT_SERVICE.to_owned()),
+                .filter(|s| !s.is_empty()),
             dry_run: secret
                 .filter(|s| !s.is_empty())
                 .map(|s| Secret::new(s.into_encoded_bytes())),
@@ -248,7 +314,9 @@ pub async fn serve(
             Arc::new(DryRun::new(secret))
         }
         None => {
-            let Some(pam) = LinuxPam::new(&settings.service) else {
+            let dirs: Vec<&Path> = PAM_DIRS.iter().map(Path::new).collect();
+            let (service, origin) = resolve_service(settings.service.as_deref(), &dirs);
+            let Some(pam) = LinuxPam::new(&service) else {
                 witness("CAUSTICS_LOCK_PAM_SERVICE has a NUL in it; refusing");
                 return idle(inbox).await;
             };
@@ -259,7 +327,7 @@ pub async fn serve(
                 ));
                 return idle(inbox).await;
             }
-            witness(&format!("PAM service {}", settings.service));
+            witness(&describe_service(&service, &origin));
             Arc::new(pam)
         }
     };
