@@ -40,6 +40,18 @@ fn each_op_names_the_logind_call_or_the_niri_line() {
     );
 }
 
+/// A Lock no locker answered is said as that, naming the locker that would
+/// answer, rather than witnessed as a lock.
+#[test]
+fn an_unanswered_lock_says_so_and_names_a_locker_that_would() {
+    let line = caustics_power::logind::unanswered("2 (user/wayland)");
+    assert!(line.starts_with("lock: asked session 2 (user/wayland) to lock"));
+    assert!(line.contains("LockedHint stayed false for 3 s"));
+    assert!(line.contains("no locker listens to logind's Lock"));
+    assert!(line.contains("caustics-lock"));
+    assert!(!line.contains("locked session"));
+}
+
 #[test]
 fn every_op_has_its_own_witness_name() {
     let names: Vec<&str> = [Op::Lock, Op::LogOut, Op::Suspend, Op::Restart, Op::Shutdown]

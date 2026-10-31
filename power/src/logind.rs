@@ -8,13 +8,23 @@
 //! started something does not, and a `greeter` session belongs to somebody
 //! else.
 //!
+//! `Lock()` only makes logind emit the session's `Lock` signal; what locks is
+//! whichever locker listens for it, and a session may have none. So the walk
+//! then reads each session's `LockedHint` for a few seconds
+//! ([`LOCKED_HINT_WAIT`]): a hint that turns true is witnessed as locked, and
+//! one that stays false is witnessed as what it is, a signal nobody may have
+//! answered, rather than as a lock.
+//!
 //! Nothing here decides and nothing here retries: the caustic decided that a
 //! row was clicked, [`crate::actions`] said which action that is, and this
 //! makes the call and writes down what came back. A polkit denial, a logind
 //! that is not there, a session that will not lock — each is one witness line
 //! and the sidecar goes on.
 
+use std::time::Duration;
+
 use zbus::Connection;
+use zbus::proxy::CacheProperties;
 use zbus::zvariant::OwnedObjectPath;
 
 use crate::witness;
@@ -23,6 +33,14 @@ use crate::witness;
 /// allowed to without asking, and one that may not gets an error we witness
 /// rather than a dialogue a bar has nowhere to show.
 pub const INTERACTIVE: bool = false;
+
+/// How long the Lock walk reads a session's `LockedHint` after its `Lock()`
+/// before saying the hint never turned: long enough for a locker to put its
+/// surfaces up and set it, short enough to be one click's answer.
+pub const LOCKED_HINT_WAIT: Duration = Duration::from_secs(3);
+
+/// How often the hint is read inside [`LOCKED_HINT_WAIT`].
+const LOCKED_HINT_STEP: Duration = Duration::from_millis(100);
 
 #[zbus::proxy(
     interface = "org.freedesktop.login1.Manager",
@@ -57,6 +75,10 @@ trait Session {
     /// `wayland`, `x11` or `tty`.
     #[zbus(property, name = "Type")]
     fn kind(&self) -> zbus::Result<String>;
+    /// Whether the session's locker says it is locked. Read uncached
+    /// ([`CacheProperties::No`]), so each read is logind's answer now.
+    #[zbus(property)]
+    fn locked_hint(&self) -> zbus::Result<bool>;
     fn lock(&self) -> zbus::Result<()>;
 }
 
@@ -75,7 +97,8 @@ pub async fn call(conn: &Connection, member: &str) -> Result<(), String> {
     result.map_err(|e| e.to_string())
 }
 
-/// Lock every user-class, non-tty session of our own uid.
+/// Lock every user-class, non-tty session of our own uid, then wait up to
+/// [`LOCKED_HINT_WAIT`] for each one's `LockedHint` and say what it showed.
 pub async fn lock(conn: &Connection) -> Result<(), String> {
     let uid = uid()?;
     let manager = ManagerProxy::new(conn)
@@ -90,9 +113,14 @@ pub async fn lock(conn: &Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     let sessions = user.sessions().await.map_err(|e| e.to_string())?;
 
-    let mut locked = 0;
+    // The sessions whose `Lock()` logind took, with the words their witness
+    // line wears.
+    let mut asked = Vec::new();
     for (id, path) in sessions {
-        let session = match SessionProxy::builder(conn).path(path).map(|b| b.build()) {
+        let building = SessionProxy::builder(conn)
+            .path(path)
+            .map(|b| b.cache_properties(CacheProperties::No).build());
+        let session = match building {
             Ok(building) => match building.await {
                 Ok(proxy) => proxy,
                 Err(e) => {
@@ -112,17 +140,56 @@ pub async fn lock(conn: &Connection) -> Result<(), String> {
             continue;
         }
         match session.lock().await {
-            Ok(()) => {
-                locked += 1;
-                witness(&format!("lock: locked session {id} ({class}/{kind})"));
-            }
+            Ok(()) => asked.push((format!("{id} ({class}/{kind})"), session)),
             Err(e) => witness(&format!("lock: session {id}: {e}")),
         }
     }
-    if locked == 0 {
+    if asked.is_empty() {
         return Err(format!("no user session of uid {uid} took it"));
     }
+
+    // Every session's hint is read on the same ticks, so two sessions with
+    // no locker cost one wait, not two.
+    let deadline = tokio::time::Instant::now() + LOCKED_HINT_WAIT;
+    loop {
+        let mut waiting = Vec::new();
+        for (name, session) in asked {
+            match session.locked_hint().await {
+                Ok(true) => witness(&format!("lock: locked session {name}")),
+                Ok(false) => waiting.push((name, session)),
+                Err(e) => witness(&format!(
+                    "lock: asked session {name} to lock; its LockedHint could not be read ({e})"
+                )),
+            }
+        }
+        asked = waiting;
+        if asked.is_empty() {
+            break;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            for (name, _) in &asked {
+                witness(&unanswered(name));
+            }
+            break;
+        }
+        tokio::time::sleep(LOCKED_HINT_STEP).await;
+    }
     Ok(())
+}
+
+/// The line for a session whose `LockedHint` stayed false through
+/// [`LOCKED_HINT_WAIT`]. Not an error: the row did all it can, which is ask
+/// logind. Either no locker listens to the session's `Lock` signal, or the
+/// one that does never sets the hint (swaylock and hyprlock do not;
+/// caustics-lock, GNOME's and KDE's lockers do).
+pub fn unanswered(session: &str) -> String {
+    format!(
+        "lock: asked session {session} to lock, and its LockedHint stayed false for {} s: \
+         either no locker listens to logind's Lock on this session, or the locker does not \
+         set the hint (swaylock and hyprlock do not); caustics-lock does \
+         (canvas/README.md, Enabling the lock)",
+        LOCKED_HINT_WAIT.as_secs()
+    )
 }
 
 /// Our own uid, without a `libc` dependency: `/proc/self`'s owner is the

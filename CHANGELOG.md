@@ -50,7 +50,10 @@ raise its application), `caustics-apps` (desktop entries and colour icons),
 `caustics-glyphs` (the font and symbolic icons as curves, fallback faces on
 demand) and `caustics-reload` (the shader compiler, Slang in its own
 process, with a cache keyed on the bytes it compiles). Every D-Bus signal
-stream is drained by a task that awaits nothing else.
+stream is drained by a task that awaits nothing else. The power menu's
+Lock reads each session's `LockedHint` for three seconds after asking
+logind, and says when it stayed false (no locker listens to logind's `Lock`,
+or the one that does sets no hint) instead of witnessing a lock.
 
 **The canvas** (`caustics-canvas`, docs/canvas.md). A second host of a
 caustic on the same mechanism (`caustics-host`): the wallpaper on every
