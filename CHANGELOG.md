@@ -16,7 +16,9 @@ Bluetooth, audio, battery, notifications, power) plus an idle-inhibit toggle.
 Popups are the bar's own: menus with submenus, sliders, check and radio rows,
 scrolling when a menu is taller than the output, and toasts without a grab.
 Configuration is the caustic's tunables module, edited in the checkout and
-hot-reloaded on save; the dock's favourites are state. One bar per edge, enforced by a
+hot-reloaded on save; the dock's favourites are state. A machine with no
+favourites file starts with none, rather than a compiled-in list of
+applications it may not have; the right-click Pin row adds the first. One bar per edge, enforced by a
 lock. Exit codes the unit understands: restart on a protocol error, stay down
 on a refusal or a lost GPU device.
 

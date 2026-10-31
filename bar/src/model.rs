@@ -262,7 +262,8 @@ pub struct Model {
     /// dock's own Pin and Unpin rows (`crate::favourites`; docs/architecture.md,
     /// *Configuration is the caustic*).
     /// Empty by default because `Default` is what a test gets; the running bar
-    /// fills it in `Bar::new`, from the file or from the built-in seed.
+    /// fills it in `Bar::new` from the file, and a machine with no file has
+    /// none.
     pub favourites: Vec<String>,
     /// Local wall time as `hour * 60 + minute`, published in
     /// `FrameInputs::clock_time` and spelled by the caustic.

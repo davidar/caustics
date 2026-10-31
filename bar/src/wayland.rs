@@ -494,8 +494,8 @@ impl Bar {
         );
 
         // The dock's favourites: state, read once here and never watched
-        // (`crate::favourites`). A missing file is the built-in seed, and every
-        // other way of not having a usable one is the seed too.
+        // (`crate::favourites`). A missing file is no favourites, and so is
+        // every other way of not having a usable one.
         let favourites_path = crate::favourites::path();
         let favourites = crate::favourites::load(&favourites_path);
 

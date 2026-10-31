@@ -26,9 +26,9 @@ impl Drop for Temp {
 }
 
 #[test]
-fn a_missing_file_seeds_from_the_built_in_list() {
+fn a_missing_file_is_no_favourites() {
     let temp = Temp::new("missing");
-    assert_eq!(load(&temp.file()), seed());
+    assert_eq!(load(&temp.file()), Vec::<String>::new());
     assert!(!temp.file().exists(), "reading must not create it");
 }
 
@@ -74,10 +74,9 @@ fn blank_lines_are_tolerated_and_a_line_with_whitespace_is_skipped() {
 }
 
 #[test]
-fn an_empty_file_is_an_empty_dock_and_not_the_seed() {
-    // A person who unpinned everything meant it. Only a *missing* file is
-    // the seed, which is why `store` of an empty list is not the same as
-    // never having written one.
+fn an_empty_file_is_an_empty_dock() {
+    // A person who unpinned everything meant it, and gets what a machine
+    // with no file gets.
     let temp = Temp::new("empty");
     store(&temp.file(), &[]);
     assert_eq!(load(&temp.file()), Vec::<String>::new());

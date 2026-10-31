@@ -52,26 +52,6 @@ use crate::strings::Strings;
 use caustics_host::images::Images;
 use caustics_host::text::Covers;
 
-/// The dock's default pinned app ids, in the order they appear, compiled in
-/// because the bar has no configuration file (docs/architecture.md, *Configuration is
-/// the caustic*).
-///
-/// The one string list the caustic cannot hold, and the one that is not really
-/// config either. It is only the **seed**: the dock's favourites
-/// are [`Model::favourites`], read once at startup from
-/// `$XDG_STATE_HOME/caustics/bar/favourites` and written by the Pin and Unpin rows
-/// of an entry's right-click menu (`crate::favourites`). A machine with no file
-/// yet gets this list; after the first pin the file is the truth.
-pub(crate) const DEFAULT_FAVOURITES: [&str; 7] = [
-    "org.mozilla.firefox",
-    "com.system76.CosmicFiles",
-    "com.system76.CosmicEdit",
-    "com.system76.CosmicTerm",
-    "com.system76.CosmicStore",
-    "com.system76.CosmicSettings",
-    "kitty",
-];
-
 /// What an image slot holding a themed icon is keyed by, ahead of the name.
 ///
 /// The prefix keeps a theme name from colliding with an app id, which is keyed

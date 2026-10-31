@@ -45,7 +45,7 @@ ROWS_DEMO="$REPO/target/debug/examples/rows_demo"
 # The output (`$OUTPUT`, 1280x800 px) is the target's, at scale 2: 640x400 logical.
 
 # The dock's favourites, expanded by the target's shell (a `~` would expand
-# here). `cleanup` removes it, so every run starts from the built-in seed.
+# here). `cleanup` removes it, so every run starts with no favourites.
 guest_favourites='$T_STATE/caustics/bar/favourites'
 
 # The bar's line when a reloaded generation reached the GPU (`reload: failed`
@@ -663,8 +663,8 @@ else
 fi
 
 say "5. the dock lays out the running app"
-# A terminal window of our own. cosmic-term first: its entry (the seed's
-# fourth) fits the dock, where kitty's (the seventh) overflows under the clock.
+# A terminal window of our own. With no favourites file the dock holds only
+# the running apps, so whichever terminal is found is its first entry.
 guest_term=$(on_target 20 'for t in cosmic-term kitty foot alacritty xterm; do
     command -v $t >/dev/null 2>&1 && { echo $t; break; }; done')
 if [[ -z "$guest_term" ]]; then
@@ -2045,7 +2045,7 @@ if journal | jgrep -E 'layout: chart-'; then
     pass "the caustic placed a chart with the shipped tunables"
 else
     note "no chart placed with the shipped tunables: the drop rule, correctly, \
-at 640 logical px with the seeded dock"
+at 640 logical px with the shipped dock"
 fi
 # Park first: a chart landing under the resting pointer would open its preview.
 park_pointer
@@ -3361,9 +3361,9 @@ elif open_dock_menu; then
     fi
 fi
 
-# The file is read once, so the seed returns only on a restart.
+# The file is read once, so no favourites returns only on a restart.
 on_target 20 "rm -f $guest_favourites" >/dev/null 2>&1 || true
-restart_bar "the favourites file removed, so the dock is the built-in seed again"
+restart_bar "the favourites file removed, so the dock has no favourites again"
 
 
 # New window: the bar hands an argv to niri's `Spawn` over its IPC socket and

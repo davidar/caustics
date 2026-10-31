@@ -6,9 +6,12 @@
 //! bar still has no config file. This is that file: one app id per line, in
 //! dock order, written by the dock and read once.
 //!
-//! `facts::DEFAULT_FAVOURITES` is the **seed**, not a default layered under
-//! the file: a machine with no file yet gets the built-in list and the first
-//! pin writes the whole thing out. After that the file is the truth.
+//! **No seed.** A machine with no file has no favourites: the bar cannot know
+//! which applications are installed on it or wanted, and a compiled-in list
+//! would be entries that launch nothing wherever it guessed wrong. The dock
+//! shows the running windows, and the right-click **Pin** row is how the
+//! first favourite arrives; that first pin writes the file, and after that
+//! the file is the truth.
 //!
 //! **Read once, at startup.** The bar does not watch it. A person editing it
 //! under a running bar gets it on the next start, and that is the contract —
@@ -20,8 +23,6 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
-
-use crate::facts::DEFAULT_FAVOURITES;
 
 /// Where the file lives: `$XDG_STATE_HOME/caustics/bar/favourites`, and
 /// `~/.local/state` when the variable is unset, per the XDG base-directory
@@ -35,30 +36,24 @@ pub fn path() -> PathBuf {
     base.join("caustics").join("bar").join("favourites")
 }
 
-/// The built-in list, as the model holds it.
-pub fn seed() -> Vec<String> {
-    DEFAULT_FAVOURITES
-        .iter()
-        .map(|app| (*app).to_owned())
-        .collect()
-}
-
-/// The favourites, or the seed. Never fails: every way of not having a usable
-/// file ends in the built-in list and one witness line, because a dock with no
-/// entries is a worse answer than a dock with the wrong ones.
+/// The favourites, or none. Never fails: every way of not having a usable
+/// file ends in an empty list and one witness line saying which way it was.
 pub fn load(path: &Path) -> Vec<String> {
     let text = match std::fs::read_to_string(path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            tracing::info!("favourites: seeded from the built-in list");
-            return seed();
+            tracing::info!(
+                "favourites: none yet ({} does not exist); Pin on a dock entry adds the first",
+                path.display()
+            );
+            return Vec::new();
         }
         Err(err) => {
             tracing::warn!(
-                "favourites: could not read {}: {err}; seeded from the built-in list",
+                "favourites: could not read {}: {err}; the dock starts with none",
                 path.display()
             );
-            return seed();
+            return Vec::new();
         }
     };
 
