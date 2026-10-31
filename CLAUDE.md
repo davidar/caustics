@@ -18,14 +18,11 @@ the shaders; bar/systemd/README.md running the bar as a user unit;
 sysmon/README.md the sampling sidecar. `docs/check-links.sh` checks every
 `docs/….md` pointer.
 
-**The bar on this machine**: installed only through `bar/install.sh` (one set
-under `~/.local/lib/caustics-bar/<hash>/`, the bar and every sidecar built
-together; never by hand). The unit `~/.config/systemd/user/caustics-bar.service`
-is a symlink into this checkout; the iGPU-only drop-in is installed beside it.
-`caustics-notify-watch.service` (notify/tools) files a report when a
-notification's click goes nowhere. The bar is the session's panel. Editing
-`caustics/*.slang` on main hot-reloads the live bar, which reads the caustics
-of the tree it was built from, `caustics/bar_tunables.slang` included.
+**Running it.** A bar or canvas you live with is installed only through
+`bar/install.sh` (one set under `~/.local/lib/caustics-bar/<hash>/`, the bar
+and every sidecar built together; never by hand); bar/systemd/README.md has
+the user units and the drop-ins. Editing `caustics/*.slang` hot-reloads a
+running bar built from that tree, `caustics/bar_tunables.slang` included.
 
 ## Ground rules
 
@@ -38,12 +35,12 @@ of the tree it was built from, `caustics/bar_tunables.slang` included.
   `~/.config/caustics/scrub-words`, never committed; coincidental substring hits
   are read and judged, never suppressed) and `docs/check-links.sh` both
   clean.
-- **Daily-driver safety**: the live bar is the session's panel. Tests run in
-  nested sessions (`bar/nested-run.sh`, a headless host and a nested niri)
-  and never touch `~/.config/caustics`, `~/.local/state` or the running unit.
-  Never kill processes by name (the nested kitty and the live terminal share
-  a binary); kill tracked PIDs only. Builders never run `bar/vm-run.sh` or
-  qemu; they ask the main session, which runs one guest and relays results.
+- **Daily-driver safety**: the bar under test may be the host's own panel.
+  Tests run in nested sessions (`bar/nested-run.sh`, a headless host and a
+  nested niri) and never touch `~/.config/caustics`, `~/.local/state` or the
+  running unit. Never kill processes by name (a nested terminal and the live
+  one may share a binary); kill tracked PIDs only. The VM target
+  (`bar/vm-run.sh`) is run by one session at a time, never by a builder.
 - **Slang, not WGSL**, for every shader. Shaders live in `caustics/`,
   compiled to SPIR-V by Slang in process (`punchcutter-slang`, which carries
   the pinned release; the first build downloads it into
@@ -68,19 +65,11 @@ of the tree it was built from, `caustics/bar_tunables.slang` included.
   `cargo cooldown add <crate>` works but is not in its `--help`. Add plain,
   hand-edit feature flags, then `cargo cooldown check`, which is the step
   that proves the lockfile against the policy.
-- `cargo cooldown` copies the workspace into `$TMPDIR`, and `/tmp` here is a
-  quota'd tmpfs backed by RAM: run it as
-  `TMPDIR=$HOME/.cache/cooldown-tmp cargo cooldown check`. Scratch builds of
-  any size go under `~/.cache`, never `/tmp`.
+- `cargo cooldown` copies the workspace into `$TMPDIR`; where `/tmp` is a
+  small tmpfs, run it as `TMPDIR=$HOME/.cache/cooldown-tmp cargo cooldown
+  check`, and keep scratch builds under `~/.cache` for the same reason.
 - `Cargo.lock` is committed and is the source of truth; the first build after
   a dependency change goes `cargo fetch`, review, `cargo build --offline`.
-
-## Host constraints
-
-- The host is an immutable image (rpm-ostree) that ships gcc; `cargo build`
-  and `cargo test` need nothing set.
-- Two GPUs: the drop-in `bar/systemd/dropins/igpu-only.conf` pins the
-  integrated one's driver for the unit, so the discrete GPU stays asleep.
 
 ## Git
 

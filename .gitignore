@@ -6,3 +6,6 @@
 
 # Logs and screenshots from local test runs
 bar/test-runs/
+
+# Per-machine notes for Claude Code sessions, never committed.
+CLAUDE.local.md
