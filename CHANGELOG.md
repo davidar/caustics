@@ -221,26 +221,29 @@ opt-in, like the polkit agent (canvas/README.md, *Enabling the secret
 agent*). No wire or buffer contract changed; the set is now seventeen
 binaries.
 
-**The canvas's Bluetooth pairing agent** (`caustics-pairing`,
-pairing/README.md), and pairing from the bar. The bar's Bluetooth menu now
-discovers on every powered adapter while it is open, is discoverable to
-other devices for the same while (so a pairing can start from a phone, and
-the canvas's agent takes the question), and lists the devices
-in range that are not paired and have a name, strongest signal first,
-below the paired ones; a click pairs one (`Pair`, then `Trusted` and
-`Connect`, each step witnessed, a failure by BlueZ's error name), and a
-middle click on a paired device forgets it. BlueZ asks its default agent
-whatever the pairing needs, and that agent is a new sink of the canvas:
-registered with BlueZ's agent manager on the system bus, it turns a
-passkey to confirm, a pairing or a service to allow, and a PIN or a
-passkey to type into one prompt conversation each (the device's alias as
-the title; a confirmation is confirmed by Enter on the empty field and
-rejected by Escape), and a code to type on the device into a conversation
-held until the device pairs. The answer goes into the method's reply and
-nowhere else, and a PIN's copy is zeroed once sent; BlueZ's cancel takes
-the prompt down. The agent is opt-in, like the secret agent
-(canvas/README.md, *Enabling the pairing agent*). No wire or buffer
-contract changed; the set grows by one binary.
+**Bluetooth pairing from the bar**, and the canvas's pairing sink for a
+PIN to type (`caustics-pairing`, pairing/README.md). The bar's Bluetooth
+menu now discovers on every powered adapter while it is open, is
+discoverable to other devices for the same while (so a pairing can start
+from a phone), and lists the devices in range that are not paired and
+have a name, strongest signal first, below the paired ones; a click pairs
+one (`Pair`, then `Trusted` and `Connect`, each step witnessed, a failure
+by BlueZ's error name), and a middle click on a paired device forgets it.
+The Bluetooth sidecar is BlueZ's pairing agent, registered as the default,
+and asks each question where it belongs. A yes or a no (a passkey to
+compare, a pairing or a service to allow) is three rows on its chip, the
+question, Confirm and Reject, shown as a toast without a click and in the
+menu when it is open. A code to type on the other device is a toast too,
+updated as the device reports digits typed and gone once it pairs. Only a
+PIN or a passkey that must be typed on this machine goes to the canvas:
+the sidecar asks the pairing sink over
+`$XDG_RUNTIME_DIR/caustics-pairing.sock`, the canvas asks on its prompt,
+and the answer goes to BlueZ in the method's reply and nowhere else, its
+copies zeroed once sent; BlueZ's cancel takes the toast or the prompt
+down. The sink is opt-in, like the secret agent (canvas/README.md,
+*Enabling the pairing agent*); without it the agent registers as
+`DisplayYesNo`, and only a device that insists on a typed PIN is refused.
+No wire or buffer contract changed; the set grows by one binary.
 
 **Pipelines off the loop.** Both hosts build their caustic's pipelines on
 two compile workers instead of on their event loops, one at a time in the

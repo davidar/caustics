@@ -186,17 +186,22 @@ caustics-canvas`.
 
 ### Enabling the pairing agent
 
-`caustics-pairing` (pairing/README.md) is BlueZ's pairing agent as a sink
-of the canvas: when the bar pairs a Bluetooth device in range, or a device
-pairs with this machine while the bar's Bluetooth menu is open (the adapter
-is discoverable for exactly that while), BlueZ asks it
-to confirm a passkey or for a PIN, and it asks on the canvas's prompt and
-hands the answer to BlueZ alone. Like the secret agent it is installed with
-the set and not in the canvas's default sidecars. It registers as BlueZ's
-default agent, which a desktop's Bluetooth applet also asks to be; BlueZ
-keeps the last one that asked, so stop the other for the canvas to be the
-one that asks every time. Add it to the sidecars the drop-in names, beside
-any sink already there:
+BlueZ's pairing agent is the bar's Bluetooth sidecar, which asks every
+yes-or-no question of a pairing (compare a passkey, allow a pairing or a
+service) on its own chip, as a toast, and shows a code to type on the
+other device the same way. `caustics-pairing` (pairing/README.md) is the
+sink of the canvas for the one question the bar cannot ask: a PIN or a
+passkey that must be **typed** on this machine, which older keyboards and
+some legacy devices need. The Bluetooth sidecar asks it over
+`$XDG_RUNTIME_DIR/caustics-pairing.sock`, the canvas asks on its prompt,
+and the answer goes back to BlueZ alone.
+
+Without it, everything but those devices pairs as before: the Bluetooth
+sidecar registers as `DisplayYesNo` rather than `KeyboardDisplay`, and a
+device that still asks for a typed PIN is refused, with a witness naming
+this section. Like the secret agent it is installed with the set and not in
+the canvas's default sidecars. Add it to the sidecars the drop-in names,
+beside any sink already there:
 
 ```ini
 # ~/.config/systemd/user/caustics-canvas.service.d/pairing.conf
@@ -206,7 +211,9 @@ Environment=CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload caustics-glyph
 
 As with the others, one file names every sink that is enabled. Then
 `systemctl --user daemon-reload && systemctl --user restart
-caustics-canvas`.
+caustics-canvas`. The Bluetooth sidecar looks for the socket each time its
+menu opens and registers again with the capability that follows, so
+opening the menu once after the restart is enough.
 
 ## The lock
 

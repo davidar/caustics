@@ -331,7 +331,7 @@ There are two contracts, both in docs/abi.md, byte for byte:
 time into one `ABI_HASH`, which rides in every binary. A sidecar's first
 frame is a `Hello` carrying its hash, and a bar refuses a child whose hash is
 not its own. So the nineteen binaries (the bar, its eleven sidecars, the
-canvas host, its sidecar, its client, its polkit sink, its lock sidecar, its secret agent and its pairing agent) are one **set**: `bar/install.sh` builds
+canvas host, its sidecar, its client, its polkit sink, its lock sidecar, its secret agent and its pairing sink) are one **set**: `bar/install.sh` builds
 them together and installs them into a directory named after the hash, with
 `~/.local/bin/caustics-bar` a symlink into it. A bar resolves its sidecars beside
 its own executable, so a running bar keeps using its own set even after a

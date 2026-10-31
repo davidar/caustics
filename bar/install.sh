@@ -50,7 +50,8 @@ DROPIN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/$UNIT.service.d"
 # locker is unhooked (canvas/README.md, *Enabling the lock*), and
 # `caustics-secrets`, its NetworkManager secret agent, which a drop-in adds
 # too (canvas/README.md, *Enabling the secret agent*), and
-# `caustics-pairing`, its BlueZ pairing agent, which a drop-in adds too
+# `caustics-pairing`, its pairing sink for a Bluetooth PIN to type, which a
+# drop-in adds too
 # (canvas/README.md, *Enabling the pairing agent*). A name here
 # that is not in a host's list is a binary nothing starts; a name in a list
 # that is not here is a sidecar its host reports absent.

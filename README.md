@@ -303,8 +303,9 @@ ray-splat ground truth beside the shader's approximation.
   conversation over the wire, its socket, its dry run.
 - `secrets/README.md` — the secret agent: NetworkManager's questions as
   conversations over the wire, its dry run.
-- `pairing/README.md` — the pairing agent: BlueZ's confirmations, PINs and
-  passkeys as conversations over the wire, its dry run.
+- `pairing/README.md` — the pairing sink: a Bluetooth PIN or passkey to
+  type, asked by the bar's Bluetooth sidecar (BlueZ's agent) over a socket
+  and answered as a conversation over the wire.
 - docs/wire.md — the wire contract that replaces the ABI hash with an
   append-only rule, so sidecars from other trees can talk to the host
   (design).

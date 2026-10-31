@@ -978,7 +978,10 @@ click". `caustics-notify` sets it on its chip while a notification younger than
 its toast time exists and do-not-disturb is off, and clears it with a fresh
 frame when the youngest expires; `caustics-audio` and `caustics-power` set it
 for a moment after a volume, mute or brightness change that did not come from
-their menu, flagging the slider and checkbox rows that changed. The caustic
+their menu, flagging the slider and checkbox rows that changed; and
+`caustics-bluetooth` sets it while its pairing agent waits on a yes or a no
+(the question, disabled, then Confirm and Reject) or shows a code to type on
+the other device, flagging those rows. The caustic
 opens that item's `RFLAG_ATTENTION` rows (direct children, no separators, at most
 `TOAST_MAX_ROWS`, the frame's order) as a `POPUP_TOAST` without a grab while
 the bit is set and the popup is idle, and ends it when the bit or the frame
@@ -1080,7 +1083,8 @@ closes. `row` is the item whose menu it is, the same row both times; `pos`,
 sidecars want them: `caustics-network`, which scans for the access points in
 range while its menu is up and stops when it closes; `caustics-bluetooth`,
 which asks BlueZ to discover the devices in range on every powered adapter
-while its menu is up and stops when it closes; `caustics-power`, which
+while its menu is up and stops when it closes, and on each open looks
+whether the canvas's pairing sink answers its socket; `caustics-power`, which
 polls the backlight when the battery's menu opens and once a second while it
 stays up, and never on a clock while it is closed; and both it and
 `caustics-audio`, which raise no on-screen display toast while their menu is
