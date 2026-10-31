@@ -97,6 +97,12 @@ reached its depth stays there until one of those. `status` begins with
 | 2 | was cancelled by input (the user is back), or ended first by an `undim` or a newer `dim` |
 | 1 | could not be asked for, or the canvas went away before it was over |
 
+In an idle daemon's hooks, write the client as
+`~/.local/bin/caustics-canvasctl` (or the full path it expands to, where the
+daemon's configuration does not expand `~`): a daemon started by the
+compositor or by a unit often has no `~/.local/bin` on its `PATH`, and a
+hook that cannot find the client fails without a word on screen.
+
 While the session is locked, a dim is reached at once: the lock is darker
 than any dim, so `dim … --wait` is `done` straight away, exits 0, and
 nothing is drawn, and the unlock never lands on a dimmed desktop.
@@ -208,8 +214,10 @@ or a unit. To take it on:
    then `systemctl --user daemon-reload && systemctl --user restart
    caustics-canvas`.
 3. Point the idle daemon's lock and before-sleep commands at
-   `caustics-canvasctl lock` and `caustics-canvasctl lock --wait`, or leave
-   them to logind's signal, which the sidecar hears itself.
+   `~/.local/bin/caustics-canvasctl lock` and
+   `~/.local/bin/caustics-canvasctl lock --wait`, by the full path for the
+   reason above, or leave them to logind's signal, which the sidecar hears
+   itself.
 4. Lock and unlock once by hand, then **through a suspend**, before the
    previous locker is removed (docs/canvas.md, *Order*). Until then it is a
    drop-in removal and a hook away.
