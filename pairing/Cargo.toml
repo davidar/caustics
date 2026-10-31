@@ -1,0 +1,37 @@
+[package]
+name = "caustics-pairing"
+version = "0.1.0"
+edition.workspace = true
+description = "The canvas's BlueZ pairing agent: a device's confirmation, PIN or passkey question turned into a prompt conversation over the wire, and the answer handed to BlueZ alone"
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "caustics-pairing"
+path = "src/main.rs"
+
+[dependencies]
+# The wire: `Hello` and `Prompt` out, `Answer` in (docs/abi.md, *Prompt*,
+# *Answer*).
+caustics-bar-abi = { path = "../bar/abi" }
+# The witness line, and the drain the agent's signal streams (BlueZ's name
+# changing hands, a device's properties while its passkey is shown) go to the
+# moment they exist (docs/architecture.md, *Rules*).
+caustics-sidecar = { path = "../sidecar", features = ["drain"] }
+# One current-thread runtime for the bus, as the other D-Bus sidecars.
+tokio = { version = "1.53.1", default-features = false, features = [
+    "rt",
+    "net",
+    "sync",
+    "time",
+    "macros",
+] }
+# The reply's copy of a typed PIN, zeroed when the reply has been sent.
+zeroize = "1.9.1"
+# The agent object and BlueZ's agent manager. `tokio` instead of the default
+# `async-io`, so the process carries one executor rather than two.
+zbus = { version = "5.19.0", default-features = false, features = ["tokio"] }
+
+[dev-dependencies]
+# The private `dbus-daemon` the agent's bus test runs against.
+caustics-sidecar = { path = "../sidecar", features = ["drain", "test-bus"] }

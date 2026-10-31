@@ -2,7 +2,7 @@
 # The bar process, its ABI crate, the host mechanism it is a client of, its
 # sidecars, the canvas host and its sidecars, and the crates they share. The text engine is punchcutter, a
 # dependency.
-members = ["apps", "audio", "bar", "bar/abi", "bluetooth", "canvas", "glyphs", "harness/keyboard", "harness/pointer", "host", "lock", "network", "notify", "polkit", "power", "reload", "secrets", "sidecar", "sysmon", "tray", "wallpaper"]
+members = ["apps", "audio", "bar", "bar/abi", "bluetooth", "canvas", "glyphs", "harness/keyboard", "harness/pointer", "host", "lock", "network", "notify", "pairing", "polkit", "power", "reload", "secrets", "sidecar", "sysmon", "tray", "wallpaper"]
 # The edition-2024 default, stated because it matters here: `bar` depends on
 # `punchcutter-core` without features from its build script and with `gpu` from
 # its code, and on `punchcutter-slang` with its compiler from its build script

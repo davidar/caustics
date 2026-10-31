@@ -82,6 +82,8 @@ frames the host copies and the caustic lays out.
   polkit helper.
 - **`caustics-secrets`**: NetworkManager's secret agent, which asks for a
   network's passphrase and hands it to NetworkManager.
+- **`caustics-pairing`**: BlueZ's pairing agent, which asks to confirm a
+  passkey or for a PIN while a device pairs and hands the answer to BlueZ.
 - **`caustics-greet`**: greetd's protocol, the session list, the last choice.
 
 The greeter is the same host started by the display manager with only the
@@ -356,6 +358,12 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   connection whose secret it has not got, one `PROMPT_SECRET` per request,
   and return the answer in the method's reply; it stores nothing
   (secrets/README.md).
+- **`caustics-pairing`**: answer BlueZ's `Agent1` calls while a device
+  pairs: a confirmation (`RequestConfirmation`, `RequestAuthorization`,
+  `AuthorizeService`) as an echoed ask that an empty answer confirms, a PIN
+  or a passkey as an echoed ask, and a code BlueZ shows as a held
+  conversation with no ask; return the answer in the method's reply
+  (pairing/README.md).
 - **`caustics-greet`**: length-prefixed JSON on `$GREETD_SOCK`:
   `create_session{username}` → `auth_message{type, text}` round trips via
   `post_auth_message_response{response}` → `start_session{cmd, env}`. greetd
@@ -432,6 +440,13 @@ Timeouts and attempt limits belong to the sink; PAM already enforces them.
   NetworkManager asks the agent; a join that ends before it ever
   connected deletes the profile it added. The bar never holds the
   passphrase.
+- **pairing**: serve `org.bluez.Agent1` at `/caustics/pairing` on the
+  system bus and call `AgentManager1.RegisterAgent(path,
+  "KeyboardDisplay")` and `RequestDefaultAgent` from that same connection.
+  The bar's Bluetooth sidecar discovers while its menu is open and pairs a
+  device in range by `Device1.Pair()`, which has no agent of its own, so
+  BlueZ asks the default agent. One prompt at a time; the rest queue;
+  `Cancel` ends the one on screen. The bar never holds a PIN.
 - **greet**: the display manager's `default_session.command` runs the host
   as the greeter user inside the compositor it starts, with
   `$CAUSTICS_SIDECARS` naming only the greet sidecar. Needs nothing from a
@@ -473,6 +488,7 @@ process holding a secret is the canvas host, and the bar is not it.
 | `caustics-lock` | locked | the host stays locked (it never unlocks on its own); the sidecar restarts, reads `LockedHint`, resumes the conversation |
 | the fingerprint reader | locked | the password keeps working; the sidecar releases what it held and claims the reader again after a pause that doubles from 1 s to 30 s while its window stays open (a resume from suspend is the usual cause; fprintd reports a sensor disabled for heat the same way, so the pause starts again from 1 s only after a verify that was live for a minute); fprintd itself dying releases its claim, and the next claim starts it again; the machine going to sleep closes the window, and none opens until the resume, so no claim races the suspend |
 | `caustics-secrets` | mid-prompt | the host takes the prompt down with its pipe; NetworkManager's call fails, so the join fails and the bar's network sidecar deletes the profile it added; the sidecar restarts and registers again |
+| `caustics-pairing` | mid-prompt | the host takes the prompt down with its pipe; BlueZ's call fails, so the pairing fails and the bar's Bluetooth sidecar witnesses BlueZ's error; the sidecar restarts and registers again |
 | `caustics-polkit` | mid-prompt | the host takes the prompt down with its pipe; polkitd times out the request; the caller sees "not authorized"; the sidecar restarts and re-registers |
 | the host | greeting | the display manager restarts it; nothing was logged in |
 
@@ -508,6 +524,10 @@ suspend cycle and a relogin.
    settings program; now the bar lists networks, NetworkManager asks the
    agent for the passphrase, and the bar never holds it. 802.1X networks
    still need a profile made elsewhere.
+7. **Bluetooth pairing.** Built: `caustics-pairing`, BlueZ's pairing
+   agent, and the bar's Bluetooth sidecar listing the devices in range
+   while its menu is open and pairing one with a click. A confirmation or a
+   PIN is asked on the canvas's prompt; the bar never holds one.
 
 ## Open questions
 

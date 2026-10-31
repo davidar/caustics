@@ -184,6 +184,28 @@ agent or the lock enabled too, one file names them all. Then
 `systemctl --user daemon-reload && systemctl --user restart
 caustics-canvas`.
 
+### Enabling the pairing agent
+
+`caustics-pairing` (pairing/README.md) is BlueZ's pairing agent as a sink
+of the canvas: when the bar pairs a Bluetooth device in range, BlueZ asks it
+to confirm a passkey or for a PIN, and it asks on the canvas's prompt and
+hands the answer to BlueZ alone. Like the secret agent it is installed with
+the set and not in the canvas's default sidecars. It registers as BlueZ's
+default agent, which a desktop's Bluetooth applet also asks to be; BlueZ
+keeps the last one that asked, so stop the other for the canvas to be the
+one that asks every time. Add it to the sidecars the drop-in names, beside
+any sink already there:
+
+```ini
+# ~/.config/systemd/user/caustics-canvas.service.d/pairing.conf
+[Service]
+Environment=CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload caustics-glyphs caustics-pairing"
+```
+
+As with the others, one file names every sink that is enabled. Then
+`systemctl --user daemon-reload && systemctl --user restart
+caustics-canvas`.
+
 ## The lock
 
 `caustics-lock` (lock/README.md) is the session's locker as a sidecar of
