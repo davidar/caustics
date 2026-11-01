@@ -24,6 +24,12 @@
 //!   draws nothing until it has landed; its loop stays live meanwhile, and
 //!   the landing's wake brings the frame. A frame submitted in the instant
 //!   between that check and a worker's submit waits once; nothing is lost.
+//!   **Nor is a surface configured behind one**: wgpu waits for the queue to
+//!   go idle inside a configure ([`SUBMIT`] says so), so a host that gave a
+//!   new pane its swapchain while the shaper warmed stood in that wait for
+//!   the compile, reading no Wayland event and no pipe, and learned the
+//!   compositor's `locked` a minute late. A pane that appears while a
+//!   pipeline warms keeps its swapchain pending until the landing.
 //! - **Each worker holds its own validation error scope.** wgpu's error
 //!   scopes are per thread (a scope pushed on one thread never sees another's
 //!   errors), so a rejected module on a worker is that job's result and

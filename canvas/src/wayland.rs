@@ -225,6 +225,9 @@ struct Pane {
     configured: bool,
     /// A size or a scale that the swapchain has not caught up with.
     pending: bool,
+    /// `pending` was left so by `service` because a pipeline was warming;
+    /// said once in the journal, not once per dispatch.
+    held: bool,
     /// Something changed that this pane has not drawn.
     dirty: bool,
     pacing: Pacing,
@@ -607,6 +610,7 @@ impl Canvas {
             scale: integer * SCALE_ONE,
             configured: false,
             pending: false,
+            held: false,
             dirty: false,
             pacing: Pacing::new(Instant::now()),
             pointer_frames: false,
@@ -729,12 +733,33 @@ impl Canvas {
     /// round trip of its own while a surface is created).
     pub fn service(&mut self) -> Result<()> {
         let mut sized = false;
+        // A swapchain is configured on an idle queue only: wgpu waits for
+        // the queue inside a configure, and a pipeline warming on it is the
+        // driver's whole compile on a software rasteriser, a minute for the
+        // shaper, which this loop would stand in: reading no Wayland event
+        // and no sidecar pipe, and learning `locked` when the compile ended
+        // rather than when the compositor said it. A pane configured while
+        // one warms stays pending, and the landing's dispatch comes back
+        // here (`after_dispatch`), as a frame does (`render`).
+        let warming = self.gpu.as_ref().is_some_and(|gpu| gpu.warming());
         for index in 0..self.panes.len() {
             let pane = &mut self.panes[index];
             if !pane.configured || !pane.pending {
                 continue;
             }
+            if warming {
+                if !pane.held {
+                    pane.held = true;
+                    tracing::info!(
+                        "output {}: the {}'s swapchain waits for a warming pipeline",
+                        pane.name,
+                        pane.role.name()
+                    );
+                }
+                continue;
+            }
             pane.pending = false;
+            pane.held = false;
             pane.dirty = true;
             sized |= pane.role.sizes_the_picture();
             let (width, height) = pane.buffer();

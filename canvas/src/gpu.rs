@@ -608,6 +608,15 @@ impl Gpu {
         landed
     }
 
+    /// Whether a pipeline's warming dispatch is on the queue
+    /// (`Program::warming`). Nothing is submitted behind one, and no
+    /// swapchain is configured behind one either: wgpu waits for the queue
+    /// to go idle inside a configure, which on a software rasteriser is the
+    /// driver's whole compile (`caustics_host::compile`).
+    pub fn warming(&self) -> bool {
+        self.program.warming()
+    }
+
     /// Whether a frame can be drawn on a surface: `canvas_apply` and
     /// `canvas_draw` are built. The text needs `canvas_shape` as well and
     /// waits for it on its own; a frame before it draws no glyphs.

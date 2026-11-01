@@ -1188,6 +1188,15 @@ impl Bar {
     /// on what else is pending on the queue — which is exactly the sort of
     /// bug that would otherwise show up once a month on somebody's machine.
     pub fn service_surfaces(&mut self) -> Result<()> {
+        // No swapchain is configured while a pipeline warms: wgpu waits for
+        // the queue inside a configure, and on a software rasteriser the
+        // warming dispatch is the driver's whole compile, which this loop
+        // would stand in (`caustics_host::compile`). The bar's resize and
+        // the popup's attach stay pending, and the landing's dispatch comes
+        // back here (`after_dispatch`), as the frame does (`can_render`).
+        if self.gpu.as_ref().is_some_and(|gpu| gpu.warming()) {
+            return Ok(());
+        }
         if let Some((width, height)) = self.pending_surface.take() {
             match self.gpu.as_mut() {
                 Some(gpu) => gpu.resize_bar(width, height),

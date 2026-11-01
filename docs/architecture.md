@@ -224,10 +224,13 @@ software rasteriser (lavapipe) compiles at a pipeline's first dispatch, not
 at its creation, and that dispatch would otherwise be the host's first
 frame, seconds long. lavapipe runs its queue on one thread, so while a
 warming dispatch is on it the host submits nothing and draws when the
-pipeline lands. A hot reload is the same queue: its pipelines build beside
-the running caustic and swap in together when the last is built and
-validated, or not at all, and a newer save supersedes a generation still
-building.
+pipeline lands; nor does it configure a swapchain, since wgpu waits for the
+queue inside a configure: a surface that appears meanwhile, a lock pane or
+a popup, is given its swapchain at the landing, and the loop stays live for
+the compositor's events and every pipe. A hot reload is the same queue: its
+pipelines build beside the running caustic and swap in together when the
+last is built and validated, or not at all, and a newer save supersedes a
+generation still building.
 
 **The canvas's draw is one pipeline per surface.** `canvas_draw` is the
 background, the overlay, the prompt's pane and the lock in one entry point,
