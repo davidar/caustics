@@ -17,6 +17,12 @@
 //! size (the smaller of the two ratios is 1), never cropped, so the caustic's
 //! own fit (`canvas_tunables.slang`, `FIT`) still has the whole picture to
 //! crop or to letterbox.
+//!
+//! An SVG has no pixels of its own, so it is not decoded and then fitted: it
+//! is rasterised once, at the size the fit would have given a raster of its
+//! intrinsic size, which is the size the output shows. Its filters and
+//! gradients then cost the output's pixels, not the thousands of nominal
+//! pixels a wallpaper's `width` and `height` are drawn for.
 
 use std::path::Path;
 
@@ -34,11 +40,32 @@ pub struct Pixels {
     pub rgba: Vec<u8>,
 }
 
-/// Read and decode a PNG, a JPEG or a JPEG XL, by its first bytes.
-pub fn load(path: &Path) -> Result<Pixels, String> {
+/// A picture read for an output: its pixels fitted to `target`
+/// ([`fitted_size`]), and the size the file itself was.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Fitted {
+    pub pixels: Pixels,
+    pub from: (u32, u32),
+}
+
+/// Read a PNG, a JPEG, a JPEG XL or an SVG, by its first bytes, fitted for
+/// an output of `target` (or, with no output known, for the largest image
+/// the wire carries). A raster is decoded at its own size and shrunk
+/// ([`fit`]); an SVG is rasterised at the fitted size straight away.
+pub fn load(path: &Path, target: Option<(u32, u32)>) -> Result<Fitted, String> {
     let data =
         std::fs::read(path).map_err(|err| format!("could not read {}: {err}", path.display()))?;
-    decode(&data).map_err(|err| format!("{}: {err}", path.display()))
+    let at = |err| format!("{}: {err}", path.display());
+    if is_svg(&data) {
+        let (pixels, from) = render_svg(&data, |w, h| fitted_size(w, h, target)).map_err(at)?;
+        return Ok(Fitted { pixels, from });
+    }
+    let pixels = decode(&data).map_err(at)?;
+    let from = (pixels.width, pixels.height);
+    Ok(Fitted {
+        pixels: fit(pixels, target),
+        from,
+    })
 }
 
 /// A JPEG XL codestream's first bytes.
@@ -49,7 +76,18 @@ const JXL_CONTAINER: [u8; 12] = [
     0x00, 0x00, 0x00, 0x0c, b'J', b'X', b'L', b' ', 0x0d, 0x0a, 0x87, 0x0a,
 ];
 
-/// Decode a PNG, a JPEG or a JPEG XL.
+/// Whether `data` is an SVG document: text that begins, after a UTF-8 byte
+/// order mark and whitespace if there are any, with an XML declaration or
+/// the `svg` element itself. (A file whose name ends in `.svg` is not
+/// consulted: the sidecar knows every picture by its bytes.)
+fn is_svg(data: &[u8]) -> bool {
+    let text = data.strip_prefix(b"\xef\xbb\xbf").unwrap_or(data);
+    let text = text.trim_ascii_start();
+    text.starts_with(b"<?xml") || text.starts_with(b"<svg")
+}
+
+/// Decode a PNG, a JPEG or a JPEG XL, or rasterise an SVG at its intrinsic
+/// size.
 pub fn decode(data: &[u8]) -> Result<Pixels, String> {
     if data.starts_with(&[0x89, b'P', b'N', b'G']) {
         decode_png(data)
@@ -57,8 +95,10 @@ pub fn decode(data: &[u8]) -> Result<Pixels, String> {
         decode_jpeg(data)
     } else if data.starts_with(&JXL_CODESTREAM) || data.starts_with(&JXL_CONTAINER) {
         decode_jxl(data)
+    } else if is_svg(data) {
+        render_svg(data, |w, h| (w, h)).map(|(pixels, _)| pixels)
     } else {
-        Err("not a PNG, a JPEG or a JPEG XL".to_owned())
+        Err("not a PNG, a JPEG, a JPEG XL or an SVG".to_owned())
     }
 }
 
@@ -319,6 +359,59 @@ fn decode_jxl_in_bands(data: &[u8], band_rows: u32) -> Result<Pixels, String> {
         height,
         rgba,
     })
+}
+
+/// Rasterise an SVG with resvg, at the size `at` picks for its intrinsic
+/// size (the `width` and `height` it declares, or its `viewBox`; usvg
+/// resolves the two), scaled to fill that size exactly: `at` keeps the
+/// shape, as [`fitted_size`] does, so nothing is cropped or letterboxed
+/// here. The intrinsic size is given back beside the pixels, as the size
+/// the file "was".
+///
+/// The intrinsic size is bounded like a raster's ([`check_size`]), so a
+/// document that declares a mile of pixels is refused whatever `at` would
+/// have rendered. usvg's own limits hold besides: a million elements, and
+/// no external file an `href` names, since no resources directory is set.
+/// No fonts are loaded: a `text` element renders nothing, which the
+/// wallpapers a distribution ships never carry. Transparent where nothing
+/// is drawn, straight alpha like every other picture.
+fn render_svg(
+    data: &[u8],
+    at: impl FnOnce(u32, u32) -> (u32, u32),
+) -> Result<(Pixels, (u32, u32)), String> {
+    use resvg::tiny_skia::{Pixmap, Transform};
+    use resvg::usvg;
+
+    let tree = usvg::Tree::from_data(data, &usvg::Options::default())
+        .map_err(|err| format!("SVG: {err}"))?;
+    let size = tree.size();
+    let from = (
+        size.width().round().max(1.0) as u32,
+        size.height().round().max(1.0) as u32,
+    );
+    check_size(from.0, from.1)?;
+    let (width, height) = at(from.0, from.1);
+    check_size(width, height)?;
+    let mut pixmap = Pixmap::new(width, height).ok_or("SVG: a pixmap too large to hold")?;
+    resvg::render(
+        &tree,
+        Transform::from_scale(width as f32 / size.width(), height as f32 / size.height()),
+        &mut pixmap.as_mut(),
+    );
+    // tiny-skia's pixels are premultiplied RGBA8 in memory order.
+    let mut rgba = pixmap.take();
+    if rgba.len() != width as usize * height as usize * 4 {
+        return Err("SVG: a pixmap shorter than its size".to_owned());
+    }
+    unpremultiply(&mut rgba);
+    Ok((
+        Pixels {
+            width,
+            height,
+            rgba,
+        },
+        from,
+    ))
 }
 
 /// Premultiplied RGBA8 to straight, in place; a transparent pixel's colour

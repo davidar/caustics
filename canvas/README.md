@@ -72,10 +72,11 @@ caustics-canvasctl dim 1 over 10 --wait && systemctl suspend
 caustics-canvasctl undim
 ```
 
-A picture is a PNG, a JPEG or a JPEG XL, the formats a distribution ships
-its wallpapers in; the sidecar knows each by its first bytes, whatever the
-file is called; one it cannot decode is an `error` reply with the decoder's
-reason.
+A picture is a PNG, a JPEG, a JPEG XL or an SVG, the formats a
+distribution ships its wallpapers in; the sidecar knows each by its first
+bytes, whatever the file is called; one it cannot decode is an `error` reply
+with the decoder's reason. An SVG is rasterised once, at the size the
+output shows (no fonts are loaded, so a `text` element draws nothing).
 
 A dim is drawn on an overlay over every window, the bar included: the
 wallpaper itself, at the dim's alpha, so the windows dissolve and the

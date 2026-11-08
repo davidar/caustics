@@ -505,6 +505,7 @@ dependencies = [
  "jxl-oxide",
  "libc",
  "png",
+ "resvg",
  "zune-jpeg",
 ]
 

@@ -2,8 +2,8 @@
 //! *One host, sink sidecars*).
 //!
 //! It owns the control socket, `$XDG_RUNTIME_DIR/caustics-canvas.sock`, whose
-//! language is [`command`]'s; it decodes and fits the pictures, PNG, JPEG or
-//! JPEG XL ([`picture`]); and it writes them to the canvas host as `Image`
+//! language is [`command`]'s; it decodes and fits the pictures, PNG, JPEG,
+//! JPEG XL or SVG ([`picture`]); and it writes them to the canvas host as `Image`
 //! frames, each followed by the `Canvas` frame that shows it (docs/abi.md,
 //! *Image*, *Canvas*). The host copies the bytes and the caustic fades; how
 //! far a fade is, this process knows from its own clock, which is the clock
@@ -552,9 +552,10 @@ fn show(
     last: &Last,
 ) -> Result<Shown, String> {
     let started = Instant::now();
-    let pixels = picture::load(path)?;
-    let (from_width, from_height) = (pixels.width, pixels.height);
-    let fitted = picture::fit(pixels, size);
+    let picture::Fitted {
+        pixels: fitted,
+        from: (from_width, from_height),
+    } = picture::load(path, size)?;
     *serial = serial.wrapping_add(1);
     let key = frames::key(std::process::id(), *serial);
     let (width, height) = (fitted.width, fitted.height);

@@ -74,7 +74,7 @@ frames the host copies and the caustic lays out.
   and the host's answers are frames too (`locked`, `input during a dim`,
   the typed bytes down the asking sidecar's stdin).
 - **`caustics-wallpaper`**: the control socket (`show`, `dim`, `undim`,
-  `status`), image decoding (PNG, JPEG and JPEG XL), the schedule's
+  `status`), image decoding (PNG, JPEG, JPEG XL and SVG), the schedule's
   cross-fades.
 - **`caustics-lock`**: logind (the `Lock` signal, `LockedHint`), the PAM
   conversation and the fingerprint reader.

@@ -30,3 +30,7 @@ libc = "0.2.189"
 # `caustics-tray` and `caustics-apps` already use.
 png = "0.18.1"
 zune-jpeg = "0.5.15"
+# SVG, which a distribution's wallpaper of the month may be: rasterised once,
+# at the size the output shows. The workspace already carries it through
+# `caustics-apps`.
+resvg = "0.48.1"

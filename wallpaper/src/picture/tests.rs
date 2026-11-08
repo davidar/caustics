@@ -263,6 +263,83 @@ fn a_truncated_jpeg_xl_is_refused() {
     assert!(err.starts_with("JPEG XL"), "{err}");
 }
 
+/// A 4x3 SVG: the left half green, the right half half-transparent red.
+const SVG: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="3">
+<rect width="2" height="3" fill="#00ff00"/>
+<rect x="2" width="2" height="3" fill="#ff0000" fill-opacity="0.5"/>
+</svg>"##;
+
+/// An SVG rasterises at its intrinsic size to straight RGBA, and is known
+/// by its bytes: with an XML declaration, a byte order mark or whitespace
+/// first as well as bare.
+#[test]
+fn an_svg_renders_to_its_pixels() {
+    let decoded = decode(SVG.as_bytes()).expect("decodes");
+    assert_eq!((decoded.width, decoded.height), (4, 3));
+    for (i, px) in decoded.rgba.chunks_exact(4).enumerate() {
+        if i % 4 < 2 {
+            assert_eq!(px, [0, 255, 0, 255], "pixel {i}");
+        } else {
+            assert_eq!(px[3], 128, "pixel {i}: half alpha");
+            assert_eq!(
+                px[..3],
+                [255, 0, 0],
+                "pixel {i}: straight red, not premultiplied"
+            );
+        }
+    }
+    let declared = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n{SVG}");
+    assert_eq!(decode(declared.as_bytes()).expect("declared"), decoded);
+    let marked = format!("\u{feff}\n  {SVG}");
+    assert_eq!(decode(marked.as_bytes()).expect("marked"), decoded);
+}
+
+/// A document that is not an SVG, or an SVG cut short, is the parser's
+/// error; a size past the cap is refused before a pixmap exists.
+#[test]
+fn a_broken_or_outsize_svg_is_refused() {
+    let err = decode(b"<?xml version=\"1.0\"?><html/>").unwrap_err();
+    assert!(err.starts_with("SVG"), "{err}");
+    let err = decode(&SVG.as_bytes()[..SVG.len() / 2]).unwrap_err();
+    assert!(err.starts_with("SVG"), "{err}");
+    let huge = r##"<svg xmlns="http://www.w3.org/2000/svg" width="100000" height="100000"/>"##;
+    let err = decode(huge.as_bytes()).unwrap_err();
+    assert!(err.contains("more pixels"), "{err}");
+}
+
+/// Loaded for an output, an SVG is rasterised at the fitted size in one
+/// pass, the size it declared reported beside; a raster is decoded and then
+/// shrunk to the same size.
+#[test]
+fn load_fits_an_svg_by_rendering_it_at_the_fitted_size() {
+    let dir = std::env::temp_dir().join(format!("caustics-wallpaper-svg-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let big = r##"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200">
+<rect width="400" height="200" fill="#09080a"/></svg>"##;
+    let svg = dir.join("big.svg");
+    std::fs::write(&svg, big).unwrap();
+    let fitted = load(&svg, Some((100, 40))).expect("loads");
+    assert_eq!(fitted.from, (400, 200));
+    assert_eq!((fitted.pixels.width, fitted.pixels.height), (100, 50));
+    assert!(
+        fitted
+            .pixels
+            .rgba
+            .chunks_exact(4)
+            .all(|px| px == [9, 8, 10, 255])
+    );
+    let png = dir.join("big.png");
+    std::fs::write(&png, png_of(400, 200, &[9, 8, 10, 255].repeat(400 * 200))).unwrap();
+    assert_eq!(load(&png, Some((100, 40))).expect("loads"), fitted);
+    let small = load(&svg, Some((800, 600))).expect("loads");
+    assert_eq!(
+        (small.pixels.width, small.pixels.height),
+        (400, 200),
+        "never up"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// Premultiplied to straight: divided back out, transparent left alone.
 #[test]
 fn unpremultiplying_divides_by_alpha() {
@@ -271,29 +348,25 @@ fn unpremultiplying_divides_by_alpha() {
     assert_eq!(rgba, vec![128, 64, 0, 128, 10, 20, 30, 0, 1, 2, 3, 255]);
 }
 
-/// Real pictures, decoded and fitted the way `show` does, with the time it
-/// took: `CAUSTICS_WALLPAPER_PROBE=/a.jxl:/b.jxl cargo test --release -p
-/// caustics-wallpaper -- --ignored --nocapture probe`. Nothing is checked
-/// but that each decodes.
+/// Real pictures, decoded and fitted the way `show` does for a 2560x1600
+/// output, with the time it took: `CAUSTICS_WALLPAPER_PROBE=/a.jxl:/b.svg
+/// cargo test --release -p caustics-wallpaper -- --ignored --nocapture
+/// probe`. Nothing is checked but that each decodes.
 #[test]
 #[ignore = "needs CAUSTICS_WALLPAPER_PROBE, a list of picture paths"]
 fn probe() {
     let paths = std::env::var_os("CAUSTICS_WALLPAPER_PROBE").expect("CAUSTICS_WALLPAPER_PROBE");
     for path in std::env::split_paths(&paths) {
         let started = std::time::Instant::now();
-        let pixels = load(&path).expect("decodes");
-        let decoded = started.elapsed();
-        let (width, height) = (pixels.width, pixels.height);
-        let fitted = fit(pixels, Some((2560, 1600)));
+        let fitted = load(&path, Some((2560, 1600))).expect("decodes");
         println!(
-            "{}: {}x{} decoded in {} ms; fitted to {}x{} in {} ms more",
+            "{}: {}x{} decoded and fitted to {}x{} in {} ms",
             path.display(),
-            width,
-            height,
-            decoded.as_millis(),
-            fitted.width,
-            fitted.height,
-            (started.elapsed() - decoded).as_millis()
+            fitted.from.0,
+            fitted.from.1,
+            fitted.pixels.width,
+            fitted.pixels.height,
+            started.elapsed().as_millis()
         );
     }
 }

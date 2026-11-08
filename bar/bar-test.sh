@@ -4623,6 +4623,59 @@ elif [[ "$CANVAS_RUN" -eq 1 ]]; then
     fi
 fi
 
+say "29c. an SVG picture shows, rasterised at the output, and a broken one is the client's error"
+if [[ "$CANVAS_RUN" -eq 1 ]]; then
+    # Solid magenta, declared at twice the output's size so the sidecar has
+    # to rasterise it at the fitted size rather than show it as it is; and
+    # its first half, which ends inside the document.
+    printf '<svg xmlns="http://www.w3.org/2000/svg" width="2560" height="1600"><rect width="2560" height="1600" fill="#ff00ff"/></svg>\n' \
+        >"$SHOTS/canvas-magenta.svg"
+    head -c "$(($(stat -c %s "$SHOTS/canvas-magenta.svg") / 2))" "$SHOTS/canvas-magenta.svg" \
+        >"$SHOTS/canvas-broken.svg"
+    to_target "$SHOTS/canvas-magenta.svg" canvas-magenta.svg
+    to_target "$SHOTS/canvas-broken.svg" canvas-broken.svg
+    shows_before=$(canvas_count "canvas: show ")
+    reply=$(canvasctl show '"$T_HOME/canvas-magenta.svg"' 2>&1)
+    if [[ $? -eq 0 ]]; then
+        pass "caustics-canvasctl show of an SVG exited 0"
+    else
+        fail "caustics-canvasctl show of an SVG: $reply"
+    fi
+    if wait_until "canvas: show" 30 "canvas_more 'canvas: show ' $shows_before"; then
+        pass "$(canvas_last 'canvas: show ' | sed -n 's/.*INFO [a-z_:]*: //p')"
+    else
+        fail "the caustic never saw the SVG's show"
+    fi
+    showing=$(canvas_log | grep -E 'showing .*canvas-magenta\.svg' | tail -1)
+    if [[ "$showing" == *" from 2560x1600, "* && "$showing" != *": 2560x1600 from "* ]]; then
+        pass "rasterised at the fitted size, not the declared one: ${showing#*showing }"
+    else
+        fail "the sidecar's witness does not say a fit from 2560x1600: $showing"
+    fi
+    shot canvas-magenta.png
+    got=($(canvas_mean canvas-magenta.png))
+    if ((got[0] >= 240 && got[2] >= 240 && got[1] <= 15)); then
+        pass "the output is the SVG's magenta: mean ${got[*]}"
+    else
+        fail "the output is ${got[*]}, not the SVG's magenta"
+    fi
+    reply=$(canvasctl show '"$T_HOME/canvas-broken.svg"' 2>&1)
+    if [[ $? -eq 1 && "$reply" == *"SVG"* ]]; then
+        pass "a cut-short SVG is refused with the parser's reason: $reply"
+    else
+        fail "a cut-short SVG was not refused as the client's error: $reply"
+    fi
+    # Blue again, cut, as step 29 left it: the steps after read it.
+    shows_before=$(canvas_count "canvas: show ")
+    canvasctl show '"$T_HOME/canvas-blue.png"' >/dev/null 2>&1 ||
+        fail "caustics-canvasctl show of the blue picture again failed"
+    if wait_until "canvas: show" 30 "canvas_more 'canvas: show ' $shows_before"; then
+        pass "blue again for the steps after"
+    else
+        fail "the caustic never saw the blue picture shown again"
+    fi
+fi
+
 say "30. a canvas tunables edit hot-reloads the canvas and not the bar"
 if [[ "$CANVAS_RUN" -eq 1 ]]; then
     swaps_before=$(canvas_count "modules, swapped")
