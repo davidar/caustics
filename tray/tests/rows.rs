@@ -1318,6 +1318,23 @@ fn ids_are_stable_across_frames_when_the_menu_changes() {
     let count = seen.len();
     seen.dedup();
     assert_eq!(seen.len(), count, "ids are unique within a frame");
+    // The row that went is forgotten by name: an item that numbers its menu
+    // afresh on every rewrite must not grow the map for the life of the
+    // process. The item and the two rows on the frame are what is held.
+    assert_eq!(ids.held(), 3);
+    // And were it to come back, it would be a new number, never its old one.
+    let third = build(
+        &[Entry {
+            key: ":1.6",
+            item: &sni,
+            menu: Some(&before),
+        }],
+        &mut ids,
+        3,
+    );
+    let back = third.rows.rows.iter().map(|r| r.id).max().unwrap();
+    assert!(back > second.rows.rows.iter().map(|r| r.id).max().unwrap());
+    assert_eq!(ids.held(), 3);
 }
 
 // ---------------------------------------------------------------------------

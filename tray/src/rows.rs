@@ -86,15 +86,22 @@ pub struct Built {
     pub pixmaps: Vec<(String, Vec<u8>)>,
 }
 
-/// A stable row id per thing, for the life of the process.
+/// A stable row id per thing, for as long as the thing is in the frame.
 ///
 /// Never reused, including after an item unregisters: an id that came back
 /// meaning something else would turn a click that raced a frame into a click
-/// on the wrong row, and ids are cheap.
+/// on the wrong row, and ids are cheap. The *names* are what is not kept: a
+/// menu row a build did not walk is forgotten at the end of it
+/// ([`Ids::sweep`]), because some items number their menu rows afresh on
+/// every rewrite and rewrite twice a second, and a map that remembered each
+/// would grow for the life of the process. A row that comes back gets a new
+/// number, which is all "never reused" asks.
 #[derive(Debug, Default)]
 pub struct Ids {
     next: u32,
-    map: HashMap<Key, u32>,
+    /// The id, and the build that last asked for it.
+    map: HashMap<Key, (u32, u64)>,
+    build: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -107,12 +114,30 @@ impl Ids {
     /// The id for `key`, allocating on first sight. Starts at 1: 0 is a fine
     /// id on the wire, but a zero in a witness reads like "none".
     fn get(&mut self, key: Key) -> u32 {
-        if let Some(id) = self.map.get(&key) {
+        let build = self.build;
+        if let Some((id, seen)) = self.map.get_mut(&key) {
+            *seen = build;
             return *id;
         }
         self.next += 1;
-        self.map.insert(key, self.next);
+        self.map.insert(key, (self.next, build));
         self.next
+    }
+
+    /// End a build: forget every menu row it did not ask about. An item keeps
+    /// its id while it is off the frame (`Passive`, or past what fits), since
+    /// items are as few as the registrations.
+    fn sweep(&mut self) {
+        let build = self.build;
+        self.map
+            .retain(|key, (_, seen)| matches!(key, Key::Item(_)) || *seen == build);
+        self.build += 1;
+    }
+
+    /// How many names are held — the tests' way of asking whether rows that
+    /// went were forgotten.
+    pub fn held(&self) -> usize {
+        self.map.len()
     }
 
     pub fn item(&mut self, key: &str) -> u32 {
@@ -174,6 +199,7 @@ pub fn build(
         }
     }
 
+    ids.sweep();
     Built {
         rows: out.rows.build(),
         targets: out.targets,
