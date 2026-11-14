@@ -927,11 +927,17 @@ impl Facts {
                 }
                 // The pixels may be here; the name and the argv are an `App`
                 // answer, and only `caustics-apps` has those.
-                let landed = self
-                    .pixmaps
-                    .get(&name)
-                    .and_then(|held| images.insert(&name, &held.rgba));
-                if self.app(&name).is_none() {
+                let held = self.pixmaps.get(&name);
+                // Pixels the store no longer holds (its bound let them go, or
+                // `caustics-apps` restarted and took its keys with it) come
+                // back only with the answer, so the question goes out again.
+                let gone = held.is_none();
+                let landed = held.and_then(|held| images.insert(&name, &held.rgba));
+                let ask = match self.app(&name) {
+                    None => true,
+                    Some(app) => gone && app.flags & wire::APP_ICON_PIXMAP != 0,
+                };
+                if ask {
                     self.requests.push((APPS_SIDECAR, wire::REQ_APP, name));
                 }
                 if landed.is_some() {

@@ -553,6 +553,16 @@ public uint build_entry(inout Build b, uint app_row, uint favourite, uint text_p
             {
                 icon = build_icon(b, BLOCK_IMAGE, slot, float(icon_px_u), IMAGE_INK);
             }
+            else if ((flags & APP_ICON_PIXMAP) != 0u)
+            {
+                // The answer promised pixels and no slot holds them: the slot
+                // went to something else while the app was off the bar. The
+                // same want again, which the embassy lands from its store
+                // (docs/architecture.md, *Images and icons*); the letter
+                // stands in for the one build in between.
+                build_want(b, hash_bytes(SRC_STRINGS, app.id_off, app.id_len),
+                           SRC_STRINGS, app.id_off, app.id_len, REQ_APP);
+            }
         }
     }
     if (icon == NO_INDEX)

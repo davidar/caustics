@@ -550,6 +550,38 @@ fn an_evicted_app_icon_is_unasked_and_the_next_want_lands_it_from_the_store() {
     );
 }
 
+/// An evicted app picture the store has also let go is asked for again: the
+/// `App` answer being here is no reason to stay silent, because the pixels
+/// travel with it and nothing else brings them back.
+#[test]
+fn an_evicted_app_icon_the_store_lost_is_asked_for_again() {
+    let mut facts = facts();
+    let mut images = Images::new();
+    facts.set_app(app_frame("kitty", "Kitty", wire::APP_ICON_PIXMAP));
+    facts.learn_pixmap(&mut images, APPS_SIDECAR, "kitty", &slot_rgba(7));
+    assert_eq!(
+        want_row_icon(&mut facts, &mut images, "kitty", wire::REQ_APP),
+        Wanted::Landed
+    );
+    facts.take_requests();
+    for n in 0..abi::MAX_IMAGE_SLOTS {
+        images.begin_generation();
+        images.insert(&format!("filler-{n}"), &slot_rgba(1));
+    }
+    facts.compose(&Model::default(), &Strings::new(), &mut images);
+    facts.pixmaps.remove("kitty");
+    facts.pixmap_order.retain(|key| key != "kitty");
+
+    assert_eq!(
+        want_row_icon(&mut facts, &mut images, "kitty", wire::REQ_APP),
+        Wanted::Asked
+    );
+    assert_eq!(
+        facts.take_requests(),
+        vec![(APPS_SIDECAR, wire::REQ_APP, "kitty".to_owned())]
+    );
+}
+
 /// Every slot holds a key the bar asked about and every compose lists, and
 /// nothing draws any of them. A listing that stamped every slot with the
 /// current generation would refuse a 65th want ("all 64 slots are drawn this
