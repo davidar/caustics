@@ -401,7 +401,7 @@ supervise() {
                 XDG_CONFIG_HOME="$RUN/xdg/config" XDG_STATE_HOME="$RUN/xdg/state" \
                 XDG_CACHE_HOME="$RUN/xdg/cache" CAUSTICS_DIR="$RUN/caustics" \
                 "${VK_ENV[@]}" \
-                RUST_LOG="${RUST_LOG_BAR:-info,caustics_bar::layout=debug,caustics_bar::shape=debug}" \
+                RUST_LOG="${RUST_LOG_BAR:-info,caustics_bar::layout=debug,caustics_bar::shape=debug,caustics_host::images=debug}" \
                 PATH="$BAR_PATH" \
                 setsid "$REPO/target/debug/caustics-bar"
         ) </dev/null >&3 2>&3 &

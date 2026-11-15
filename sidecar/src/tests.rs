@@ -153,3 +153,76 @@ mod inbox {
         assert!(inbox.waiting().is_empty());
     }
 }
+
+mod minted {
+    use std::time::{Duration, Instant};
+
+    use crate::minted::{HOLD, Minted};
+
+    fn px(v: u8) -> Vec<u8> {
+        vec![v; 16]
+    }
+
+    /// An icon alternating A, B, A, B inside the window is sent once each;
+    /// a key out of every frame for longer than the window is let go, so
+    /// what is held is the last frame's keys and the window's, no more; and
+    /// a request is answered from either, silence otherwise.
+    #[test]
+    fn an_alternating_icon_is_sent_once_and_the_window_is_bounded() {
+        let start = Instant::now();
+        let at = |s: f32| start + Duration::from_secs_f32(s);
+        let mut minted = Minted::default();
+        let a = || vec![("a".to_owned(), px(1))];
+        let b = || vec![("b".to_owned(), px(2))];
+        assert_eq!(minted.owed(a(), at(0.0)), ["a"]);
+        assert_eq!(minted.owed(b(), at(0.5)), ["b"]);
+        for n in 1..6 {
+            let t = 0.5 + n as f32;
+            assert!(minted.owed(a(), at(t)).is_empty(), "a again at {t}");
+            assert!(minted.owed(b(), at(t + 0.5)).is_empty(), "b again at {t}");
+        }
+        assert_eq!(minted.held(), 2);
+        assert_eq!(
+            minted.texels("a"),
+            Some(&px(1)[..]),
+            "in the window: answered"
+        );
+        assert_eq!(minted.texels("b"), Some(&px(2)[..]), "live: answered");
+        assert_eq!(minted.texels("c"), None, "never minted: silence");
+
+        // B stays; A is out of every frame. Within the window it is held, past
+        // it the next frame lets it go, and it is owed again if it returns.
+        let last = 6.0;
+        assert!(
+            minted
+                .owed(b(), at(last + HOLD.as_secs_f32() - 1.0))
+                .is_empty()
+        );
+        assert_eq!(minted.held(), 2);
+        assert!(
+            minted
+                .owed(b(), at(last + HOLD.as_secs_f32() + 1.0))
+                .is_empty()
+        );
+        assert_eq!(minted.held(), 1, "only the live key");
+        assert_eq!(minted.texels("a"), None, "let go: silence");
+        assert_eq!(
+            minted.owed(a(), at(30.0)),
+            ["a"],
+            "back after the window: sent again"
+        );
+    }
+
+    /// Many distinct keys passing through, a frame at a time: what is held
+    /// never exceeds the keys of the frames inside the window.
+    #[test]
+    fn a_stream_of_new_keys_holds_only_the_window() {
+        let start = Instant::now();
+        let mut minted = Minted::default();
+        for n in 0..1000u32 {
+            let now = start + Duration::from_millis(500 * u64::from(n));
+            minted.owed(vec![(format!("k{n}"), px(n as u8))], now);
+            assert!(minted.held() <= 11, "{} held at frame {n}", minted.held());
+        }
+    }
+}

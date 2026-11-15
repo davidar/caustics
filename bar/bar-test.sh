@@ -569,7 +569,7 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # (No apostrophes and no backticks in here: this block is inside a
 # single-quoted host string *and* an unquoted guest heredoc, so one of either
 # ends the quoting or runs a command.)
-Environment=RUST_LOG=info,caustics_bar::layout=debug,caustics_bar::shape=debug
+Environment=RUST_LOG=info,caustics_bar::layout=debug,caustics_bar::shape=debug,caustics_host::images=debug
 CONF' >/dev/null && pass "drop-in" || fail "drop-in"
 fi
 # The tunables as the run found them. Every step that edits the target's
@@ -3281,6 +3281,46 @@ if journal | jgrep -F 'reshaped under the open menu'; then
         grep -F 'reshaped under the open menu' | tail -1)"
 else
     pass "no 'reshaped under the open menu' anywhere: a reshape never closes a menu"
+fi
+
+say "18c. an icon that alternates keeps both pictures in their slots"
+# The demo's chip alternates between two pictures of its own twice a second,
+# a tray item's sync animation (`ROWS_DEMO_BLINK_MS`). Each picture keeps its
+# slot through the other's half second (`IMAGE_LINGER_S`, docs/architecture.md
+# *Images and icons*), so neither is let go, landed again or sent again.
+bar_env sidecars "CAUSTICS_SIDECARS=caustics-glyphs rows_demo" "ROWS_DEMO_BLINK_MS=500"
+restart_bar "the demo alone, blinking"
+if wait_for_journal "rows_demo: blinking between" 30; then
+    blink_line=$(journal | grep -F 'rows_demo: blinking between' | tail -1)
+    blink_a=$(printf '%s' "$blink_line" | sed -n 's/.*between \([^ ]*\) and.*/\1/p')
+    blink_b=$(printf '%s' "$blink_line" | sed -n 's/.* and \([^ ]*\) every.*/\1/p')
+    # Six seconds of it: a dozen changes.
+    sleep 6
+    # `images: slot N takes K` is every landing, from a sidecar's frame or
+    # from the store; `pixmap "K" -> slot` the sidecar's half of it.
+    landed_a=$(journal | grep -F 'images: slot' | grep -F ' takes ' | grep -cF "$blink_a")
+    landed_b=$(journal | grep -F 'images: slot' | grep -F ' takes ' | grep -cF "$blink_b")
+    freed=$(journal | grep -F 'images: slot' | grep -F ' go, which no block draws' |
+        grep -cF -e "$blink_a" -e "$blink_b")
+    resent=$(journal | grep -cF 'rows_demo: request for ')
+    if [[ "$landed_a" -eq 1 && "$landed_b" -eq 1 ]]; then
+        pass "each picture landed in a slot once in six seconds of alternating"
+    else
+        fail "the alternating pictures landed $landed_a and $landed_b times, not once each"
+    fi
+    if [[ "$freed" -eq 0 ]]; then
+        pass "and neither was let go between its turns"
+    else
+        fail "an alternating picture was let go $freed times: $(journal |
+            grep -F 'images: slot' | tail -2)"
+    fi
+    if [[ "$resent" -eq 0 ]]; then
+        pass "nor asked of the demo again"
+    else
+        fail "the bar asked the demo for an alternating picture $resent times"
+    fi
+else
+    fail "the demo never said it was blinking"
 fi
 
 bar_env_clear sidecars

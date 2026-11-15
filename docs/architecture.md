@@ -410,11 +410,16 @@ What the bar adds on top:
   process keeps every pixmap in a bounded store (256 keys, 4 MiB) and lands
   one in a slot when the caustic wants it. The store only saves a round
   trip: a key it let go is asked of the sidecar whose rows name it, which
-  keeps the texels of every key its frame still shows and sends them again.
+  keeps the texels of every key its frame still shows, and of those it
+  stopped showing in the last few seconds, and sends them again.
 - **What is drawn is the caustic's word.** Each build reports the slots it
-  placed, and a slot it did not place is freed there and then: the array is
-  not a cache, and a picture that comes back is landed again from the store
-  without a round trip. (Marking a slot as used merely because its name had
+  placed, and a slot no build has placed for `IMAGE_LINGER_S` (a second and
+  a half, a tunable) is freed at the first build after: the array is not a
+  cache, and a picture that comes back later is landed again from the store
+  without a round trip. The linger is the caustic's, kept per slot in its own
+  memory against the frame's clock, so an icon that alternates between a few
+  pictures finds each in its slot when it returns, drawn in that build with
+  nothing asked, and the process still frees exactly what the mask clears. (Marking a slot as used merely because its name had
   once been asked for filled the array within a day, after which every new
   icon was refused.)
 - **The resolution order** for a name: curves win, but both are asked at

@@ -9,7 +9,7 @@
 //! and once at startup even when there is nothing on the bus. A pixmap icon is
 //! a **name** in that frame, and its texels a `Pixmap` frame of their own,
 //! sent before the first frame that names its key, and again on a `REQ_ICON`
-//! for it while a frame still names it (docs/abi.md, *Pixmap*).
+//! for it while it is held (docs/abi.md, *Pixmap*).
 //!
 //! ```text
 //!   run ── stdin thread ─ wire::read ──────────► Msg::Action / Icon ─┐
@@ -122,8 +122,7 @@ struct State {
     /// Witnesses already written, so that a thing that does not fit is one
     /// line rather than one line per frame.
     said: HashSet<String>,
-    /// The `Pixmap` keys the last frame names, and their texels
-    /// (docs/abi.md, *Pixmap*).
+    /// The `Pixmap` keys held, and their texels (docs/abi.md, *Pixmap*).
     sent: Sent,
 }
 
@@ -172,7 +171,7 @@ impl State {
         // The texels first, so the bar holds them before it reads the name —
         // what `caustics-apps` does with the `Pixmap` before the `App` that names
         // it, for the same reason.
-        let owed = self.sent.owed(built.pixmaps);
+        let owed = self.sent.owed(built.pixmaps, std::time::Instant::now());
         let pixmaps = owed.len();
         for frame in &owed {
             emit(frame);
@@ -257,9 +256,9 @@ impl State {
                 self.forget(&key);
             }
             Msg::Action(action) => self.act(&action),
-            // A key the last frame names is sent again, the same bytes; any
-            // other name (a themed one, or a key no frame names now) is
-            // `caustics-apps`' or nobody's, and is silence.
+            // A key held is sent again, the same bytes; any other name (a
+            // themed one, or a key let go) is `caustics-apps`' or nobody's,
+            // and is silence.
             Msg::Icon(name) => {
                 if let Some(frame) = self.sent.again(&name) {
                     witness(&format!("{name} asked for again; sent"));

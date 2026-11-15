@@ -325,6 +325,10 @@ pub struct Gpu {
     /// build.
     #[cfg(test)]
     check: Option<wgpu::ComputePipeline>,
+    /// The `inputs.time` the oracle's model passes run at: a scenario that
+    /// tests what the caustic does with time sets it (`set_model_time`).
+    #[cfg(test)]
+    model_time: f32,
     /// The frame this device is on (docs/abi.md, *The three rules the buffer adds*, rule 1). Starts at 1,
     /// stamped into `FrameInputs` before the first dispatch of a frame, and
     /// advanced **only after that frame's readback has completed** — so a
@@ -640,6 +644,8 @@ impl Gpu {
             mirror: Box::new(State::ZERO),
             #[cfg(test)]
             check: None,
+            #[cfg(test)]
+            model_time: 0.0,
             // ≥ 1, because 0 is the ring stamp that means "no frame"
             // (docs/abi.md, *The three rules the buffer adds*, rule 1).
             frame: 1,
@@ -1589,10 +1595,18 @@ impl Gpu {
     /// adds is the readback, which the running bar gets from the frame's own
     /// encoder instead — and the strings, because some of their bytes are the
     /// build pass's own (a dock entry's uppercased letter).
+    /// The `inputs.time` the next model passes run at, seconds since the bar
+    /// started.
+    #[cfg(test)]
+    pub fn set_model_time(&mut self, time: f32) {
+        self.model_time = time;
+    }
+
     #[cfg(test)]
     pub fn run_model_passes(&mut self, caffeine: u32) -> (Box<State>, Vec<u8>) {
         let inputs = FrameInputs {
             frame: self.frame,
+            time: self.model_time,
             // The one per-frame input a scenario has an opinion about: the
             // caffeine chip is published from `inputs.caffeine`.
             caffeine,

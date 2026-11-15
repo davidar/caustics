@@ -311,6 +311,19 @@ public static const float ICON_LOGICAL = 20.0;
 /// Padding inside an item's chip, around its content.
 public static const float CHIP_PAD = 5.0;
 
+/// Seconds a picture keeps its image slot after the last build that drew it.
+/// An icon that alternates between a few pictures (a tray item's sync
+/// animation, twice a second) finds each one still in its slot when it comes
+/// back, so it is drawn in the same build with nothing asked, and does not
+/// blink; a picture gone for longer is let go at the first build after, and
+/// comes back from the bar's store or its sidecar. One and a half, so a
+/// three-picture cycle at two a second (each away for a second) is covered
+/// with room for a late frame. Longer holds more slots for pictures nothing
+/// shows; zero frees a slot the build it is undrawn. A minting sidecar holds
+/// a key longer than this (`caustics_sidecar::minted::HOLD`), so the bar lets
+/// a picture go first.
+public static const float IMAGE_LINGER_S = 1.5;
+
 // -- text -------------------------------------------------------------------
 //
 // A text size is an **em size**, not a raster size: the glyphs are curves and

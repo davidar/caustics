@@ -31,7 +31,10 @@
 //! once per `bar_build` it pushes an `ACT_IMAGES_DRAWN` whose bitmask the
 //! drain hands to [`Images::touch_drawn`] whole — a set bit is *drawn*, and a
 //! clear one is **freed there and then**: the key no longer answers and the
-//! slot is the next insert's.
+//! slot is the next insert's. How long an undrawn picture keeps its bit is
+//! the caustic's (`IMAGE_LINGER_S` in the tunables): it holds the bit for a
+//! slot drawn within that time, so an alternating icon keeps both pictures,
+//! and this side never measures time at all.
 //!
 //! The one slot a clear bit does not free is one no build has had the chance
 //! to draw: a picture lands, the *next* compose is what names its slot to the
@@ -225,6 +228,9 @@ impl Images {
         self.slots[free].key = Some(key.to_owned());
         self.slots[free].drawn = false;
         self.by_key.insert(key.to_owned(), free as u32);
+        // The other half of `touch_drawn`'s line: a picture that keeps landing
+        // and being let go reads as a pair of these per change.
+        tracing::debug!("images: slot {free} takes {key}");
         Some(free as u32)
     }
 

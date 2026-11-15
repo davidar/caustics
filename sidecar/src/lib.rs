@@ -80,6 +80,8 @@ pub mod icons;
 
 pub mod inbox;
 
+pub mod minted;
+
 #[cfg(feature = "session")]
 pub mod session;
 

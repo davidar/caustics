@@ -31,6 +31,7 @@ use caustics_tray::item::WIRE_PIXMAP;
 use caustics_tray::menu;
 use caustics_tray::model::{Icon, Menu, MenuItem, Toggle, TrayAddress, TrayItem, TrayStatus};
 use caustics_tray::rows::{self, Built, Call, Entry, Ids, Sent, Target};
+use std::time::Duration;
 
 const TAILSCALE: &[u8] = include_bytes!("data/dbusmenu-tailscale.bin");
 const KDECONNECT: &[u8] = include_bytes!("data/dbusmenu-kdeconnect.bin");
@@ -663,7 +664,8 @@ fn a_pixmap_goes_out_once_per_key_and_never_again() {
     assert_ne!(rows.icon(0), rows.icon(2));
     assert_eq!(first.pixmaps.len(), 2, "deduplicated within the frame");
 
-    let owed = sent.owed(first.pixmaps.clone());
+    let t0 = std::time::Instant::now();
+    let owed = sent.owed(first.pixmaps.clone(), t0);
     assert_eq!(owed.len(), 2, "one Pixmap per distinct icon");
     for frame in &owed {
         let Frame::Pixmap(pixmap) = frame else {
@@ -682,7 +684,8 @@ fn a_pixmap_goes_out_once_per_key_and_never_again() {
     // The next build names the same keys, and nothing is owed.
     let second = build(&entries, &mut ids, 2);
     assert!(
-        sent.owed(second.pixmaps).is_empty(),
+        sent.owed(second.pixmaps, t0 + Duration::from_millis(500))
+            .is_empty(),
         "none on the second build"
     );
 
@@ -704,12 +707,13 @@ fn a_pixmap_goes_out_once_per_key_and_never_again() {
         &mut ids,
         3,
     );
-    assert_eq!(sent.owed(changed.pixmaps).len(), 1);
+    let changed_at = t0 + Duration::from_secs(1);
+    assert_eq!(sent.owed(changed.pixmaps.clone(), changed_at).len(), 1);
 
-    // What is held is what the last frame names: two keys, the retired one
-    // let go. A `REQ_ICON` for a live key is its `Pixmap` again, byte for
-    // byte; for the retired key, or one this process never minted, silence.
-    assert_eq!(sent.held(), 2, "bounded by the frame, not by history");
+    // Held: the frame's two keys and the one it just stopped naming. A
+    // `REQ_ICON` for a held key is its `Pixmap` again, byte for byte; for one
+    // this process never minted, silence.
+    assert_eq!(sent.held(), 3, "the frame's keys and the window's");
     let live = changed.rows.icon(0).expect("a key").to_owned();
     let again = sent.again(&live).expect("a live key is sent again");
     assert!(
@@ -718,12 +722,30 @@ fn a_pixmap_goes_out_once_per_key_and_never_again() {
     );
     let retired = rows.icon(2).expect("a key").to_owned();
     assert_ne!(retired, live);
-    assert!(sent.again(&retired).is_none(), "a retired key is silence");
+    assert!(
+        sent.again(&retired).is_some(),
+        "inside the window: answered"
+    );
     assert!(sent.again("caustics-tray:ffffffffffffffff").is_none());
     assert!(sent.again("audio-volume-high-symbolic").is_none());
 
-    // A retired key that comes back is owed again: the bar may have let it go.
-    assert_eq!(sent.owed(first.pixmaps).len(), 1);
+    // Back inside the window: not sent again, which is what keeps an
+    // alternating icon quiet.
+    assert!(
+        sent.owed(first.pixmaps.clone(), changed_at + Duration::from_secs(1))
+            .is_empty()
+    );
+    // The 0x30 key is in the window now. Past it, the next frame lets it go,
+    // and it is owed again when it returns: the bar may have let it go too.
+    let later = changed_at + caustics_sidecar::minted::HOLD + Duration::from_secs(2);
+    assert!(sent.owed(first.pixmaps, later).is_empty());
+    assert_eq!(sent.held(), 2, "only the frame's keys");
+    assert_eq!(
+        sent.owed(changed.pixmaps, later + Duration::from_millis(1))
+            .len(),
+        1,
+        "let go, owed again"
+    );
 }
 
 /// A real tray (two items with pixmap icons, two menu rows with pixmap icons

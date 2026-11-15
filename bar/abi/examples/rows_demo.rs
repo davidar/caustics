@@ -12,6 +12,13 @@
 //! row goes again. `bar/bar-test.sh` drives this to check that a row arriving under an open menu leaves it open: the caustic
 //! holds its menu level as an item id and re-lays the menu out in place.
 //!
+//! And, with `ROWS_DEMO_BLINK_MS=<ms>` in its environment, the worked example
+//! for a sidecar that mints `Pixmap` keys (docs/abi.md, *Pixmap*): the chip's
+//! icon alternates between two pictures of its own every `<ms>`, a sync
+//! animation's shape, each sent once before the first frame that names it
+//! and again on a `REQ_ICON` for it. `bar/bar-test.sh` drives this to check
+//! that an alternating icon neither blinks out of its slot nor is sent again.
+//!
 //! Run it by hand to see the wire:
 //!
 //! ```text
@@ -24,12 +31,13 @@
 //! CAUSTICS_SIDECARS="caustics-sysmon target/debug/examples/rows_demo" caustics-bar
 //! ```
 
+use caustics_bar_abi::IMAGE_SLOT_PX;
 use caustics_bar_abi::buffer::{
     ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE, ACTION_SECONDARY,
     ACTION_SET_VALUE, APPLET_OTHER,
 };
 use caustics_bar_abi::wire::{
-    self, Frame, RFLAG_CHECKABLE, RFLAG_CHECKED, RFLAG_HAS_MENU, RowsBuilder,
+    self, Frame, Pixmap, REQ_ICON, RFLAG_CHECKABLE, RFLAG_CHECKED, RFLAG_HAS_MENU, RowsBuilder,
 };
 
 /// The row ids this applet uses. Stable across frames, which is the contract:
@@ -52,13 +60,15 @@ const LEVEL_MAX: f32 = 100.0;
 /// `opens` is `Some(n)` while the bar says this applet's menu is up, and it is
 /// what puts the fourth row in: the menu gains a row *while it is open*, which
 /// is the whole point of the two notices.
-fn picture(revision: u32, level: f32, checked: bool, opens: Option<u32>) -> Frame {
+/// `icon` is the chip's icon: the themed name, or in blink mode one of the
+/// two keys this demo minted.
+fn picture(revision: u32, level: f32, checked: bool, opens: Option<u32>, icon: &str) -> Frame {
     let label = format!("{:.0}%", level);
     let mut rows = RowsBuilder::new(APPLET_OTHER, revision);
     let bar = rows.item(
         ROW_BAR,
         Some(&label),
-        Some("applications-system-symbolic"),
+        Some(icon),
         (level - LEVEL_MIN) / (LEVEL_MAX - LEVEL_MIN),
         RFLAG_HAS_MENU,
     );
@@ -124,6 +134,30 @@ fn kind_name(kind: u32) -> &'static str {
     }
 }
 
+/// The chip's themed icon, outside blink mode.
+const ICON: &str = "applications-system-symbolic";
+
+/// One of the blink's two pictures: a flat square of one colour, straight
+/// RGBA at the slot's size, under the key its texels hash to.
+fn blink_picture(rgba: [u8; 4]) -> (String, Vec<u8>) {
+    let texels: Vec<u8> = rgba
+        .iter()
+        .copied()
+        .cycle()
+        .take((IMAGE_SLOT_PX * IMAGE_SLOT_PX * 4) as usize)
+        .collect();
+    (wire::pixmap_key("rows_demo", &texels), texels)
+}
+
+fn pixmap_frame(key: &str, rgba: &[u8]) -> Frame {
+    Frame::Pixmap(Pixmap {
+        key: key.to_owned(),
+        width: IMAGE_SLOT_PX,
+        height: IMAGE_SLOT_PX,
+        rgba: rgba.to_vec(),
+    })
+}
+
 fn main() {
     let mut level = 40.0f32;
     let mut checked = false;
@@ -143,7 +177,43 @@ fn main() {
         say(&format!("rows_demo: stdout: {err}"));
         std::process::exit(1);
     }
-    if let Err(err) = wire::write(&mut out, &picture(revision, level, checked, None)) {
+    // Blink mode: two pictures, both sent before the first frame (each is
+    // named by every other frame, so both stay live and neither is sent
+    // again), the chip alternating between them.
+    let blink = std::env::var("ROWS_DEMO_BLINK_MS")
+        .ok()
+        .and_then(|ms| ms.parse::<u64>().ok())
+        .filter(|ms| *ms > 0)
+        .map(std::time::Duration::from_millis);
+    let pictures = [
+        blink_picture([220, 60, 40, 255]),
+        blink_picture([40, 120, 220, 255]),
+    ];
+    let mut showing = 0usize;
+    let icon = |showing: usize| -> &str {
+        match blink {
+            Some(_) => &pictures[showing].0,
+            None => ICON,
+        }
+    };
+    if blink.is_some() {
+        for (key, rgba) in &pictures {
+            if let Err(err) = wire::write(&mut out, &pixmap_frame(key, rgba)) {
+                say(&format!("rows_demo: stdout: {err}"));
+                std::process::exit(1);
+            }
+        }
+        say(&format!(
+            "rows_demo: blinking between {} and {} every {} ms",
+            pictures[0].0,
+            pictures[1].0,
+            blink.map_or(0, |period| period.as_millis())
+        ));
+    }
+    if let Err(err) = wire::write(
+        &mut out,
+        &picture(revision, level, checked, None, icon(showing)),
+    ) {
         say(&format!("rows_demo: stdout: {err}"));
         std::process::exit(1);
     }
@@ -152,11 +222,43 @@ fn main() {
     ));
 
     // The bar holds the write end of this pipe, so its EOF is this process's
-    // notice to leave — the one thing every sidecar must read.
-    let stdin = std::io::stdin();
-    let mut input = stdin.lock();
+    // notice to leave — the one thing every sidecar must read. On a thread,
+    // so the blink's clock can wake the loop between frames.
+    let (frames, inbox) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let stdin = std::io::stdin();
+        let mut input = stdin.lock();
+        loop {
+            let read = wire::read(&mut input);
+            let done = !matches!(read, Ok(Some(_)));
+            if frames.send(read).is_err() || done {
+                return;
+            }
+        }
+    });
+    let period = blink.unwrap_or(std::time::Duration::from_secs(3600));
     loop {
-        match wire::read(&mut input) {
+        let read = match inbox.recv_timeout(period) {
+            Ok(read) => read,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                if blink.is_none() {
+                    continue;
+                }
+                showing = 1 - showing;
+                revision += 1;
+                let shown = menu_open.then_some(opens);
+                if let Err(err) = wire::write(
+                    &mut out,
+                    &picture(revision, level, checked, shown, icon(showing)),
+                ) {
+                    say(&format!("rows_demo: stdout: {err}"));
+                    return;
+                }
+                continue;
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Ok(None),
+        };
+        match read {
             Ok(None) => {
                 say("rows_demo: stdin closed; exiting");
                 return;
@@ -186,7 +288,10 @@ fn main() {
                 }
                 revision += 1;
                 let shown = menu_open.then_some(opens);
-                if let Err(err) = wire::write(&mut out, &picture(revision, level, checked, shown)) {
+                if let Err(err) = wire::write(
+                    &mut out,
+                    &picture(revision, level, checked, shown, icon(showing)),
+                ) {
                     say(&format!("rows_demo: stdout: {err}"));
                     return;
                 }
@@ -196,13 +301,28 @@ fn main() {
                 ));
             }
             // The bar asks a chip's own sidecar for the pixels of an icon
-            // name its store lacks (docs/abi.md, *Request*). The demo mints no
-            // `Pixmap` keys, so the answer is silence; it says so on stderr
-            // only because echoing what it is sent is what the demo is for.
-            Ok(Some(Frame::Request(request))) => say(&format!(
-                "rows_demo: request kind {} for {:?}; nothing minted here, so silence",
-                request.kind, request.name
-            )),
+            // name its store lacks (docs/abi.md, *Request*): one of the two
+            // keys minted here is its `Pixmap` again; anything else is
+            // silence. Said on stderr only because echoing what it is sent is
+            // what the demo is for.
+            Ok(Some(Frame::Request(request))) => {
+                let held = pictures.iter().find(|(key, _)| {
+                    blink.is_some() && request.kind == REQ_ICON && *key == request.name
+                });
+                match held {
+                    Some((key, rgba)) => {
+                        say(&format!("rows_demo: request for {key}; sent again"));
+                        if let Err(err) = wire::write(&mut out, &pixmap_frame(key, rgba)) {
+                            say(&format!("rows_demo: stdout: {err}"));
+                            return;
+                        }
+                    }
+                    None => say(&format!(
+                        "rows_demo: request kind {} for {:?}; not minted here, so silence",
+                        request.kind, request.name
+                    )),
+                }
+            }
             Ok(Some(other)) => {
                 say(&format!("rows_demo: ignoring a {} frame", other.kind()));
             }

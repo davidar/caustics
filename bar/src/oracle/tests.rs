@@ -1577,9 +1577,59 @@ fn pixels_are_asked_beside_curves_and_drawn_before_the_glyph_answer() {
     assert!(!images.touch_drawn(&drawn(&state)), "a drawn slot is kept");
     assert_eq!(images.slot_of(&themed), Some(held));
 
-    // The curves answer comes late and says it is curves: the glyph wins, and
-    // the slot no build draws any more is freed by the mask.
+    // The row's icon moves to another name and comes back inside the linger
+    // (`IMAGE_LINGER_S`): an alternating icon. The slot keeps its bit while
+    // the other name shows, so it is still there when the name returns, and
+    // the picture is drawn in that build with nothing asked.
+    let linger = tunable("IMAGE_LINGER_S");
+    assert!(linger > 0.2, "a linger worth testing: {linger}");
+    let mut other = RowsBuilder::new(abi::APPLET_TRAY, 1);
+    other.item(
+        1,
+        Some("steam"),
+        Some("caustics-tray:00000000000000cc"),
+        -1.0,
+        wire::RFLAG_LABEL_TITLE,
+    );
+    let away = Scenario {
+        name: "the other picture",
+        model: with_rows(fixture(), other.build()),
+        level: (0, 0),
+        capped: false,
+    };
+    oracle.gpu.set_model_time(linger * 0.25);
+    let (state, _) = oracle
+        .build(&mut facts, &mut images, &strings, &away)
+        .expect("the build pass runs");
+    assert!(
+        !images.touch_drawn(&drawn(&state)),
+        "undrawn for less than the linger: kept"
+    );
+    assert_eq!(images.slot_of(&themed), Some(held));
+    oracle.gpu.set_model_time(linger * 0.5);
+    let (state, _) = oracle
+        .build(&mut facts, &mut images, &strings, &scenario)
+        .expect("the build pass runs");
+    let private = oracle.gpu.read_private();
+    assert_eq!(
+        chip_icon(&private),
+        (model_const("BLOCK_IMAGE"), held),
+        "back in the same build, from the slot it kept"
+    );
+    assert!(
+        built(&state, abi::ACT_WANT_ICON)
+            .iter()
+            .map(|note| note.want_icon())
+            .all(|want| facts.bytes_at(want.source, want.off, want.len).as_deref() != Some(KEY)),
+        "and nothing asked for it"
+    );
+    assert!(!images.touch_drawn(&drawn(&state)));
+
+    // The curves answer comes late and says it is curves: the glyph wins.
+    // The slot no build draws any more keeps its bit for the linger, and the
+    // first build past it lets the slot go.
     facts.learn_glyph(KEY, Some(3));
+    oracle.gpu.set_model_time(linger * 0.75);
     let (state, _) = oracle
         .build(&mut facts, &mut images, &strings, &scenario)
         .expect("the build pass runs");
@@ -1589,9 +1639,19 @@ fn pixels_are_asked_beside_curves_and_drawn_before_the_glyph_answer() {
         (model_const("BLOCK_GLYPH"), 3),
         "curves win"
     );
-    assert!(images.touch_drawn(&drawn(&state)), "the slot is let go");
+    assert!(
+        !images.touch_drawn(&drawn(&state)),
+        "within the linger: kept"
+    );
+    oracle.gpu.set_model_time(linger * 1.75);
+    let (state, _) = oracle
+        .build(&mut facts, &mut images, &strings, &scenario)
+        .expect("the build pass runs");
+    assert!(images.touch_drawn(&drawn(&state)), "past it: let go");
     assert_eq!(images.slot_of(&themed), None);
-    eprintln!("oracle: pixels asked beside curves, drawn on arrival, freed when curves win");
+    eprintln!(
+        "oracle: pixels asked beside curves, drawn on arrival, kept for the linger, then let go"
+    );
 }
 
 // ---------------------------------------------------------------------------

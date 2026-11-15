@@ -474,6 +474,10 @@ public struct Private
     /// is still wrapped again: the build wrote every row's `body_lines` to 0.
     public uint build_serial;
     public uint wrap_key;
+    /// Per image slot, the `inputs.time` until which it counts as drawn:
+    /// the last build that drew it, plus `IMAGE_LINGER_S`. Zero (the buffer's
+    /// first state) is "never", since the clock starts at zero.
+    public float image_until[MAX_IMAGE_SLOTS];
     /// Lines of `body_lines` in use.
     public uint body_line_count;
     public BodyLine body_lines[MAX_BODY_POOL];

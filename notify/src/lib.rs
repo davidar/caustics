@@ -61,7 +61,7 @@ pub mod markup;
 pub mod rows;
 pub mod server;
 
-use std::collections::HashMap;
+use caustics_sidecar::minted::Minted;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -374,7 +374,7 @@ pub async fn serve(
         open: false,
         revision: 0,
         last: None,
-        sent: HashMap::new(),
+        sent: Minted::default(),
         held: Vec::new(),
         written,
     };
@@ -417,10 +417,10 @@ pub async fn serve(
                 Some(Input::Activation { row, token }) => {
                     daemon.token(row, token).await;
                 }
-                // A key the last frame names goes again, the same bytes; any
+                // A key still held goes again, the same bytes; any
                 // other name is not this process's, and is silence.
                 Some(Input::Icon(name)) => {
-                    if let Some(rgba) = daemon.sent.get(&name) {
+                    if let Some(rgba) = daemon.sent.texels(&name) {
                         witness(&format!("{name} asked for again; sent"));
                         let frame = pixmap_frame(&name, rgba);
                         if !daemon.write(&frame) {
@@ -503,11 +503,11 @@ struct Daemon {
     revision: u32,
     /// The last frame written and its ageless twin (`rows::worth_sending`).
     last: Option<(Rows, Rows)>,
-    /// The `Pixmap` keys the last frame written names, with their texels
-    /// (docs/abi.md, *Pixmap*): each sent before the first frame naming it,
-    /// and again on a `REQ_ICON` while a frame names it. Bounded by the
-    /// frame — the history's images — never by what was ever sent.
-    sent: HashMap<String, Vec<u8>>,
+    /// The `Pixmap` keys held, with their texels (docs/abi.md, *Pixmap*):
+    /// each sent before the first frame naming it, and again on a
+    /// `REQ_ICON` while it is held — named by the last frame, or dropped
+    /// from one within `caustics_sidecar::minted::HOLD`.
+    sent: Minted,
     /// Invoked actions waiting for their activation token, oldest first.
     held: Vec<Held>,
     /// The history file's bytes as last written — or tried, so a failing
@@ -733,22 +733,15 @@ impl Daemon {
         self.revision += 1;
 
         // The texels first, so the bar holds them before it reads the name.
-        // What the last frame named is not sent again; what this one names
-        // is what stays held.
-        let mut was = std::mem::take(&mut self.sent);
+        // A key still held is not sent again.
         let mut owed = 0;
-        for (key, rgba) in pixmaps {
-            if let Some(held) = was.remove(&key) {
-                self.sent.insert(key, held);
+        for key in self.sent.owed(pixmaps, Instant::now()) {
+            let Some(frame) = self.sent.texels(&key).map(|rgba| pixmap_frame(&key, rgba)) else {
                 continue;
-            }
-            if self.sent.contains_key(&key) {
-                continue;
-            }
-            if !self.write(&pixmap_frame(&key, &rgba)) {
+            };
+            if !self.write(&frame) {
                 return false;
             }
-            self.sent.insert(key, rgba);
             owed += 1;
         }
         let show = rows

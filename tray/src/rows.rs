@@ -39,6 +39,8 @@ use caustics_bar_abi::wire::{
 
 use crate::item::{WIRE_PIXMAP, fit_to_slot};
 use crate::model::{Icon, Menu, MenuItem, Toggle, TrayItem, TrayStatus};
+use caustics_sidecar::minted::Minted;
+use std::time::Instant;
 
 /// What this sidecar's minted `Pixmap` keys start with (docs/abi.md, *Pixmap*): its own name,
 /// which is what keeps them apart from every other sidecar's.
@@ -422,55 +424,45 @@ impl Builder<'_> {
     }
 }
 
-/// The `Pixmap` keys the last published frame names, with their texels
+/// The `Pixmap` keys this process minted and still holds, with their texels
 /// (docs/abi.md, *Pixmap*): what a build owes the bar, and what a `REQ_ICON`
 /// for a key the bar's store let go is answered from.
 ///
-/// A key is its texels' hash, so one the frame still names is never sent
-/// again: an icon that comes back unchanged costs nothing, and one that
-/// changed is a new key and one 16 KiB frame. A key the frame stops naming is
-/// let go here, so what this holds is bounded by what one frame shows — one
-/// slot's texels per distinct icon in it — never by what the process has ever
-/// sent; one that comes back later is sent again before the frame that names
-/// it. A restarted tray starts empty and resends, which is right — the bar
+/// A key is its texels' hash, so one still held is never sent again: an icon
+/// that comes back unchanged costs nothing, and one that changed is a new key
+/// and one 16 KiB frame. Held is the last frame's keys and those a frame
+/// stopped naming within `caustics_sidecar::minted::HOLD`, so an item that
+/// alternates between a few pictures sends each once, and what this holds is
+/// bounded by a few seconds of frames, never by what the process has ever
+/// sent. A restarted tray starts empty and resends, which is right — the bar
 /// forgets what a sidecar sent when it exits.
 #[derive(Debug, Default)]
 pub struct Sent {
-    live: HashMap<String, Vec<u8>>,
+    minted: Minted,
 }
 
 impl Sent {
-    /// One `Pixmap` frame per key of `pixmaps` the last frame did not name, in
-    /// order; `pixmaps` is then what is live. The caller writes the frames
-    /// **before** the `Rows` frame that names them, so the bar holds the
-    /// texels before it reads the name.
-    pub fn owed(&mut self, pixmaps: Vec<(String, Vec<u8>)>) -> Vec<Frame> {
-        let mut was = std::mem::take(&mut self.live);
-        let mut frames = Vec::new();
-        for (key, rgba) in pixmaps {
-            if let Some(held) = was.remove(&key) {
-                self.live.insert(key, held);
-                continue;
-            }
-            if self.live.contains_key(&key) {
-                continue;
-            }
-            frames.push(pixmap(&key, &rgba));
-            self.live.insert(key, rgba);
-        }
-        frames
+    /// One `Pixmap` frame per key of `pixmaps` not held, in order, for a
+    /// frame built at `now`. The caller writes them **before** the `Rows`
+    /// frame that names them, so the bar holds the texels before it reads
+    /// the name.
+    pub fn owed(&mut self, pixmaps: Vec<(String, Vec<u8>)>, now: Instant) -> Vec<Frame> {
+        let owed = self.minted.owed(pixmaps, now);
+        owed.iter()
+            .filter_map(|key| self.minted.texels(key).map(|rgba| pixmap(key, rgba)))
+            .collect()
     }
 
     /// The answer to a `REQ_ICON` naming `key`: its `Pixmap` again, byte for
-    /// byte, while the last frame names it; `None` (silence) for a key this
-    /// process did not mint or that no frame of its names any more.
+    /// byte, while it is held; `None` (silence) for a key this process did
+    /// not mint or let go.
     pub fn again(&self, key: &str) -> Option<Frame> {
-        self.live.get(key).map(|rgba| pixmap(key, rgba))
+        self.minted.texels(key).map(|rgba| pixmap(key, rgba))
     }
 
     /// Keys held, for a test's bound.
     pub fn held(&self) -> usize {
-        self.live.len()
+        self.minted.held()
     }
 }
 

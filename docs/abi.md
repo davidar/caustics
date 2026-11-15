@@ -390,7 +390,7 @@ one typed accessor per kind.
 | 16 | `COVER` | `off, len, source` | `REQ_COVER` to the curves sidecar with those bytes (*Request*). `source` says which buffer the bytes are in: a title or literal in `SRC_STRINGS`, a sidecar's row label in its slot's region, an app's name in `SRC_ANSWERS` |
 | 17 | `WANT_ICON` | `off, len, kind, source` | `REQ_GLYPH` / `REQ_ICON` / `REQ_APP` with those bytes, `kind` the wire's `REQ_*`. A themed name nothing has answered comes as two in one build, `REQ_GLYPH` and `REQ_ICON`; the process asks once per name and kind. `source` says **which buffer** they are in, as for `COVER`, because a name the caustic wants lives in one of three places and a range alone cannot say which |
 | 18 | `WATCHDOG` | `ms` | how long one `bar_shape` dispatch may take before the process calls it a runaway. `SHAPE_WATCHDOG_MS` in the tunables. The *response* (one witness, and no shaping until the OpenType arena's front block is written again) is fixed and the process's, because only it holds the queue and the timestamp query pair |
-| 19 | `IMAGES_DRAWN` | `mask[0..(MAX_IMAGE_SLOTS + 31) / 32]` | the image slots this build placed in an image block, slot `n` at bit `n % 32` of word `n / 32`. Pushed by `bar_build` once per build, an empty mask included, **before** its `WANT_ICON`s, so the drain frees what left the bar before it serves a want that lands a picture. The process copies the mask into the slot array whole: a set bit is drawn, and a clear one **frees the slot there and then**, unless its picture landed after the last compose (no build has yet been told where it is). A freed slot's name is un-asked by the next compose, so a later want lands it again from the store. A picture is never put in a taken slot, and is refused only when every slot is taken. The array is not a cache: what is in use is the caustic's word, because only the caustic lays the blocks out |
+| 19 | `IMAGES_DRAWN` | `mask[0..(MAX_IMAGE_SLOTS + 31) / 32]` | the image slots this build placed in an image block, slot `n` at bit `n % 32` of word `n / 32`. Pushed by `bar_build` once per build, an empty mask included, **before** its `WANT_ICON`s, so the drain frees what left the bar before it serves a want that lands a picture. A slot counts as placed for `IMAGE_LINGER_S` (a tunable, a second and a half) after the last build that put it in a block: the caustic keeps each slot's time in its own memory against `inputs.time` and sets the bit while it lasts, so a picture an alternating icon comes back to is still in its slot, and the bit clears at the first build past the time (no build is asked for to clear it). The process copies the mask into the slot array whole: a set bit is drawn, and a clear one **frees the slot there and then**, unless its picture landed after the last compose (no build has yet been told where it is). A freed slot's name is un-asked by the next compose, so a later want lands it again from the store. A picture is never put in a taken slot, and is refused only when every slot is taken. The array is not a cache: what is in use is the caustic's word, because only the caustic lays the blocks out |
 
 **Messages, not state.** The popup, the edge and the height are messages,
 because the caustic has the "have" side in `inputs` (`popup_w/h`, `edge`) and
@@ -1165,7 +1165,8 @@ hundred-line applet with an icon, two menu rows and a slider that echoes
 every action to stderr and republishes on each one, and the test harness's
 proof that the rows path works without any real applet. A sidecar that sends
 `Pixmap` frames under keys it mints keeps the texels of every key its current
-rows name and answers a `REQ_ICON` for one with that `Pixmap` again
+rows name, and of those they stopped naming in the last few seconds, and
+answers a `REQ_ICON` for one with that `Pixmap` again
 (*Pixmap*); every sidecar ignores, without a witness, a `Request` it has no
 answer for, since the bar asks a chip's own sidecar about every icon name
 its rows carry that the store does not hold. `bar/abi/examples/fake_host.rs`
@@ -1462,14 +1463,19 @@ reference form is `<sidecar>:<fnv1a64 of the rgba, 16 hex digits>`
 (`caustics_bar_abi::wire::pixmap_key`): content-addressed, so an icon that comes
 back unchanged is the same key, and one that changed is a new key. A sidecar
 sends a minted key's `Pixmap` before the first frame that names it, and
-again before a later frame that names it after one that did not.
+again before a later frame that names it after it was let go (below).
 
 **A live key can always be had again.** A sidecar that mints keys keeps the
-texels of every key its last `Rows` frame names, and answers a `REQ_ICON`
-naming one of them by writing that `Pixmap` again, byte for byte the first;
-a `REQ_ICON` naming any other key (one it never minted, or one no frame of
-its names any more) is silence. What it holds is bounded by what its frame
-shows, never by what it has ever sent. So the store is a latency saver and
+texels of every key its last `Rows` frame names, and of every key a frame
+stopped naming within a few seconds (`caustics_sidecar::minted::HOLD`, five;
+longer than the bar's `IMAGE_LINGER_S`, so the bar lets a picture go first),
+and answers a `REQ_ICON` naming one of them by writing that `Pixmap` again,
+byte for byte the first; a `REQ_ICON` naming any other key (one it never
+minted, or one let go) is silence. A key that comes back inside the window
+is not sent again, so an icon alternating between a few pictures sends each
+once. The window is swept on each frame the sidecar builds, with no timer,
+so what it holds is bounded by a few seconds of frames, never by what it has
+ever sent. So the store is a latency saver and
 nothing else: a key it let go comes back from the sidecar that minted it,
 one round trip later, and a themed name or an app id from `caustics-apps`.
 

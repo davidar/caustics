@@ -332,8 +332,9 @@ abi_consts! {
     /// `n / 32`. Pushed once per `bar_build`,
     /// **before** its `ACT_WANT_ICON`s, so the drain frees what left the bar
     /// before it serves a want that lands a picture. The embassy copies the
-    /// mask into the slot array whole — a set bit is drawn, a clear one frees
-    /// the slot unless it landed since the last compose — and decides
+    /// mask into the slot array whole — a set bit is drawn (the caustic keeps
+    /// it set for `IMAGE_LINGER_S` after a slot's last draw), a clear one
+    /// frees the slot unless it landed since the last compose — and decides
     /// nothing: only the caustic lays the blocks out, so only it can say
     /// which pictures are in use.
     pub const ACT_IMAGES_DRAWN: u32 = 19;

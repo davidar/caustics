@@ -136,8 +136,9 @@ public static const uint WANT_LIST = 16u;
 /// Words of the image slots this build drew, one bit a slot — what an
 /// `ACT_IMAGES_DRAWN` carries (docs/abi.md, *The action ring*). The embassy
 /// holds its slots by this mask and nothing else, because only this file knows
-/// which pictures are on the bar: a slot the build stopped drawing is freed on
-/// the spot, and one still drawn is never taken from under it.
+/// which pictures are on the bar: a slot no build has drawn for
+/// `IMAGE_LINGER_S` is freed, and one drawn since is never taken from under
+/// it.
 public static const uint DRAWN_WORDS = (MAX_IMAGE_SLOTS + 31u) / 32u;
 
 /// The four allocators and the two witnesses of one build. Passed `inout`
@@ -310,6 +311,7 @@ public uint build_icon(inout Build b, uint kind, uint payload, float px, float4 
     if (kind == BLOCK_IMAGE && payload < MAX_IMAGE_SLOTS)
     {
         b.drawn[payload >> 5u] |= 1u << (payload & 31u);
+        private[0].image_until[payload] = inputs.time + IMAGE_LINGER_S;
     }
     return b.blocks - 1u;
 }
@@ -947,8 +949,19 @@ public void build_publish(Build b, Id level)
     //
     // Before the wants, so the embassy frees what left the bar before it
     // serves a want that lands a picture in a slot. Every build says it, an
-    // empty mask included: a picture no longer drawn is let go there and
-    // then.
+    // empty mask included.
+    //
+    // A slot this build did not draw still counts until its linger runs out
+    // (`IMAGE_LINGER_S`): an icon that alternates finds its other picture
+    // where it left it. The bit clears at the first build past the time, and
+    // nothing asks for a build to make that happen.
+    for (uint slot = 0u; slot < MAX_IMAGE_SLOTS; ++slot)
+    {
+        if (inputs.time < private[0].image_until[slot])
+        {
+            b.drawn[slot >> 5u] |= 1u << (slot & 31u);
+        }
+    }
     Args drawn = action_begin(ACT_IMAGES_DRAWN);
     for (uint w = 0u; w < DRAWN_WORDS; ++w)
     {
