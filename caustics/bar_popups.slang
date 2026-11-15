@@ -30,6 +30,8 @@ public void reset_popup_scratch()
     private[0].menu_clip = float2(0.0, 0.0);
     private[0].popup_pending_secs = 0.0;
     private[0].popup_switch = 0u;
+    private[0].popup_held = 0u;
+    private[0].popup_held_secs = 0.0;
 }
 
 /// Is a popup decided, asked for or up?
@@ -220,6 +222,53 @@ public uint popup_live_kind()
     return popup_live() ? private[0].popup_kind : 0u;
 }
 
+/// Whether the popup's want and the size the compositor gave differ, in the
+/// logical px a positioner is given (see `push_popup_move`).
+bool popup_differs()
+{
+    uint want_w = uint(max(private[0].popup_want.x, 1.0) + 0.5);
+    uint want_h = uint(max(private[0].popup_want.y, 1.0) + 0.5);
+    float s = float(max(inputs.scale, 1u));
+    return uint(float(want_w) / s + 0.5) != uint(float(inputs.popup_size.x) / s + 0.5)
+           || uint(float(want_h) / s + 0.5) != uint(float(inputs.popup_size.y) / s + 0.5);
+}
+
+/// Hold a menu's last frame while what this frame would draw is not yet the
+/// menu at the size it is shown at, and let it go once it is
+/// (`ACT_POPUP_HOLD`, `MENU_HOLD_MAX_S`): a switch to another chip's menu or
+/// a submenu waiting on its build and its move, rows that reshaped this
+/// frame (`rebuild`), a move not yet landed. Without it the popup showed
+/// nothing for the frames of a switch, and a submenu's rows at its parent's
+/// size until the move came back. A message when the answer changes; the
+/// process acts on it after this frame, so the frame that lets go is the
+/// last held one.
+public void step_popup_hold(bool rebuild, float dt)
+{
+    bool hold = false;
+    if (menu_surface_up())
+    {
+        bool up = private[0].popup_state == POPUP_UP;
+        hold = !up || rebuild || !private[0].built_for.eq(menu_level_id())
+               || popup_differs();
+    }
+    if (hold)
+    {
+        private[0].popup_held_secs += dt;
+        hold = private[0].popup_held_secs < MENU_HOLD_MAX_S;
+    }
+    else
+    {
+        private[0].popup_held_secs = 0.0;
+    }
+    uint word = hold ? 1u : 0u;
+    if (word != private[0].popup_held)
+    {
+        private[0].popup_held = word;
+        Args a = action_begin(ACT_POPUP_HOLD);
+        arg(a, word);
+    }
+}
+
 /// The popup's size, compared here (docs/abi.md, *The action ring*).
 ///
 /// The layout re-measures the popup every frame; when the want differs from
@@ -234,9 +283,7 @@ public void push_popup_move()
     {
         uint want_w = uint(max(private[0].popup_want.x, 1.0) + 0.5);
         uint want_h = uint(max(private[0].popup_want.y, 1.0) + 0.5);
-        float s = float(max(inputs.scale, 1u));
-        bool differs = uint(float(want_w) / s + 0.5) != uint(float(inputs.popup_size.x) / s + 0.5)
-                       || uint(float(want_h) / s + 0.5) != uint(float(inputs.popup_size.y) / s + 0.5);
+        bool differs = popup_differs();
         bool asked = want_w == uint(private[0].popup_sent.x + 0.5)
                      && want_h == uint(private[0].popup_sent.y + 0.5);
         if (differs && !asked && want_w > 1u && want_h > 1u)

@@ -358,6 +358,10 @@ public struct Private
     /// grabbed menu that is up (`ACT_POPUP_SWITCH`) rather than by a popup of
     /// its own, until its `CMD_POPUP_MAPPED`; 0 otherwise.
     public uint popup_switch;
+    /// 1 while the caustic holds the popup's last frame (`ACT_POPUP_HOLD`),
+    /// as last pushed; and how long it has held it.
+    public uint popup_held;
+    public float popup_held_secs;
     /// POPUP_MENU, POPUP_PREVIEW, POPUP_TOAST, or 0.
     public uint popup_kind;
     /// The sidecar slot the open named, or NO_INDEX (a dock entry's menu).

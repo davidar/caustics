@@ -600,6 +600,7 @@ void bar_apply(uint3 gid: SV_DispatchThreadID)
     // `ACT_REBUILD` below, which is a frame.
     step_popup_ask(rebuild, dt);
     push_popup_move();
+    step_popup_hold(rebuild, dt);
 
     witness_shaping();
 

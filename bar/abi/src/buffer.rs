@@ -347,6 +347,13 @@ abi_consts! {
     /// serial of its own to grab with, which is why it moves the popup that
     /// has one rather than making another.
     pub const ACT_POPUP_SWITCH: u32 = 20;
+    /// `arg[0]`: 1 to hold the popup's last presented frame, 0 to let it go.
+    /// While held the process draws nothing into the popup and presents
+    /// nothing on it, so the compositor goes on showing the frame before:
+    /// the caustic holds it while what it would draw is not yet the menu at
+    /// the size it is shown at (a switch or a submenu on its way, a move not
+    /// yet landed). Dropping the popup lets go too.
+    pub const ACT_POPUP_HOLD: u32 = 21;
 }
 
 abi_consts! {
@@ -759,6 +766,11 @@ impl Note {
             anchor: [self.arg_f(3), self.arg_f(4), self.arg_f(5), self.arg_f(6)],
             want: [self.arg_u(7), self.arg_u(8)],
         }
+    }
+
+    /// An `ACT_POPUP_HOLD`'s word: hold the popup's last frame, or let go.
+    pub fn popup_hold(&self) -> bool {
+        self.arg_u(0) != 0
     }
 
     /// An `ACT_POPUP_MOVE`'s wanted size, physical px.

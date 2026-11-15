@@ -463,9 +463,10 @@ What the bar adds on top:
   the grab and repositions it to the new chip at the new menu's size
   (`ACT_POPUP_SWITCH`, `xdg_popup.reposition`, whose positioner carries the
   anchor too). A click on another chip goes the same way. The sidecars hear a
-  close and an open, as clicks would tell them; between the two menus the
-  popup is drawn empty until the move lands, never the new rows at the old
-  size.
+  close and an open, as clicks would tell them. Until the new menu is up at
+  its own size the popup keeps showing the last one's frame
+  (`ACT_POPUP_HOLD`), as it does for a submenu, a reshape and any move: the
+  new rows are never drawn at the old size, nor an empty popup between.
 - **Long menus scroll.** The caustic knows the output's size and clamps a
   menu to it, less the bar and a margin. The wheel scrolls rows within the
   band while the back row stays pinned.

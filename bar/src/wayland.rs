@@ -1754,6 +1754,17 @@ impl Bar {
             }
             abi::ACT_POPUP_MOVE => self.move_popup(note.popup_size()),
             abi::ACT_POPUP_SWITCH => self.switch_popup(note.popup_open()),
+            abi::ACT_POPUP_HOLD => {
+                let held = note.popup_hold();
+                if let Some(gpu) = self.gpu.as_mut() {
+                    gpu.hold_popup(held);
+                }
+                tracing::debug!(target: "caustics_bar::menu", held, "popup hold");
+                // Letting go owes the popup a frame: the one it was held over.
+                if !held {
+                    self.dirty = true;
+                }
+            }
             abi::ACT_POPUP_CLOSE => {
                 if !self.popup_closing {
                     self.popup_closing = true;

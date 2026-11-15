@@ -555,6 +555,13 @@ public static const float MENU_OPEN_WAIT_S = 0.25;
 /// crosses no other chip on the way.
 public static const bool MENU_HOVER_SWITCH = true;
 
+/// While a menu's next picture is on its way — a switch to another chip's
+/// menu, a submenu, rows that reshaped, a move not yet landed — the popup
+/// keeps showing its last frame rather than an empty one, or the new rows at
+/// the old size (`ACT_POPUP_HOLD`). This long at most, seconds: a compositor
+/// that never gives the size asked for is not left with a frozen menu.
+public static const float MENU_HOLD_MAX_S = 0.2;
+
 /// Check marks and chevrons are SDF strokes, not glyphs, so they draw even when no installed font has those two symbols. This is the mark
 /// box's side and the stroke's width, logical px.
 public static const float MENU_MARK = 11.0;

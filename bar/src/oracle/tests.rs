@@ -4549,18 +4549,28 @@ fn a_hovered_chip_switches_the_menu_up() {
         &mapped,
         &[Command::popup_mapped(back.want[0], back.want[1])],
     );
-    // And to the second once more, where a click on a row acts on it.
-    let (again, _) = until_popup_action(
-        &mut oracle,
+    // And to the second once more, where a click on a row acts on it. The
+    // first menu's last frame is held from the hover's frame until the
+    // second is up at its size, and let go in the frame it is.
+    let holds = |state: &State| -> Vec<bool> {
+        actions_of(state, abi::ACT_POPUP_HOLD)
+            .iter()
+            .map(|note| note.popup_hold())
+            .collect()
+    };
+    let state = oracle.gpu.run_apply(
         &mapped,
         &[Command::pointer_motion(abi::TARGET_BAR, centre(second))],
-        abi::ACT_POPUP_SWITCH,
     );
+    assert_eq!(holds(&state), [true], "held from the hover's frame");
+    oracle.gpu.mark_shape_pending();
+    let (again, _) = until_popup_action(&mut oracle, &mapped, &[], abi::ACT_POPUP_SWITCH);
     mapped.popup_size = again.want;
-    oracle.gpu.run_apply(
+    let state = oracle.gpu.run_apply(
         &mapped,
         &[Command::popup_mapped(again.want[0], again.want[1])],
     );
+    assert_eq!(holds(&state), [false], "let go once the second is up");
     let row = laid(&oracle.gpu.read_private()).rows[0];
     let (clicks, state) = click_rect(&mut oracle, &mapped, row.1, abi::BTN_LEFT);
     assert_eq!(clicks.len(), 1, "one action for the row: {clicks:?}");

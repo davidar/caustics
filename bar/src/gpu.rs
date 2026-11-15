@@ -316,6 +316,10 @@ pub struct Gpu {
 
     bar: Surface,
     popup: Option<Surface>,
+    /// The caustic has asked that the popup keep the frame it last showed
+    /// (`ACT_POPUP_HOLD`): nothing is drawn into it or presented until it
+    /// lets go, so the compositor goes on showing the last buffer.
+    popup_held: bool,
 
     /// The state buffer as the CPU last saw it. Boxed because it is 21 KiB
     /// and gets handed around by reference every frame.
@@ -641,6 +645,7 @@ impl Gpu {
             preview_view,
             bar,
             popup: None,
+            popup_held: false,
             mirror: Box::new(State::ZERO),
             #[cfg(test)]
             check: None,
@@ -745,6 +750,12 @@ impl Gpu {
     /// `wl_surface` are destroyed — the surface holds raw pointers to both.
     pub fn drop_popup(&mut self) {
         self.popup = None;
+        self.popup_held = false;
+    }
+
+    /// Hold the popup's last presented frame, or let it go (`ACT_POPUP_HOLD`).
+    pub fn hold_popup(&mut self, held: bool) {
+        self.popup_held = held && self.popup.is_some();
     }
 
     /// Put one image in its slot: exactly [`abi::IMAGE_SLOT_PX`]² straight RGBA, at a layer of the array.
@@ -1104,7 +1115,8 @@ impl Gpu {
             .texture
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let popup_frame = match &self.popup {
+        // A held popup is neither drawn nor presented: its last frame stays.
+        let popup_frame = match self.popup.as_ref().filter(|_| !self.popup_held) {
             Some(popup) => Some(
                 acquire(
                     popup
