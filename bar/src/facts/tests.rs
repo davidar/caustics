@@ -621,8 +621,10 @@ fn a_freed_app_icon_the_store_lost_is_asked_for_again() {
 
 /// Every slot holds a key the bar asked about and every compose lists, and
 /// the build draws all of them: one more want is refused rather than taking
-/// a picture off the bar. When the build stops drawing them the slots are
-/// free and the want lands.
+/// a picture off the bar. The refused name is not left asked, but neither is
+/// it tried on every build while the array stays full: once per free. When
+/// the build stops drawing the others the want lands, with no question to a
+/// sidecar at any point (the pixels were in the store throughout).
 #[test]
 fn a_full_array_refuses_while_drawn_and_gives_way_once_it_is_not() {
     let mut facts = facts();
@@ -646,20 +648,75 @@ fn a_full_array_refuses_while_drawn_and_gives_way_once_it_is_not() {
         Wanted::Nothing
     );
     assert_eq!(images.refusals(), 1);
+    assert!(
+        !facts.icons_asked.contains(key),
+        "refused, so not left asked"
+    );
+    // The next builds want it again while every slot is still drawn: not
+    // tried, so no second refusal, and nothing asked of anyone.
+    for _ in 0..5 {
+        assert!(!images.touch_drawn(&[u32::MAX; abi::IMAGE_DRAWN_WORDS]));
+        assert_eq!(
+            want_row_icon(&mut facts, &mut images, key, wire::REQ_ICON),
+            Wanted::Nothing
+        );
+    }
+    assert_eq!(images.refusals(), 1, "one refusal, not one per build");
+    assert!(facts.take_requests().is_empty());
 
-    // The build draws none of them now. The refused want was marked asked,
-    // and a name with no slot is not one the freeing un-asks, so it is
-    // un-asked here as the caustic's own reload would.
+    // The build draws none of them now: the slots are freed, and the next
+    // want lands it from the store.
     assert!(images.touch_drawn(&NOTHING_DRAWN));
     facts.compose(&Model::default(), &Strings::new(), &mut images);
     assert!(directory(&facts).is_empty(), "the listing kept nothing");
-    facts.icons_asked.remove(key);
     assert_eq!(
         want_row_icon(&mut facts, &mut images, key, wire::REQ_ICON),
         Wanted::Landed
     );
     facts.compose(&Model::default(), &Strings::new(), &mut images);
     assert_eq!(directory(&facts), vec![key.to_owned()]);
+    assert!(facts.take_requests().is_empty());
+}
+
+/// Pixels a sidecar sends for an asked name while every slot is drawn are
+/// kept and the name un-asked, so once a slot is freed the next want lands
+/// them from the store rather than the name wearing its letter for good.
+#[test]
+fn an_answer_that_finds_the_array_full_lands_after_a_free() {
+    let mut facts = facts();
+    let mut images = Images::new();
+    for n in 0..abi::MAX_IMAGE_SLOTS {
+        let key = format!("caustics-tray:{n:016x}");
+        facts.learn_pixmap(&mut images, TRAY, &key, &slot_rgba(n as u8));
+        want_row_icon(&mut facts, &mut images, &key, wire::REQ_ICON);
+    }
+    facts.compose(&Model::default(), &Strings::new(), &mut images);
+    assert!(!images.touch_drawn(&[u32::MAX; abi::IMAGE_DRAWN_WORDS]));
+    let name = "preferences-system";
+    assert_eq!(
+        want_row_icon(&mut facts, &mut images, name, wire::REQ_ICON),
+        Wanted::Asked
+    );
+    facts.take_requests();
+    assert_eq!(
+        facts.learn_pixmap(&mut images, APPS_SIDECAR, name, &slot_rgba(0x77)),
+        None,
+        "no slot for it"
+    );
+    assert!(!facts.icons_asked.contains(name));
+    assert_eq!(
+        want_row_icon(&mut facts, &mut images, name, wire::REQ_ICON),
+        Wanted::Nothing,
+        "still full: not tried"
+    );
+    assert!(images.touch_drawn(&NOTHING_DRAWN));
+    facts.compose(&Model::default(), &Strings::new(), &mut images);
+    assert_eq!(
+        want_row_icon(&mut facts, &mut images, name, wire::REQ_ICON),
+        Wanted::Landed,
+        "from the store, after the free"
+    );
+    assert!(facts.take_requests().is_empty(), "no sidecar asked again");
 }
 
 /// A want the store answers makes its key the newest, so the bound lets go

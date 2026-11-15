@@ -189,6 +189,13 @@ pub struct Facts {
     /// curves, is answered with **silence**, so this is the only thing that
     /// stops the same dead name being asked about on every build.
     icons_asked: HashSet<String>,
+    /// Wants whose pixels were here but found every slot taken, by kind and
+    /// name, with the array's free count then ([`Images::frees`]). Such a
+    /// name is not left asked — it would wear its letter for the life of the
+    /// process — but it is not tried again either until a slot has been
+    /// freed since, so a full array costs one refusal per name, not one per
+    /// build, and no sidecar is asked again for pixels already held.
+    refused: HashMap<(u32, String), u64>,
     /// The strings a `REQ_COVER` has gone out for (docs/abi.md, *Request*):
     /// one question per distinct string for the life of the glyph space,
     /// bounded because a title is whatever an application puts there. The
@@ -239,6 +246,7 @@ impl Facts {
             icons_asked: HashSet::new(),
             covers: Covers::new(GLYPHS_SIDECAR, wire::REQ_COVER),
             requests: Vec::new(),
+            refused: HashMap::new(),
         };
         for name in slots {
             facts.slot_of(&name);
@@ -814,10 +822,18 @@ impl Facts {
         self.keep_pixmap(sidecar, name, rgba);
         let mut landed = None;
         if self.icons_asked.contains(name) {
-            landed = images.insert(&Facts::themed_key(name), rgba).or(landed);
+            match images.insert(&Facts::themed_key(name), rgba) {
+                Some(slot) => landed = Some(slot),
+                // Every slot taken: the pixels are in the store now, and the
+                // name waits for a free slot un-asked.
+                None => self.refuse(images, wire::REQ_ICON, name),
+            }
         }
         if self.apps_asked.contains(name) {
-            landed = images.insert(name, rgba).or(landed);
+            match images.insert(name, rgba) {
+                Some(slot) => landed = Some(slot),
+                None => self.refuse(images, wire::REQ_APP, name),
+            }
         }
         if landed.is_none() {
             tracing::debug!(
@@ -825,6 +841,17 @@ impl Facts {
             );
         }
         landed
+    }
+
+    /// A name whose pixels found every slot taken: un-asked, so a want lands
+    /// it once a slot is free, and held back from trying until one has been
+    /// (`refused`).
+    fn refuse(&mut self, images: &Images, kind: u32, name: &str) {
+        match kind {
+            wire::REQ_APP => self.apps_asked.remove(name),
+            _ => self.icons_asked.remove(name),
+        };
+        self.refused.insert((kind, name.to_owned()), images.frees());
     }
 
     /// A want the store answers makes its key the newest: what the bound
@@ -944,6 +971,16 @@ impl Facts {
         let Some(name) = self.bytes_at(want.source, want.off, want.len) else {
             return Wanted::Nothing;
         };
+        // Refused for want of a slot, and none freed since: nothing to try.
+        let refused_key = (want.kind, name);
+        match self.refused.get(&refused_key) {
+            Some(&at) if at == images.frees() => return Wanted::Nothing,
+            Some(_) => {
+                self.refused.remove(&refused_key);
+            }
+            None => {}
+        }
+        let name = refused_key.1;
         match want.kind {
             wire::REQ_APP => {
                 if !self.apps_asked.insert(name.clone()) {
@@ -962,6 +999,9 @@ impl Facts {
                     None => true,
                     Some(app) => gone && app.flags & wire::APP_ICON_PIXMAP != 0,
                 };
+                if !gone && landed.is_none() {
+                    self.refuse(images, wire::REQ_APP, &name);
+                }
                 if ask {
                     self.requests
                         .push((APPS_SIDECAR.to_owned(), wire::REQ_APP, name));
@@ -990,7 +1030,10 @@ impl Facts {
                     // tray's every colour icon — or pixels whose slot was freed.
                     return match images.insert(&Facts::themed_key(&name), &held.rgba) {
                         Some(_) => Wanted::Landed,
-                        None => Wanted::Nothing,
+                        None => {
+                            self.refuse(images, wire::REQ_ICON, &name);
+                            Wanted::Nothing
+                        }
                     };
                 }
                 // Not held: asked of `caustics-apps`, which has it if a theme
