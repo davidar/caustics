@@ -589,6 +589,12 @@ void bar_apply(uint3 gid: SV_DispatchThreadID)
     push_anchor();
     push_watchdog();
 
+    // A menu decided and waiting for its rows' build is asked for once that
+    // build is the table, at the size this frame's layout measured from it;
+    // then a popup that is up and wants another size is moved. The wait
+    // needs no frames of its own: every frame of it pushes the
+    // `ACT_REBUILD` below, which is a frame.
+    step_popup_ask(rebuild, dt);
     push_popup_move();
 
     witness_shaping();

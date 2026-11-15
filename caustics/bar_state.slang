@@ -350,8 +350,10 @@ public struct Private
     public Id built_for;
 
     // -- the popup, as a state machine this file owns (docs/abi.md, *The action ring*) ----------------
-    /// POPUP_IDLE / POPUP_ASKED / POPUP_UP / POPUP_ENDING.
+    /// POPUP_IDLE / POPUP_PENDING / POPUP_ASKED / POPUP_UP / POPUP_ENDING.
     public uint popup_state;
+    /// Seconds a `POPUP_PENDING` menu has waited for its build.
+    public float popup_pending_secs;
     /// POPUP_MENU, POPUP_PREVIEW, POPUP_TOAST, or 0.
     public uint popup_kind;
     /// The sidecar slot the open named, or NO_INDEX (a dock entry's menu).
@@ -532,6 +534,11 @@ public static const uint POPUP_ASKED = 1u;
 public static const uint POPUP_UP = 2u;
 /// `ACT_POPUP_CLOSE` pushed; waiting for the `CMD_POPUP_DONE`.
 public static const uint POPUP_ENDING = 3u;
+/// A menu decided and not yet asked for: its level is held, and its
+/// `ACT_POPUP_OPEN` waits for a table built for that level, so that the
+/// popup is asked for at the size its rows measure (`step_popup_ask`).
+/// Nothing has gone to the embassy for it.
+public static const uint POPUP_PENDING = 4u;
 
 // ---------------------------------------------------------------------------
 // Bind group 2: `shape`'s font tables and the strings buffer. Group 1 is

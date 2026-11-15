@@ -1023,12 +1023,13 @@ fn tunable(name: &str) -> f32 {
         .split(&needle)
         .nth(1)
         .unwrap_or_else(|| panic!("bar_tunables.slang declares no {name}"));
-    rest.split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .parse()
-        .expect("a float literal")
+    let literal = rest.split(';').next().unwrap_or("").trim();
+    // A literal, or one quotient of two (`DT_MAX` is `1.0 / 30.0`).
+    let value = |text: &str| -> f32 { text.trim().parse().expect("a float literal") };
+    match literal.split_once('/') {
+        Some((num, den)) => value(num) / value(den),
+        None => value(literal),
+    }
 }
 
 /// A sidecar with one chip whose menu is `rows` plain rows.
@@ -1772,6 +1773,33 @@ fn until_toast_opens(
         oracle.gpu.mark_shape_pending();
     }
     panic!("no toast opened in three frames");
+}
+
+/// Run frames until a menu is asked for, as the embassy runs them: a click
+/// holds the menu's level and asks for nothing until a build has put that
+/// level's rows in the table (`step_popup_ask`), and the embassy answers each
+/// frame's `ACT_REBUILD` by marking the shape submission pending. `first`
+/// goes with the first frame. At most four frames, and exactly one open
+/// across them. Returns the open and how many frames it took.
+fn until_menu_opens(
+    oracle: &mut Oracle,
+    inputs: &FrameInputs,
+    first: &[Command],
+) -> (crate::abi::PopupOpen, usize) {
+    let mut commands = first.to_vec();
+    for frame in 1..=4 {
+        oracle.gpu.mark_shape_pending();
+        let state = oracle.gpu.run_apply(inputs, &commands);
+        commands.clear();
+        let opens = actions_of(&state, abi::ACT_POPUP_OPEN);
+        if !opens.is_empty() {
+            assert_eq!(opens.len(), 1, "one open: {opens:?}");
+            let open = opens[0].popup_open();
+            assert_eq!(open.kind, abi::POPUP_MENU, "a menu: {open:?}");
+            return (open, frame);
+        }
+    }
+    panic!("no menu asked for in four frames");
 }
 
 /// A chip with `RFLAG_SHOW` and two attention rows among five opens **one**
@@ -3097,15 +3125,13 @@ fn open_calendar(oracle: &mut Oracle, base: &FrameInputs, month: &Month) -> Grid
         Command::pointer_up(abi::TARGET_BAR, at, abi::BTN_LEFT),
     ];
 
-    // The click: one menu-kind open at the clock, sized from the facts alone.
+    // The click decides the calendar and says so; the open waits for the
+    // build of the clock's level, and is one menu-kind open at the clock.
     let state = oracle.gpu.run_apply(&inputs, &click);
-    let opens = actions_of(&state, abi::ACT_POPUP_OPEN);
-    assert_eq!(
-        opens.len(),
-        1,
-        "one open for one click on the clock: {opens:?}"
-    );
-    let open = opens[0].popup_open();
+    let opened = said(oracle, &state, "calendar:");
+    assert_eq!(opened.len(), 1, "one open line: {opened:?}");
+    let (open, frames) = until_menu_opens(oracle, &inputs, &[]);
+    assert!(frames <= 2, "asked for within two frames of the click");
     assert_eq!(
         open.kind,
         abi::POPUP_MENU,
@@ -3121,19 +3147,15 @@ fn open_calendar(oracle: &mut Oracle, base: &FrameInputs, month: &Month) -> Grid
     assert_eq!(
         open.want,
         want.map(|v| v.round() as u32),
-        "the grid's size, before a cell exists"
+        "the grid's size, measured from its cells"
     );
-    let opened = said(oracle, &state, "calendar:");
     eprintln!("{opened:?}, want {:?}", open.want);
-    assert_eq!(opened.len(), 1, "one open line: {opened:?}");
 
-    // Mapped at what it asked for; the embassy answers `ACT_REBUILD` by
-    // marking the model passes pending, which builds the clock's level.
+    // Mapped at what it asked for, the level already built.
     let mapped = FrameInputs {
         popup_size: open.want,
         ..inputs
     };
-    oracle.gpu.mark_shape_pending();
     let state = oracle.gpu.run_apply(
         &mapped,
         &[Command::popup_mapped(open.want[0], open.want[1])],
@@ -4202,4 +4224,190 @@ fn the_wake_is_motion_and_settles() {
         "the bar still asks for frames after a click's wave"
     );
     eprintln!("oracle: the wake stirs with motion and a click, and settles within WAKE_SETTLE_S");
+}
+
+/// One sidecar's frame with three chips: two with menus of different sizes,
+/// and one without (`second_rows` rows under the second, of a longer label).
+fn two_menus(second_rows: u32) -> Rows {
+    let mut builder = RowsBuilder::new(abi::APPLET_OTHER, 1);
+    let first = builder.item(1, Some("one"), None, -1.0, wire::RFLAG_HAS_MENU);
+    builder.menu(first, 2, Some("Short"), None, 0);
+    builder.menu(first, 3, Some("Rows"), None, 0);
+    let second = builder.item(10, Some("two"), None, -1.0, wire::RFLAG_HAS_MENU);
+    for id in 0..second_rows {
+        builder.menu(
+            second,
+            11 + id,
+            Some("A row a good deal longer than the first menu's"),
+            None,
+            0,
+        );
+    }
+    builder.item(30, Some("plain"), None, -1.0, 0);
+    builder.build()
+}
+
+/// The bar laid out with `two_menus(5)`: the frame's inputs, the slot, and the
+/// bar rect of each chip by its row id.
+fn two_menus_bar(oracle: &mut Oracle) -> (FrameInputs, u32, Vec<(u32, [f32; 4])>) {
+    let base = FrameInputs {
+        scale: 1,
+        dt: 1.0 / 60.0,
+        bar_size: [1280, 32],
+        output_size: [1920, 1000],
+        ..FrameInputs::default()
+    };
+    let strings = crate::strings::baked();
+    let mut facts = Facts::new(slots());
+    let slot = facts.slot_of(DEMO).expect("the demo has a slot");
+    let mut images = Images::new();
+    let scenario = Scenario {
+        name: "two menus",
+        model: with_rows(fixture(), two_menus(5)),
+        level: (0, 0),
+        capped: false,
+    };
+    oracle
+        .build(&mut facts, &mut images, &strings, &scenario)
+        .expect("the build pass runs");
+    oracle.gpu.run_apply(&base, &[]);
+    let private = oracle.gpu.read_private();
+    let items = built_items(&private);
+    let chips = [1, 10, 30]
+        .into_iter()
+        .map(|row| {
+            let id = applet_level(slot, row);
+            let rect = placed(&private)
+                .into_iter()
+                .find(|e| e.target == abi::TARGET_BAR && items[e.item as usize].id == id)
+                .unwrap_or_else(|| panic!("chip {row} is laid out on the bar"))
+                .rect;
+            (row, rect)
+        })
+        .collect();
+    (base, slot, chips)
+}
+
+fn centre(rect: [f32; 4]) -> [f32; 2] {
+    [rect[0] + rect[2] / 2.0, rect[1] + rect[3] / 2.0]
+}
+
+fn bar_click(rect: [f32; 4]) -> [Command; 3] {
+    let at = centre(rect);
+    [
+        Command::pointer_motion(abi::TARGET_BAR, at),
+        Command::pointer_down(abi::TARGET_BAR, at, abi::BTN_LEFT),
+        Command::pointer_up(abi::TARGET_BAR, at, abi::BTN_LEFT),
+    ]
+}
+
+/// A click on a chip asks for its menu **at the size its rows measure**, so
+/// the popup the compositor maps is never drawn at another size first: no
+/// open in the click's own frame (the table holds no row of the level yet),
+/// one open once the level is built, within two frames, at exactly the size
+/// the layout measures; mapped at it, no `ACT_POPUP_MOVE`. A menu opened
+/// before is asked for as soon, and a menu whose sidecar reshapes its rows
+/// every frame is asked for anyway within `MENU_OPEN_WAIT_S`.
+#[test]
+fn a_menu_is_asked_for_at_the_size_its_rows_measure() {
+    if std::env::var("CAUSTICS_BAR_ORACLE").as_deref() != Ok("1") {
+        eprintln!("skipping the oracle: set CAUSTICS_BAR_ORACLE=1 to run it");
+        return;
+    }
+    let mut oracle = match Oracle::new() {
+        Ok(oracle) => oracle,
+        Err(err) => {
+            eprintln!("skipping the oracle: {err:#}");
+            return;
+        }
+    };
+    let (base, slot, chips) = two_menus_bar(&mut oracle);
+    let first = chips[0].1;
+    let second = chips[1].1;
+
+    for round in ["first", "again"] {
+        let state = oracle.gpu.run_apply(&base, &bar_click(first));
+        assert!(
+            actions_of(&state, abi::ACT_POPUP_OPEN).is_empty(),
+            "{round}: no open in the click's frame, before its rows are built"
+        );
+        let (open, frames) = until_menu_opens(&mut oracle, &base, &[]);
+        eprintln!("{round}: {open:?} after {frames} frame(s)");
+        assert!(
+            frames <= 2,
+            "{round}: asked for {frames} frames after the click"
+        );
+        assert_eq!(
+            (open.slot, open.row),
+            (slot, 1),
+            "{round}: the first chip's"
+        );
+        assert_eq!(open.anchor, first, "{round}: anchored at the chip");
+        let mapped = FrameInputs {
+            popup_size: open.want,
+            ..base
+        };
+        let state = oracle.gpu.run_apply(
+            &mapped,
+            &[Command::popup_mapped(open.want[0], open.want[1])],
+        );
+        let laid_out = laid(&oracle.gpu.read_private());
+        assert_eq!(
+            laid_out.want.map(|v| v.round() as u32),
+            open.want,
+            "{round}: the open was the size the rows measure"
+        );
+        assert_eq!(laid_out.rows.len(), 2, "{round}: both rows laid out");
+        assert!(
+            actions_of(&state, abi::ACT_POPUP_MOVE).is_empty(),
+            "{round}: mapped at its size, never moved"
+        );
+        let state = oracle.gpu.run_apply(&mapped, &[]);
+        assert!(
+            actions_of(&state, abi::ACT_POPUP_MOVE).is_empty(),
+            "{round}: nor on the frame after"
+        );
+        // A second click on the chip closes it.
+        let state = oracle.gpu.run_apply(&mapped, &bar_click(first));
+        assert_eq!(actions_of(&state, abi::ACT_POPUP_CLOSE).len(), 1);
+        oracle.gpu.run_apply(&base, &[Command::popup_done()]);
+        // The embassy's answer to that frame's `ACT_REBUILD`: the rows leave.
+        oracle.gpu.mark_shape_pending();
+        oracle.gpu.run_apply(&base, &[]);
+    }
+
+    // A sidecar that reshapes its rows every frame: the build never settles,
+    // and the menu is asked for at the bound all the same.
+    let mut facts = Facts::new(slots());
+    // A frame's dt is clamped to DT_MAX, so the wait is counted in frames
+    // of at most that.
+    let dt_max = tunable("DT_MAX");
+    let slow = FrameInputs { dt: dt_max, ..base };
+    let bound = (tunable("MENU_OPEN_WAIT_S") / dt_max).ceil() as u32 + 1;
+    let state = oracle.gpu.run_apply(&slow, &bar_click(second));
+    assert!(actions_of(&state, abi::ACT_POPUP_OPEN).is_empty());
+    let mut asked = None;
+    let mut lines = Vec::new();
+    for frame in 1..=bound + 2 {
+        let reshaped = rows_arrive(&mut oracle, &mut facts, slot, &two_menus(5 + frame % 2));
+        oracle.gpu.mark_shape_pending();
+        let state = oracle.gpu.run_apply(&slow, &[reshaped]);
+        lines.extend(said(&oracle, &state, "popup:"));
+        if !actions_of(&state, abi::ACT_POPUP_OPEN).is_empty() {
+            asked = Some(frame);
+            break;
+        }
+    }
+    eprintln!("asked at frame {asked:?}: {lines:?}");
+    assert!(
+        asked.is_some_and(|f| f <= bound),
+        "a menu whose rows never settle is asked for within MENU_OPEN_WAIT_S ({asked:?})"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.starts_with("popup: a menu asked for unbuilt after")),
+        "and says so: {lines:?}"
+    );
+    eprintln!("oracle: a menu is asked for at the size its rows measure");
 }

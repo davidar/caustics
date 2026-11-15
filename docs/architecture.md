@@ -446,6 +446,14 @@ What the bar adds on top:
   you are reading it moves nothing you are holding. The sidecar is told when
   its menu opens and closes: the network sidecar scans for access points only
   while its menu is up, and the power sidecar polls the backlight only then.
+- **A menu maps at its own size.** The table holds the rows of the open level
+  only, so the frame a click decides a menu in has none of its rows to
+  measure. The caustic holds the level and asks for the popup once a build
+  has put the rows in the table, a frame or two later, at the size they
+  measure; asked for at once, it would map at whatever the last popup
+  measured and be drawn at that size until a move landed. The wait is bounded
+  (`MENU_OPEN_WAIT_S`), and a level with no rows opens at the least a menu is
+  and grows when they come.
 - **Long menus scroll.** The caustic knows the output's size and clamps a
   menu to it, less the bar and a margin. The wheel scrolls rows within the
   band while the back row stays pinned.

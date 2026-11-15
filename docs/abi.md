@@ -395,6 +395,11 @@ one typed accessor per kind.
 **Messages, not state.** The popup, the edge and the height are messages,
 because the caustic has the "have" side in `inputs` (`popup_w/h`, `edge`) and
 can compare for itself; rule 1 is what makes a message safe to send once.
+A menu's `POPUP_OPEN` is pushed once a build has put the menu level's rows in
+the table, not in the frame the click decided it in, so its `w × h` is what
+those rows measure (`MENU_OPEN_WAIT_S` in the tunables bounds the wait); a
+preview's and a toast's go out when decided. A `CMD_POPUP_MAPPED` moves the
+caustic's popup to up only while one is asked for or up.
 The popup's life: `POPUP_OPEN` → `CMD_POPUP_MAPPED {w, h}` (or
 `CMD_POPUP_DONE` at once if the compositor refused) → zero or more
 `POPUP_MOVE` when the caustic's want differs from `inputs.popup_w/h` →

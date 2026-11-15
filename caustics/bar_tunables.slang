@@ -539,6 +539,13 @@ public static const float MENU_RADIUS = 5.0;
 public static const float MENU_MIN_W = 160.0;
 public static const float MENU_MAX_W = 420.0;
 
+/// A menu is asked of the compositor once the table holds its rows, so it
+/// maps at the size they measure (`bar_popups`, `step_popup_ask`): one build,
+/// a frame or two. This is the longest it waits for that build before asking
+/// at whatever size the rows have so far, seconds; only a sidecar reshaping
+/// its rows on every frame keeps a build from settling that long.
+public static const float MENU_OPEN_WAIT_S = 0.25;
+
 /// Check marks and chevrons are SDF strokes, not glyphs, so they draw even when no installed font has those two symbols. This is the mark
 /// box's side and the stroke's width, logical px.
 public static const float MENU_MARK = 11.0;

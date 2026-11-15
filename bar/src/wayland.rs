@@ -1477,6 +1477,10 @@ impl Bar {
         self.popup_closing = false;
         self.popup_kind = 0;
         self.popup_want = (0, 0);
+        // A configure the old surface got and the loop has not yet acted on
+        // is not the new one's: its size would attach a swapchain to a
+        // surface the compositor has not configured.
+        self.pending_popup = None;
     }
 
     /// Resize a mapped popup in place with `xdg_popup.reposition` (xdg_wm_base
@@ -1512,6 +1516,7 @@ impl Bar {
         self.popup_closing = false;
         self.popup_kind = 0;
         self.popup_want = (0, 0);
+        self.pending_popup = None;
         if had {
             tracing::info!("popup: closed ({why})");
         }

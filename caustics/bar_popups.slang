@@ -28,13 +28,14 @@ public void reset_popup_scratch()
     private[0].menu_scroll = 0.0;
     private[0].menu_scroll_max = 0.0;
     private[0].menu_clip = float2(0.0, 0.0);
+    private[0].popup_pending_secs = 0.0;
 }
 
-/// Is a popup asked for or up?
+/// Is a popup decided, asked for or up?
 public bool popup_live()
 {
     uint st = private[0].popup_state;
-    return st == POPUP_ASKED || st == POPUP_UP;
+    return st == POPUP_PENDING || st == POPUP_ASKED || st == POPUP_UP;
 }
 
 /// A popup that is live is ending, or being replaced by one of kind `next`
@@ -55,6 +56,15 @@ extern void dispatch_popup_ending(uint next);
 /// A request while a popup is up is the replace case — the preview-then-right-
 /// click — and the embassy tears the old one down without a `CMD_POPUP_DONE`,
 /// because this file has already moved on to the new one.
+///
+/// **A menu is not asked for here.** The click that decides one is the frame
+/// that sets its level, and the table holds no row of that level until the
+/// build the level change asks for has run: a size measured now is the last
+/// popup's, and a menu asked for at it maps at it and is drawn there until a
+/// move lands (docs/architecture.md, *Menus, toasts and popups*). So a menu is
+/// `POPUP_PENDING` until `step_popup_ask` sees a table built for its level,
+/// and goes out at the size the layout measured from that table. `want` is
+/// what a preview or a toast opens at; a menu's is the layout's.
 public void request_popup(uint kind, float4 anchor, Id id, float2 want)
 {
     // The replace path below tears the old surface down, since the bar has
@@ -66,25 +76,66 @@ public void request_popup(uint kind, float4 anchor, Id id, float2 want)
     }
     uint slot = id_tag(id) == ID_APPLET ? id_aux(id) : NO_INDEX;
     uint row = id_tag(id) == ID_APPLET ? id_payload(id) : 0u;
-    uint w = uint(max(want.x, 1.0) + 0.5);
-    uint h = uint(max(want.y, 1.0) + 0.5);
 
-    private[0].popup_state = POPUP_ASKED;
     private[0].popup_kind = kind;
     private[0].popup_id = id;
     private[0].popup_slot = slot;
     private[0].popup_row = row;
     private[0].popup_anchor = anchor;
     private[0].popup_want = want;
+    private[0].popup_pending_secs = 0.0;
+    if (kind == POPUP_MENU)
+    {
+        private[0].popup_state = POPUP_PENDING;
+        return;
+    }
+    ask_popup();
+}
+
+/// The one `ACT_POPUP_OPEN` for the popup this file holds, at its want.
+void ask_popup()
+{
+    float2 want = private[0].popup_want;
+    uint w = uint(max(want.x, 1.0) + 0.5);
+    uint h = uint(max(want.y, 1.0) + 0.5);
+    private[0].popup_state = POPUP_ASKED;
     private[0].popup_sent = float2(float(w), float(h));
 
     Args a = action_begin(ACT_POPUP_OPEN);
-    arg(a, kind);
-    arg(a, slot);
-    arg(a, row);
-    arg4(a, anchor);
+    arg(a, private[0].popup_kind);
+    arg(a, private[0].popup_slot);
+    arg(a, private[0].popup_row);
+    arg4(a, private[0].popup_anchor);
     arg(a, w);
     arg(a, h);
+}
+
+/// A pending menu is asked for once the table was built for its level and
+/// nothing arriving this frame will build it again (`rebuild`), after the
+/// layout, so `popup_want` is what that table's rows measure. A level whose
+/// rows never come is a level built with none: it opens at the least a menu
+/// is, and grows when they land. `MENU_OPEN_WAIT_S` bounds the wait for a
+/// build that keeps being overtaken.
+public void step_popup_ask(bool rebuild, float dt)
+{
+    if (private[0].popup_state != POPUP_PENDING)
+    {
+        return;
+    }
+    private[0].popup_pending_secs += dt;
+    bool built = !rebuild && private[0].built_for.eq(menu_level_id());
+    bool late = private[0].popup_pending_secs >= MENU_OPEN_WAIT_S;
+    if (!built && !late)
+    {
+        return;
+    }
+    if (!built)
+    {
+        Args a = witness_begin(WITNESS_INFO,
+                               getStringHash("popup: a menu asked for unbuilt after {0:f} s"));
+        argf(a, private[0].popup_pending_secs);
+    }
+    ask_popup();
 }
 
 /// End the popup: one `ACT_POPUP_CLOSE`, and the `CMD_POPUP_DONE` that comes
@@ -189,6 +240,14 @@ public void witness_popup_stall()
 /// dismissal.
 public void popup_mapped(uint2 size)
 {
+    // Only the popup asked for comes up, and one up stays up: a configure
+    // that lands while a popup ends, or under a menu still pending, is not
+    // the popup this file holds.
+    uint st = private[0].popup_state;
+    if (st != POPUP_ASKED && st != POPUP_UP)
+    {
+        return;
+    }
     private[0].popup_state = POPUP_UP;
     private[0].popup_sent = float2(float(size.x), float(size.y));
 }

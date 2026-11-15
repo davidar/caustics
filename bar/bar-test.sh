@@ -2347,12 +2347,20 @@ else
     pass "the power button laid out: ${power_rect[*]}"
     power_cx=$(python3 -c "print(round(${power_rect[0]} + ${power_rect[2]} / 2))")
     power_cy=$(python3 -c "print(round(${power_rect[1]} + ${power_rect[3]} / 2))")
+    power_mark=$(journal_lines)
     click_at "$power_cx" $((bar_origin_y + power_cy))
     if wait_for_journal "popup: requested kind=menu" 8 && wait_for_journal "popup: open kind=menu" 8; then
         pass "the power click asked for a menu popup and it mapped"
     else
         fail "no menu popup from the power button"
     fi
+    # The first open of this bar's life: asked for at the size its rows
+    # measure, so the popup is never drawn at another size before a move
+    # lands (its rows do not change while it is up, so nothing moves it).
+    power_asked=$(journal_since "$power_mark" | grep -F 'popup: requested kind=menu' | head -1 |
+        sed -n 's/.* size=\([0-9]*x[0-9]*\) .*/\1/p')
+    power_mapped=$(journal_since "$power_mark" | grep -F 'popup: open kind=menu' | head -1 |
+        sed -n 's/.*kind=menu \([0-9]*x[0-9]*\) .*/\1/p')
     # Rows land over several frames: wait for the count.
     deadline=$((SECONDS + 20))
     while [[ "$(power_rows_now | grep -c .)" -lt 6 ]] && ((SECONDS < deadline)); do
@@ -2367,6 +2375,13 @@ else
         pass "six rows: five items and one separator, all the sidecar's"
     else
         fail "the popup holds $n rows: $(printf '%s' "$rows" | tr '\n' ' ')"
+    fi
+    if [[ -n "$power_asked" && "$power_asked" == "$power_mapped" ]] &&
+        ! journal_since "$power_mark" | jgrep -F 'popup: repositioned'; then
+        pass "the first open asked for its rows' size ($power_asked), mapped at it, and was never moved"
+    else
+        fail "the first open asked for ${power_asked:-nothing}, mapped at ${power_mapped:-nothing}: $(journal_since "$power_mark" |
+            grep -oE 'popup: (requested|open|repositioned)[^(]*' | tr '\n' ';')"
     fi
 
     # The menu fits the screen, so the wheel moves nothing.
