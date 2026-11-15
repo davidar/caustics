@@ -61,13 +61,15 @@ pub mod markup;
 pub mod rows;
 pub mod server;
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use caustics_bar_abi::wire::{self, ActionBody, Frame, Pixmap, REQ_ACTIVATION, RFLAG_SHOW, Rows};
+use caustics_bar_abi::wire::{
+    self, ActionBody, Frame, Pixmap, REQ_ACTIVATION, REQ_ICON, RFLAG_SHOW, Rows,
+};
 use tokio::sync::Notify;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use zbus::Connection;
@@ -114,6 +116,9 @@ pub enum Input {
     /// The compositor's token for the click that activated `row`
     /// (`REQ_ACTIVATION`, docs/abi.md, *Request*).
     Activation { row: u32, token: String },
+    /// The bar's store let go of an image a row names, and it asks for it
+    /// again (`REQ_ICON`, docs/abi.md, *Request*).
+    Icon(String),
 }
 
 /// How long a click that invokes an action waits for its activation token
@@ -369,7 +374,7 @@ pub async fn serve(
         open: false,
         revision: 0,
         last: None,
-        sent: HashSet::new(),
+        sent: HashMap::new(),
         held: Vec::new(),
         written,
     };
@@ -411,6 +416,17 @@ pub async fn serve(
                 }
                 Some(Input::Activation { row, token }) => {
                     daemon.token(row, token).await;
+                }
+                // A key the last frame names goes again, the same bytes; any
+                // other name is not this process's, and is silence.
+                Some(Input::Icon(name)) => {
+                    if let Some(rgba) = daemon.sent.get(&name) {
+                        witness(&format!("{name} asked for again; sent"));
+                        let frame = pixmap_frame(&name, rgba);
+                        if !daemon.write(&frame) {
+                            return 0;
+                        }
+                    }
                 }
                 Some(Input::Action(action)) => {
                     let op = {
@@ -487,8 +503,11 @@ struct Daemon {
     revision: u32,
     /// The last frame written and its ageless twin (`rows::worth_sending`).
     last: Option<(Rows, Rows)>,
-    /// `Pixmap` keys written by this process (docs/abi.md, *Pixmap*): each once.
-    sent: HashSet<String>,
+    /// The `Pixmap` keys the last frame written names, with their texels
+    /// (docs/abi.md, *Pixmap*): each sent before the first frame naming it,
+    /// and again on a `REQ_ICON` while a frame names it. Bounded by the
+    /// frame — the history's images — never by what was ever sent.
+    sent: HashMap<String, Vec<u8>>,
     /// Invoked actions waiting for their activation token, oldest first.
     held: Vec<Held>,
     /// The history file's bytes as last written — or tried, so a failing
@@ -714,20 +733,22 @@ impl Daemon {
         self.revision += 1;
 
         // The texels first, so the bar holds them before it reads the name.
+        // What the last frame named is not sent again; what this one names
+        // is what stays held.
+        let mut was = std::mem::take(&mut self.sent);
         let mut owed = 0;
         for (key, rgba) in pixmaps {
-            if !self.sent.insert(key.clone()) {
+            if let Some(held) = was.remove(&key) {
+                self.sent.insert(key, held);
                 continue;
             }
-            let frame = Frame::Pixmap(Pixmap {
-                key,
-                width: caustics_bar_abi::IMAGE_SLOT_PX,
-                height: caustics_bar_abi::IMAGE_SLOT_PX,
-                rgba,
-            });
-            if !self.write(&frame) {
+            if self.sent.contains_key(&key) {
+                continue;
+            }
+            if !self.write(&pixmap_frame(&key, &rgba)) {
                 return false;
             }
+            self.sent.insert(key, rgba);
             owed += 1;
         }
         let show = rows
@@ -789,6 +810,16 @@ impl Daemon {
     }
 }
 
+/// One minted key's `Pixmap` (docs/abi.md, *Pixmap*).
+fn pixmap_frame(key: &str, rgba: &[u8]) -> Frame {
+    Frame::Pixmap(Pixmap {
+        key: key.to_owned(),
+        width: caustics_bar_abi::IMAGE_SLOT_PX,
+        height: caustics_bar_abi::IMAGE_SLOT_PX,
+        rgba: rgba.to_vec(),
+    })
+}
+
 /// Read `Action` frames on a thread and hand them to the loop. Dropping the
 /// sender at EOF is what tells the loop the bar is gone.
 fn watch_stdin(actions: UnboundedSender<Input>) {
@@ -814,6 +845,14 @@ fn watch_stdin(actions: UnboundedSender<Input>) {
                             return;
                         }
                     }
+                    Ok(Some(Frame::Request(request))) if request.kind == REQ_ICON => {
+                        if actions.send(Input::Icon(request.name)).is_err() {
+                            return;
+                        }
+                    }
+                    // A question this sidecar has no answer for is silence,
+                    // and says nothing (docs/abi.md, *Request*).
+                    Ok(Some(Frame::Request(_))) => {}
                     Ok(Some(other)) => {
                         witness(&format!("ignoring a frame of kind {}", other.kind()));
                     }

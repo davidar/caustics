@@ -396,8 +396,13 @@ fn a_pixmap_nobody_asked_for_is_kept_and_a_want_lands_it_without_asking() {
     );
 }
 
+/// A row's icon the store does not hold is asked of the sidecar whose rows
+/// name it — the minter, if it is a minted key — and of `caustics-apps`, if it
+/// is a themed name: the bar reads nothing to tell which (docs/abi.md,
+/// *Request*). Whichever answers lands by the asked path, and the name is
+/// asked once until its slot is freed.
 #[test]
-fn a_want_the_store_lacks_is_asked_of_a_sidecar() {
+fn a_want_the_store_lacks_is_asked_of_the_rows_owner_and_of_apps() {
     let mut facts = facts();
     let mut images = Images::new();
     let key = "caustics-tray:00000000000000bb";
@@ -407,13 +412,51 @@ fn a_want_the_store_lacks_is_asked_of_a_sidecar() {
     );
     assert_eq!(
         facts.take_requests(),
-        vec![(APPS_SIDECAR, wire::REQ_ICON, key.to_owned())]
+        vec![
+            (DEMO.to_owned(), wire::REQ_ICON, key.to_owned()),
+            (APPS_SIDECAR.to_owned(), wire::REQ_ICON, key.to_owned()),
+        ]
     );
+    assert_eq!(
+        want_row_icon(&mut facts, &mut images, key, wire::REQ_ICON),
+        Wanted::Nothing,
+        "asked once"
+    );
+    assert!(facts.take_requests().is_empty());
     // ...and the answer, when it comes, lands by the asked path.
     assert!(
         facts
-            .learn_pixmap(&mut images, APPS_SIDECAR, key, &slot_rgba(0xbb))
+            .learn_pixmap(&mut images, DEMO, key, &slot_rgba(0xbb))
             .is_some()
+    );
+}
+
+/// A name whose bytes are not in a sidecar's rows — a literal of the
+/// tunables, an app id in the strings buffer — has no owner to ask: its
+/// store miss goes to `caustics-apps` alone.
+#[test]
+fn a_literals_store_miss_is_asked_of_apps_alone() {
+    let mut facts = facts();
+    let mut images = Images::new();
+    let mut model = Model::default();
+    model.apply(window(1, "kitty", "one", true, 1));
+    facts.compose(&model, &Strings::new(), &mut images);
+    let entry = facts.buffer().apps[0];
+    assert_eq!(
+        facts.want_icon(
+            &mut images,
+            abi::WantIcon {
+                off: entry.id_off,
+                len: entry.id_len,
+                kind: wire::REQ_ICON,
+                source: abi::SRC_STRINGS,
+            }
+        ),
+        Wanted::Asked
+    );
+    assert_eq!(
+        facts.take_requests(),
+        vec![(APPS_SIDECAR.to_owned(), wire::REQ_ICON, "kitty".to_owned())]
     );
 }
 
@@ -572,7 +615,7 @@ fn a_freed_app_icon_the_store_lost_is_asked_for_again() {
     );
     assert_eq!(
         facts.take_requests(),
-        vec![(APPS_SIDECAR, wire::REQ_APP, "kitty".to_owned())]
+        vec![(APPS_SIDECAR.to_owned(), wire::REQ_APP, "kitty".to_owned())]
     );
 }
 
@@ -728,9 +771,12 @@ fn an_answer_that_arrives_unasked_replaces_a_miss() {
     );
     assert_eq!(
         facts.take_requests(),
-        vec![(APPS_SIDECAR, wire::REQ_ICON, name.to_owned())]
+        vec![
+            (DEMO.to_owned(), wire::REQ_ICON, name.to_owned()),
+            (APPS_SIDECAR.to_owned(), wire::REQ_ICON, name.to_owned()),
+        ]
     );
-    // `caustics-apps` answered silence. Half a minute later the file exists.
+    // `caustics-apps` answered silence, and so did the row's own sidecar. Half a minute later the file exists.
     assert!(
         facts
             .learn_pixmap(&mut images, APPS_SIDECAR, name, &slot_rgba(0x5a))
@@ -911,11 +957,11 @@ fn a_want_is_read_out_of_the_buffer_it_names() {
         asked,
         vec![
             (
-                GLYPHS_SIDECAR,
+                GLYPHS_SIDECAR.to_owned(),
                 wire::REQ_GLYPH,
                 "audio-volume-high-symbolic".to_owned()
             ),
-            (APPS_SIDECAR, wire::REQ_ICON, "kitty".to_owned()),
+            (APPS_SIDECAR.to_owned(), wire::REQ_ICON, "kitty".to_owned()),
         ],
         "an app id whose `App` answer is held is not asked for it again"
     );
@@ -1011,7 +1057,11 @@ fn a_flagged_string_is_one_cover_request_and_not_two() {
     let asked = facts.take_requests();
     assert_eq!(
         asked,
-        vec![(GLYPHS_SIDECAR, wire::REQ_COVER, "日本語".to_owned())]
+        vec![(
+            GLYPHS_SIDECAR.to_owned(),
+            wire::REQ_COVER,
+            "日本語".to_owned()
+        )]
     );
 }
 
@@ -1043,7 +1093,7 @@ fn a_row_label_is_covered_out_of_its_slots_region() {
     assert_eq!(facts.cover(range), Some(FLAG.to_owned()));
     assert_eq!(
         facts.take_requests(),
-        vec![(GLYPHS_SIDECAR, wire::REQ_COVER, FLAG.to_owned())],
+        vec![(GLYPHS_SIDECAR.to_owned(), wire::REQ_COVER, FLAG.to_owned())],
         "one REQ_COVER to caustics-glyphs, with exactly the label's bytes"
     );
     // Once per string for the life of the process, whichever buffer it was in.
@@ -1092,7 +1142,7 @@ fn a_title_is_covered_out_of_the_strings_buffer() {
     assert_eq!(
         facts.take_requests(),
         vec![(
-            GLYPHS_SIDECAR,
+            GLYPHS_SIDECAR.to_owned(),
             wire::REQ_COVER,
             "日本語のタイトル".to_owned()
         )]

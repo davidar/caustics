@@ -364,6 +364,21 @@ impl Pipe {
     /// much a second later. Returns whether it was written or queued; `false` only for a
     /// frame that would not serialise.
     pub fn request(&self, frame_to_send: &Frame, what: &str) -> bool {
+        self.remember_and_write(frame_to_send, what, false)
+    }
+
+    /// [`Self::request`], except that a request asked before is **written to
+    /// the live child again** (still remembered once for the next). For a
+    /// caller that asks once per name until the answer is lost: the bar's
+    /// pixel questions, where a repeat means the store let a key go and only
+    /// the live child can send it back (docs/abi.md, *Request*). A program
+    /// request stays [`Self::request`]: a second one would be a second
+    /// compile of the same program.
+    pub fn ask(&self, frame_to_send: &Frame, what: &str) -> bool {
+        self.remember_and_write(frame_to_send, what, true)
+    }
+
+    fn remember_and_write(&self, frame_to_send: &Frame, what: &str, again: bool) -> bool {
         let mut frame = Vec::with_capacity(wire::WireHeader::SIZE + 64);
         if wire::write(&mut frame, frame_to_send).is_err() {
             tracing::warn!("sidecar {}: a request frame would not serialise", self.name);
@@ -373,19 +388,22 @@ impl Pipe {
             tracing::warn!("sidecar {}: the requests lock is poisoned", self.name);
             return false;
         };
-        if remembered.iter().any(|known| *known == frame) {
-            // Asked before: the child that is live has it, or will get it
-            // when the next one starts. Nothing to write twice.
-            return true;
+        if remembered.contains(&frame) {
+            if !again {
+                // Asked before: the child that is live has it, or will get
+                // it when the next one starts. Nothing to write twice.
+                return true;
+            }
+        } else {
+            if remembered.len() >= MAX_REQUESTS {
+                tracing::warn!(
+                    "sidecar {}: {MAX_REQUESTS} requests remembered; forgetting the oldest",
+                    self.name
+                );
+                remembered.remove(0);
+            }
+            remembered.push(frame.clone());
         }
-        if remembered.len() >= MAX_REQUESTS {
-            tracing::warn!(
-                "sidecar {}: {MAX_REQUESTS} requests remembered; forgetting the oldest",
-                self.name
-            );
-            remembered.remove(0);
-        }
-        remembered.push(frame.clone());
         drop(remembered);
         let Ok(mut slot) = self.stdin.lock() else {
             tracing::warn!("sidecar {}: the stdin lock is poisoned", self.name);

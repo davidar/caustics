@@ -8,10 +8,11 @@
 //! actions back by row id on stdin. Whole-state, rewritten on every change,
 //! and once at startup even when there is nothing on the bus. A pixmap icon is
 //! a **name** in that frame, and its texels a `Pixmap` frame of their own,
-//! sent once per key before the first frame that names it (docs/abi.md, *Pixmap*).
+//! sent before the first frame that names its key, and again on a `REQ_ICON`
+//! for it while a frame still names it (docs/abi.md, *Pixmap*).
 //!
 //! ```text
-//!   run ── stdin thread ─ wire::read ─────────────────► Msg::Action ─┐
+//!   run ── stdin thread ─ wire::read ──────────► Msg::Action / Icon ─┐
 //!       └─ serve ─ session bus ─ watcher::establish              State ─ stdout
 //!                    └─ item::run(one task per item) ─► Msg::Item/Menu/Gone ┘
 //! ```
@@ -40,7 +41,7 @@ pub mod watcher;
 use std::collections::{HashMap, HashSet};
 use std::io::Write as _;
 
-use caustics_bar_abi::wire::{self, ActionBody, Frame, Rows};
+use caustics_bar_abi::wire::{self, ActionBody, Frame, REQ_ICON, Rows};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
 use zbus::Connection;
@@ -81,6 +82,9 @@ pub enum Msg {
     Gone(String),
     /// The bar decided something about one of our rows.
     Action(ActionBody),
+    /// The bar's store let go of pixels a row of ours names, and it asks for
+    /// them again (`REQ_ICON`, docs/abi.md, *Request*).
+    Icon(String),
 }
 
 // ---------------------------------------------------------------------------
@@ -118,7 +122,8 @@ struct State {
     /// Witnesses already written, so that a thing that does not fit is one
     /// line rather than one line per frame.
     said: HashSet<String>,
-    /// `Pixmap` keys written to stdout by this process (docs/abi.md, *Pixmap*).
+    /// The `Pixmap` keys the last frame names, and their texels
+    /// (docs/abi.md, *Pixmap*).
     sent: Sent,
 }
 
@@ -252,6 +257,15 @@ impl State {
                 self.forget(&key);
             }
             Msg::Action(action) => self.act(&action),
+            // A key the last frame names is sent again, the same bytes; any
+            // other name (a themed one, or a key no frame names now) is
+            // `caustics-apps`' or nobody's, and is silence.
+            Msg::Icon(name) => {
+                if let Some(frame) = self.sent.again(&name) {
+                    witness(&format!("{name} asked for again; sent"));
+                    emit(&frame);
+                }
+            }
         }
     }
 
@@ -321,6 +335,14 @@ fn watch_stdin(out: UnboundedSender<Msg>) {
                             break;
                         }
                     }
+                    Ok(Some(Frame::Request(request))) if request.kind == REQ_ICON => {
+                        if out.send(Msg::Icon(request.name)).is_err() {
+                            break;
+                        }
+                    }
+                    // A question this sidecar has no answer for is silence,
+                    // and says nothing (docs/abi.md, *Request*).
+                    Ok(Some(Frame::Request(_))) => {}
                     Ok(Some(other)) => witness(&format!("ignoring a {} frame", other.kind())),
                     Err(err) => {
                         witness(&format!("stdin: {err}"));

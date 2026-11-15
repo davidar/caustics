@@ -1031,7 +1031,10 @@ mints `caustics-tray:<fnv1a64 of the fitted texels, 16 hex digits>`. The
 caustic resolves a minted key like any themed name, so its first build asks
 `REQ_GLYPH` (which `caustics-glyphs` answers missing) and `REQ_ICON` (which
 the store answers with the pixels already sent) together, and the picture is
-drawn from the build after it lands, not after the glyph answer.
+drawn from the build after it lands, not after the glyph answer. While its
+rows name a key, the sidecar answers a `REQ_ICON` for it with the same
+`Pixmap` again (*Pixmap*), which is what a key the bar's store let go comes
+back from.
 
 Pixels inside a rows frame were tried and withdrawn: four 64² icons put a
 tray past its 64 KiB region before a single row, every frame was refused, and
@@ -1160,7 +1163,12 @@ newlines, so one witness can become three. `sysmon/` is the worked example
 for samples. `bar/abi/examples/rows_demo.rs` is the worked example for rows: a
 hundred-line applet with an icon, two menu rows and a slider that echoes
 every action to stderr and republishes on each one, and the test harness's
-proof that the rows path works without any real applet. `bar/abi/examples/fake_host.rs`
+proof that the rows path works without any real applet. A sidecar that sends
+`Pixmap` frames under keys it mints keeps the texels of every key its current
+rows name and answers a `REQ_ICON` for one with that `Pixmap` again
+(*Pixmap*); every sidecar ignores, without a witness, a `Request` it has no
+answer for, since the bar asks a chip's own sidecar about every icon name
+its rows carry that the store does not hold. `bar/abi/examples/fake_host.rs`
 is the other way round: a stand-in for the canvas host that runs a sink
 sidecar on its pipes, logs its `Prompt` and `Lock` frames, answers from a
 script and confirms a lock, which is how the nested gate drives the polkit
@@ -1317,12 +1325,33 @@ may have restarted, or the sidecar may have); one it does not is skipped like
 any unknown frame. Written with the same one-syscall rule as an action: a
 child not reading its stdin costs a witness, never a wait. **Unlike an
 action, a request is remembered by the bar's pipe** (`Pipe::request`,
-deduplicated, at most 4096). One written before the child has a stdin (the
-bar's first build runs a millisecond before its sidecars do) is written when
-the child starts, and every child after a restart is sent the whole list
-first, because its predecessor's answers named glyph ids and slots it knows
-nothing about. An action is never replayed: a click for a child that is gone
-is stale.
+remembered once however often it is asked, at most 4096). One written before
+the child has a stdin (the bar's first build runs a millisecond before its
+sidecars do) is written when the child starts, and every child after a
+restart is sent the whole list first, because its predecessor's answers
+named glyph ids and slots it knows nothing about. A name question
+(`Pipe::ask`) asked again while the child lives is **written again**: the
+process's asked-sets already keep one question per name until its slot is
+freed, so a repeat is a question the store could not answer, and a pipe that
+swallowed it would leave the picture missing until the child restarted. A
+program request (`REQ_PROGRAM`) is not, since a second would be a second
+compile. An action is never
+replayed: a click for a child that is gone is stale.
+
+**A `REQ_ICON` goes to the sidecar whose rows name it, too.** When the store
+does not hold the pixels a `REQ_ICON` want names, the process asks
+`caustics-apps`, and, when the want's `source` is a sidecar slot (the name's
+bytes are in that sidecar's rows region), the sidecar that owns the slot as
+well. The process reads none of the name to tell a themed name from a key a
+sidecar minted, so it asks both, and each answers only a name that is its
+own: `caustics-apps` a name a theme has, a minting sidecar one of its live
+keys (*Pixmap*). A name from a literal or an answer goes to `caustics-apps`
+alone. **A sidecar that mints no keys answers no `REQ_ICON`, and says nothing
+about one**: every sidecar ignores a `Request` it has no answer for, without
+a witness, so a chip's themed icon name costs its own sidecar nothing. No
+frame and no kind changed for this, so neither the wire nor the *Hello* hash
+moved; a set is built and installed together, and a sidecar that predates it
+reads the request as one more frame it does not use.
 
 **An answer may come again, unasked.** The bar asks once per name, so a miss
 would otherwise stand for the life of the process. `caustics-glyphs` and
@@ -1431,9 +1460,18 @@ key → skip (body); the rgba length wrong → skip (length). A body is 16 + key
 was asked; a key a sidecar **mints** leads with its own name, and the
 reference form is `<sidecar>:<fnv1a64 of the rgba, 16 hex digits>`
 (`caustics_bar_abi::wire::pixmap_key`): content-addressed, so an icon that comes
-back unchanged is the same key and is never re-sent, and one that changed is a
-new key. A sidecar sends a minted key's `Pixmap` once per process, before the
-first frame that names it.
+back unchanged is the same key, and one that changed is a new key. A sidecar
+sends a minted key's `Pixmap` before the first frame that names it, and
+again before a later frame that names it after one that did not.
+
+**A live key can always be had again.** A sidecar that mints keys keeps the
+texels of every key its last `Rows` frame names, and answers a `REQ_ICON`
+naming one of them by writing that `Pixmap` again, byte for byte the first;
+a `REQ_ICON` naming any other key (one it never minted, or one no frame of
+its names any more) is silence. What it holds is bounded by what its frame
+shows, never by what it has ever sent. So the store is a latency saver and
+nothing else: a key it let go comes back from the sidecar that minted it,
+one round trip later, and a themed name or an app id from `caustics-apps`.
 
 **The store.** The process keeps every `Pixmap` by key, asked for or not (a
 minted key arrives before any build has named it). A want for a stored key
@@ -1442,7 +1480,9 @@ lands a slot and **sends no request**. A slot freed from the image array
 (no build drew it) takes its name's asked mark with it, themed name and app
 id alike, so the caustic's next want for that picture lands it from the
 store. Bounded at 256 keys and 4 MiB, the key longest unwanted let go past it
-with one witness; a sidecar that exits takes its keys with it. The caustic's
+with one witness (and the next want for a key it let go is a request, above);
+a sidecar that exits takes its keys with it, and the one that replaces it
+sends them again with its first frame. The caustic's
 resolution: a name nothing has answered is asked of `caustics-glyphs`
 (`REQ_GLYPH`) and for pixels (`REQ_ICON`, which the store answers or
 `caustics-apps` does) **in the same build**, rather than pixels only after

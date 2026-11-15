@@ -1006,7 +1006,7 @@ impl Bar {
     /// exactly what a bar with no `caustics-apps` beside it looks like.
     fn send_requests(&mut self) {
         for (sidecar, kind, name) in self.facts.take_requests() {
-            self.feeders.request(sidecar, kind, &name);
+            self.feeders.request(&sidecar, kind, &name, true);
         }
     }
 
@@ -2217,7 +2217,7 @@ impl Bar {
         self.gpu = Some(gpu);
         self.modules.expect(wire::format_code(define));
         self.feeders
-            .request(pipe::RELOAD_SIDECAR, wire::REQ_PROGRAM, define);
+            .request(pipe::RELOAD_SIDECAR, wire::REQ_PROGRAM, define, false);
         Ok(())
     }
 

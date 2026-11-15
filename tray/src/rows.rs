@@ -25,7 +25,7 @@
 //!   that names it. A full tray frame is names and labels — about 10 KB.
 
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use caustics_bar_abi::buffer::{
     ACTION_ACTIVATE, ACTION_MENU_CLOSE, ACTION_MENU_OPEN, ACTION_MIDDLE, ACTION_SECONDARY,
@@ -422,38 +422,65 @@ impl Builder<'_> {
     }
 }
 
-/// The `Pixmap` keys this process has written (docs/abi.md, *Pixmap*), and the frames a build
-/// still owes the bar.
+/// The `Pixmap` keys the last published frame names, with their texels
+/// (docs/abi.md, *Pixmap*): what a build owes the bar, and what a `REQ_ICON`
+/// for a key the bar's store let go is answered from.
 ///
-/// A key is its texels' hash, so one sent is never sent again: an icon that
-/// comes back unchanged costs nothing, and one that changed is a new key and
-/// one 16 KiB frame. A restarted tray starts from an empty set and resends,
-/// which is right — the bar forgets what a sidecar sent when it exits.
+/// A key is its texels' hash, so one the frame still names is never sent
+/// again: an icon that comes back unchanged costs nothing, and one that
+/// changed is a new key and one 16 KiB frame. A key the frame stops naming is
+/// let go here, so what this holds is bounded by what one frame shows — one
+/// slot's texels per distinct icon in it — never by what the process has ever
+/// sent; one that comes back later is sent again before the frame that names
+/// it. A restarted tray starts empty and resends, which is right — the bar
+/// forgets what a sidecar sent when it exits.
 #[derive(Debug, Default)]
 pub struct Sent {
-    keys: HashSet<String>,
+    live: HashMap<String, Vec<u8>>,
 }
 
 impl Sent {
-    /// One `Pixmap` frame per key of `pixmaps` not yet sent, in order, each
-    /// marked sent by the call. The caller writes them **before** the `Rows`
-    /// frame that names them, so the bar holds the texels before it reads the
-    /// name.
+    /// One `Pixmap` frame per key of `pixmaps` the last frame did not name, in
+    /// order; `pixmaps` is then what is live. The caller writes the frames
+    /// **before** the `Rows` frame that names them, so the bar holds the
+    /// texels before it reads the name.
     pub fn owed(&mut self, pixmaps: Vec<(String, Vec<u8>)>) -> Vec<Frame> {
+        let mut was = std::mem::take(&mut self.live);
         let mut frames = Vec::new();
         for (key, rgba) in pixmaps {
-            if !self.keys.insert(key.clone()) {
+            if let Some(held) = was.remove(&key) {
+                self.live.insert(key, held);
                 continue;
             }
-            frames.push(Frame::Pixmap(Pixmap {
-                key,
-                width: WIRE_PIXMAP,
-                height: WIRE_PIXMAP,
-                rgba,
-            }));
+            if self.live.contains_key(&key) {
+                continue;
+            }
+            frames.push(pixmap(&key, &rgba));
+            self.live.insert(key, rgba);
         }
         frames
     }
+
+    /// The answer to a `REQ_ICON` naming `key`: its `Pixmap` again, byte for
+    /// byte, while the last frame names it; `None` (silence) for a key this
+    /// process did not mint or that no frame of its names any more.
+    pub fn again(&self, key: &str) -> Option<Frame> {
+        self.live.get(key).map(|rgba| pixmap(key, rgba))
+    }
+
+    /// Keys held, for a test's bound.
+    pub fn held(&self) -> usize {
+        self.live.len()
+    }
+}
+
+fn pixmap(key: &str, rgba: &[u8]) -> Frame {
+    Frame::Pixmap(Pixmap {
+        key: key.to_owned(),
+        width: WIRE_PIXMAP,
+        height: WIRE_PIXMAP,
+        rgba: rgba.to_vec(),
+    })
 }
 
 fn first_line(text: &str) -> &str {

@@ -43,8 +43,7 @@ CHANGELOG.md.
    live reload's. The no-battery desktop has no power menu rows of its own.
    A third `wpctl` child per slider drag. A tray frame that changes only an
    icon name costs a full build, compose and shape (the shape decision should
-   hash text bytes only). A freed image whose pixels the store let go
-   falls back to the letter. The bar's resident memory after a cold swap (the
+   hash text bytes only). The bar's resident memory after a cold swap (the
    driver's compile heap stays in-process).
 5. **Not built, by design or for later.** Toasts' hover-hold, close button,
    per-toast progress, sound and top-centre placement; a max-charge toggle,

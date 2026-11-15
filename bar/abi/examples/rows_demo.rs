@@ -195,6 +195,14 @@ fn main() {
                     if menu_open { "open" } else { "closed" }
                 ));
             }
+            // The bar asks a chip's own sidecar for the pixels of an icon
+            // name its store lacks (docs/abi.md, *Request*). The demo mints no
+            // `Pixmap` keys, so the answer is silence; it says so on stderr
+            // only because echoing what it is sent is what the demo is for.
+            Ok(Some(Frame::Request(request))) => say(&format!(
+                "rows_demo: request kind {} for {:?}; nothing minted here, so silence",
+                request.kind, request.name
+            )),
             Ok(Some(other)) => {
                 say(&format!("rows_demo: ignoring a {} frame", other.kind()));
             }

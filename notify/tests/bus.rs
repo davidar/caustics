@@ -124,6 +124,13 @@ impl Daemon {
             .expect("the daemon is reading its stdin");
     }
 
+    /// The bar's `REQ_ICON` for a key its store let go (docs/abi.md, *Request*).
+    fn ask_icon(&self, name: &str) {
+        self.actions
+            .send(Input::Icon(name.to_owned()))
+            .expect("the daemon is reading its stdin");
+    }
+
     /// The next frame of any kind.
     async fn next(&mut self) -> Frame {
         tokio::time::timeout(WAIT, self.frames.recv())
@@ -352,7 +359,7 @@ async fn image_data_is_a_pixmap_before_the_frame_that_names_it() {
         .await
         .unwrap();
 
-    let mut key = None;
+    let mut first = None;
     loop {
         match daemon.next().await {
             Frame::Pixmap(pixmap) => {
@@ -363,15 +370,32 @@ async fn image_data_is_a_pixmap_before_the_frame_that_names_it() {
                 );
                 assert_eq!((pixmap.width, pixmap.height), (64, 64));
                 assert_eq!(pixmap.rgba.len(), 64 * 64 * 4);
-                key = Some(pixmap.key);
+                first = Some(pixmap);
             }
             Frame::Rows(rows) if has_row(&rows, id) => {
-                let key = key.expect("the Pixmap came first");
+                let key = &first.as_ref().expect("the Pixmap came first").key;
                 // image-data beats app_icon.
                 assert_eq!(rows.icon(row_index(&rows, id).unwrap()), Some(key.as_str()));
                 break;
             }
             _ => {}
+        }
+    }
+    let first = first.expect("the Pixmap came first");
+    // The bar's store let the key go and asks again: the same bytes. A name
+    // this process never minted is silence, which the order shows: the very
+    // next Pixmap is the live key's.
+    daemon.ask_icon("caustics-notify:0000000000000000");
+    daemon.ask_icon("chat-icon");
+    daemon.ask_icon(&first.key);
+    loop {
+        match daemon.next().await {
+            Frame::Pixmap(again) => {
+                assert_eq!(again, first, "the live key again, byte for byte");
+                break;
+            }
+            Frame::Rows(_) => {}
+            other => panic!("unexpected {other:?}"),
         }
     }
     // The same pixels again are the same key, and not sent twice.

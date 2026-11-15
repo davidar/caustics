@@ -860,7 +860,7 @@ fn a_menu_rows_flag_is_asked_about_from_its_slot() {
     assert_eq!(
         facts.take_requests(),
         vec![(
-            crate::feeders::pipe::GLYPHS_SIDECAR,
+            crate::feeders::pipe::GLYPHS_SIDECAR.to_owned(),
             wire::REQ_COVER,
             FLAG.to_owned()
         )]

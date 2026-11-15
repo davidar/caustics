@@ -278,6 +278,10 @@ fn watch_stdin(tx: Sender<Msg>) {
                             return;
                         }
                     }
+                    // The bar asks a chip's own sidecar about an icon name its
+                    // store lacks; this one mints no keys, so a question is
+                    // silence and says nothing (docs/abi.md, *Request*).
+                    Ok(Some(Frame::Request(_))) => {}
                     Ok(Some(other)) => {
                         witness(&format!("ignoring a frame of kind {}", other.kind()));
                     }

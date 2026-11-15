@@ -408,7 +408,9 @@ What the bar adds on top:
   icon is never sent twice), a notification's image from `caustics-notify`. Each
   arrives as a `Pixmap` frame before the first frame that names its key. The
   process keeps every pixmap in a bounded store (256 keys, 4 MiB) and lands
-  one in a slot when the caustic wants it.
+  one in a slot when the caustic wants it. The store only saves a round
+  trip: a key it let go is asked of the sidecar whose rows name it, which
+  keeps the texels of every key its frame still shows and sends them again.
 - **What is drawn is the caustic's word.** Each build reports the slots it
   placed, and a slot it did not place is freed there and then: the array is
   not a cache, and a picture that comes back is landed again from the store

@@ -508,6 +508,73 @@ fn a_request_asked_before_the_child_exists_reaches_it_when_it_starts() {
     );
 }
 
+/// A name question asked again of a live child is written again
+/// (`Pipe::ask`): the bar asks a second time only when the answer was lost.
+/// A program request asked again is not (`Pipe::request`).
+#[test]
+fn a_question_asked_again_reaches_the_live_child_again() {
+    let echoed = scratch("again-out.bin", &[]);
+    let script = format!("cat > {}", echoed.display());
+    let (pipe, _rx) = start(&player("again.sh", &script));
+    let asked = Frame::Request(Request {
+        kind: wire::REQ_ICON,
+        arg: 0,
+        name: "caustics-tray:00000000000000aa".into(),
+    });
+    let program = Frame::Request(Request {
+        kind: wire::REQ_PROGRAM,
+        arg: 0,
+        name: "FORMAT".into(),
+    });
+    // The kinds the child has copied out so far, waiting (to a deadline only
+    // a wedged child reaches) until there are `want` of them.
+    let kinds = |want: usize| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let bytes = std::fs::read(&echoed).unwrap_or_default();
+            let mut input = std::io::Cursor::new(bytes);
+            let mut kinds = Vec::new();
+            while let Ok(Some(Frame::Request(got))) = wire::read(&mut input) {
+                kinds.push(got.kind);
+            }
+            if kinds.len() >= want || std::time::Instant::now() >= deadline {
+                return kinds;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+    };
+    // The child is up once the first question has gone through.
+    assert!(pipe.ask(&asked, "the question"));
+    assert_eq!(
+        kinds(1),
+        vec![wire::REQ_ICON],
+        "the first question was written"
+    );
+    assert!(pipe.ask(&asked, "the question again"));
+    assert!(pipe.request(&program, "the program"));
+    assert!(pipe.request(&program, "the program again"));
+    // Three are owed; a fourth, if the program went twice, would be here by
+    // the time a marker written after it is.
+    let marker = Frame::Request(Request {
+        kind: wire::REQ_GLYPH,
+        arg: 0,
+        name: "marker".into(),
+    });
+    assert!(pipe.ask(&marker, "the marker"));
+    let got = kinds(4);
+    drop(pipe);
+    assert_eq!(
+        got,
+        vec![
+            wire::REQ_ICON,
+            wire::REQ_ICON,
+            wire::REQ_PROGRAM,
+            wire::REQ_GLYPH
+        ],
+        "the question twice, the program once"
+    );
+}
+
 /// A child that restarts is asked everything its predecessor was: its
 /// answers named glyph ids and slots the new child knows nothing about.
 #[test]

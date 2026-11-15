@@ -564,9 +564,22 @@ impl Feeders {
     /// Ask a sidecar to resolve a name (docs/abi.md, *Request*): a `Request`
     /// frame on its stdin. `false` when no sidecar of that name is running —
     /// one line, and the caller draws without it.
-    // Called from `Bar::send_requests` once per build, with every name the caustic wanted and `Facts` had not yet asked about.
-    pub fn request(&self, sidecar: &str, kind: u32, name: &str) -> bool {
+    ///
+    /// `again` is the facts' questions (`Bar::send_requests`, once per build,
+    /// with every name the caustic wanted and `Facts` had not yet asked
+    /// about, or had un-asked when the answer was lost): a repeat is written
+    /// to the live child again ([`pipe::Pipe::ask`]). A program request is
+    /// not, since a second one would be a second compile.
+    pub fn request(&self, sidecar: &str, kind: u32, name: &str, again: bool) -> bool {
         match self.sidecars.iter().find(|pipe| pipe.name() == sidecar) {
+            Some(pipe) if again => pipe.ask(
+                &Frame::Request(Request {
+                    kind,
+                    arg: 0,
+                    name: name.to_owned(),
+                }),
+                &format!("request kind {kind} for {name:?}"),
+            ),
             Some(pipe) => pipe.request(
                 &Frame::Request(Request {
                     kind,

@@ -663,7 +663,7 @@ fn a_pixmap_goes_out_once_per_key_and_never_again() {
     assert_ne!(rows.icon(0), rows.icon(2));
     assert_eq!(first.pixmaps.len(), 2, "deduplicated within the frame");
 
-    let owed = sent.owed(first.pixmaps);
+    let owed = sent.owed(first.pixmaps.clone());
     assert_eq!(owed.len(), 2, "one Pixmap per distinct icon");
     for frame in &owed {
         let Frame::Pixmap(pixmap) = frame else {
@@ -705,6 +705,25 @@ fn a_pixmap_goes_out_once_per_key_and_never_again() {
         3,
     );
     assert_eq!(sent.owed(changed.pixmaps).len(), 1);
+
+    // What is held is what the last frame names: two keys, the retired one
+    // let go. A `REQ_ICON` for a live key is its `Pixmap` again, byte for
+    // byte; for the retired key, or one this process never minted, silence.
+    assert_eq!(sent.held(), 2, "bounded by the frame, not by history");
+    let live = changed.rows.icon(0).expect("a key").to_owned();
+    let again = sent.again(&live).expect("a live key is sent again");
+    assert!(
+        owed.contains(&again),
+        "the same bytes as the first time it went out"
+    );
+    let retired = rows.icon(2).expect("a key").to_owned();
+    assert_ne!(retired, live);
+    assert!(sent.again(&retired).is_none(), "a retired key is silence");
+    assert!(sent.again("caustics-tray:ffffffffffffffff").is_none());
+    assert!(sent.again("audio-volume-high-symbolic").is_none());
+
+    // A retired key that comes back is owed again: the bar may have let it go.
+    assert_eq!(sent.owed(first.pixmaps).len(), 1);
 }
 
 /// A real tray (two items with pixmap icons, two menu rows with pixmap icons

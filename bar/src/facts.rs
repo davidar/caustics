@@ -196,7 +196,7 @@ pub struct Facts {
     covers: Covers,
     /// What the caustic wants resolved: `(sidecar, REQ_*, name)`, drained by
     /// the embassy through `Feeders::request`.
-    requests: Vec<(&'static str, u32, String)>,
+    requests: Vec<(String, u32, String)>,
 }
 
 /// Distinct strings [`Facts::ask_cover`] will ever ask about
@@ -618,6 +618,19 @@ impl Facts {
         self.pixmap_order.retain(|key| pixmaps.contains_key(key));
     }
 
+    /// The sidecar a want's `source` names, when it names a slot: the one
+    /// whose rows the bytes are in. `None` for a literal, an answer, or
+    /// `caustics-apps` itself, which is asked anyway.
+    fn slot_owner(&self, source: u32) -> Option<String> {
+        if source as usize >= abi::MAX_SLOTS {
+            return None;
+        }
+        self.slots
+            .get(source as usize)
+            .filter(|name| name.as_str() != APPS_SIDECAR)
+            .cloned()
+    }
+
     /// One slot's region, as the embassy wrote it — what an `ACT_WANT_ICON`
     /// or an `ACT_COVER` whose source is a slot index reads its bytes out of.
     fn region(&self, slot: u32) -> &[u8] {
@@ -878,7 +891,7 @@ impl Facts {
 
     /// The names the caustic wants resolved, and the sidecar and `REQ_*` each
     /// goes to. Cleared by the call; the embassy writes them.
-    pub fn take_requests(&mut self) -> Vec<(&'static str, u32, String)> {
+    pub fn take_requests(&mut self) -> Vec<(String, u32, String)> {
         std::mem::take(&mut self.requests)
     }
 
@@ -894,8 +907,8 @@ impl Facts {
     #[cfg(test)]
     pub fn ask_cover(&mut self, text: &str) -> bool {
         match self.covers.ask(text) {
-            Some(request) => {
-                self.requests.push(request);
+            Some((sidecar, kind, name)) => {
+                self.requests.push((sidecar.to_owned(), kind, name));
                 true
             }
             None => false,
@@ -913,9 +926,9 @@ impl Facts {
     /// string past that loses its tail's glyphs and nothing else.
     pub fn cover(&mut self, cover: Cover) -> Option<String> {
         let text = self.bytes_at(cover.source, cover.off, cover.len)?;
-        let asked = self.covers.ask(&text)?;
-        let line = asked.2.clone();
-        self.requests.push(asked);
+        let (sidecar, kind, name) = self.covers.ask(&text)?;
+        let line = name.clone();
+        self.requests.push((sidecar.to_owned(), kind, name));
         Some(line)
     }
 
@@ -950,7 +963,8 @@ impl Facts {
                     Some(app) => gone && app.flags & wire::APP_ICON_PIXMAP != 0,
                 };
                 if ask {
-                    self.requests.push((APPS_SIDECAR, wire::REQ_APP, name));
+                    self.requests
+                        .push((APPS_SIDECAR.to_owned(), wire::REQ_APP, name));
                 }
                 if landed.is_some() {
                     Wanted::Landed
@@ -962,7 +976,8 @@ impl Facts {
                 if !self.glyphs_asked.insert(name.clone()) {
                     return Wanted::Nothing;
                 }
-                self.requests.push((GLYPHS_SIDECAR, wire::REQ_GLYPH, name));
+                self.requests
+                    .push((GLYPHS_SIDECAR.to_owned(), wire::REQ_GLYPH, name));
                 Wanted::Asked
             }
             wire::REQ_ICON => {
@@ -978,7 +993,16 @@ impl Facts {
                         None => Wanted::Nothing,
                     };
                 }
-                self.requests.push((APPS_SIDECAR, wire::REQ_ICON, name));
+                // Not held: asked of `caustics-apps`, which has it if a theme
+                // does, and of the sidecar whose rows name it, which has it if
+                // it minted the key (docs/abi.md, *Request*). Nothing here
+                // reads the name to tell which; each is silent about a name
+                // that is not its own.
+                if let Some(owner) = self.slot_owner(want.source) {
+                    self.requests.push((owner, wire::REQ_ICON, name.clone()));
+                }
+                self.requests
+                    .push((APPS_SIDECAR.to_owned(), wire::REQ_ICON, name));
                 Wanted::Asked
             }
             other => {

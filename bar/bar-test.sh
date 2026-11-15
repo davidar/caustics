@@ -2984,6 +2984,14 @@ if wait_for_journal "rows_demo: published rev=1" 10; then
 else
     note "no 'rows_demo: published' line on stderr"
 fi
+# The demo's chip icon is a themed name in its own rows, and the bar's store
+# holds no pixels for it, so the bar asks the demo too (docs/abi.md,
+# *Request*): a key the demo had minted would come back from it.
+if wait_for_journal 'rows_demo: request kind 3 for "applications-system-symbolic"' 15; then
+    pass "a row's icon the store lacks is asked of the sidecar whose rows name it"
+else
+    fail "no REQ_ICON reached rows_demo for its own chip's icon name"
+fi
 if wait_for_journal "charts: 6 laid out" 30; then
     pass "the sampler is unchanged beside it"
 else
