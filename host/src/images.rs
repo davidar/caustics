@@ -82,6 +82,12 @@ pub struct Images {
     freed: Vec<String>,
     /// Inserts refused because every slot was drawn or newly filled.
     refusals: u64,
+    /// Runs of refusals with no successful claim between, each warned once:
+    /// a full array is retried by the wants of every build, and one line an
+    /// episode is what keeps that out of the journal.
+    episodes: u64,
+    /// Whether the last claim was refused, i.e. an episode is under way.
+    refusing: bool,
 }
 
 impl Default for Images {
@@ -102,6 +108,8 @@ impl Images {
             frees: 0,
             freed: Vec::new(),
             refusals: 0,
+            episodes: 0,
+            refusing: false,
         }
     }
 
@@ -137,6 +145,12 @@ impl Images {
     /// Slots freed since the process began.
     pub fn frees(&self) -> u64 {
         self.frees
+    }
+
+    /// Refusal episodes: runs of refusals with no claim between, one warning
+    /// each.
+    pub fn refusal_episodes(&self) -> u64 {
+        self.episodes
     }
 
     pub fn refusals(&self) -> u64 {
@@ -219,12 +233,20 @@ impl Images {
     fn claim(&mut self, key: &str) -> Option<u32> {
         let Some(free) = self.slots.iter().position(|slot| slot.key.is_none()) else {
             self.refusals += 1;
-            tracing::warn!(
-                "images: all {} slots are drawn or new this frame; {key} is not shown",
-                abi::MAX_IMAGE_SLOTS
-            );
+            if self.refusing {
+                tracing::debug!("images: still full; {key} is not shown");
+            } else {
+                self.refusing = true;
+                self.episodes += 1;
+                tracing::warn!(
+                    "images: all {} slots are drawn or new this frame; {key} is not shown \
+                     (further refusals until a slot is free are debug lines)",
+                    abi::MAX_IMAGE_SLOTS
+                );
+            }
             return None;
         };
+        self.refusing = false;
         self.slots[free].key = Some(key.to_owned());
         self.slots[free].drawn = false;
         self.by_key.insert(key.to_owned(), free as u32);

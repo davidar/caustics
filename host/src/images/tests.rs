@@ -121,6 +121,37 @@ fn a_frame_that_wants_more_than_it_has_is_refused() {
     assert_eq!(images.frees(), 0);
 }
 
+/// A full array is retried by every build's wants, so a refusal warns once
+/// an episode: the first after a successful claim. Retries are debug lines,
+/// still counted; a claim that succeeds ends the episode, and the next
+/// refusal warns again.
+#[test]
+fn a_full_array_warns_once_an_episode() {
+    let mut images = Images::new();
+    images.begin_generation();
+    for i in 0..Images::capacity() {
+        assert!(images.insert(&format!("k{i}"), &pixels(i as u8)).is_some());
+    }
+    for n in 0..10 {
+        assert_eq!(images.insert(&format!("extra{n}"), &pixels(9)), None);
+    }
+    assert_eq!(images.refusals(), 10, "every refusal counted");
+    assert_eq!(images.refusal_episodes(), 1, "one warning for the ten");
+
+    // A slot freed, a claim that lands: the episode is over.
+    images.begin_generation();
+    assert!(images.touch_drawn(&mask(1..Images::capacity() as u32)));
+    assert!(images.insert("lands", &pixels(3)).is_some());
+    assert_eq!(images.insert("refused again", &pixels(4)), None);
+    assert_eq!(images.insert("and again", &pixels(4)), None);
+    assert_eq!(
+        images.refusal_episodes(),
+        2,
+        "a new episode, one more warning"
+    );
+    assert_eq!(images.refusals(), 12);
+}
+
 /// A lookup is a listing, not a draw: a slot only ever looked up — the image
 /// directory names every key asked, on every compose — is freed like any
 /// other the build does not draw.
