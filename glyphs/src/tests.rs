@@ -689,3 +689,44 @@ fn every_composed_literal_is_in_the_font_requirement() {
         );
     }
 }
+
+/// What arrived together goes out icon names first, each kind in the order it
+/// came, and a read error — the reader's last item — after everything before
+/// it.
+#[test]
+fn icon_names_are_answered_ahead_of_covers_and_an_error_stays_last() {
+    let ask = |kind: u32, name: &str| {
+        Ok(Frame::Request(wire::Request {
+            kind,
+            arg: 0,
+            name: name.to_owned(),
+        }))
+    };
+    let mut queue: VecDeque<io::Result<Frame>> = VecDeque::from(vec![
+        ask(REQ_COVER, "cover a"),
+        ask(REQ_GLYPH, "x-symbolic"),
+        ask(REQ_COVER, "cover b"),
+        ask(REQ_GLYPH, "y-symbolic"),
+        ask(99, "not ours"),
+        Err(io::Error::other("the pipe broke")),
+    ]);
+    let mut order = Vec::new();
+    while let Some(item) = next_up(&mut queue) {
+        order.push(match item {
+            Ok(Frame::Request(request)) => request.name,
+            Ok(other) => format!("kind {}", other.kind()),
+            Err(err) => format!("error: {err}"),
+        });
+    }
+    assert_eq!(
+        order,
+        [
+            "x-symbolic",
+            "y-symbolic",
+            "cover a",
+            "cover b",
+            "not ours",
+            "error: the pipe broke"
+        ]
+    );
+}

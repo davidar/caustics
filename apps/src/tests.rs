@@ -372,3 +372,53 @@ fn an_icon_that_arrives_or_changes_after_the_miss_is_sent_unasked() {
         "{after:?}"
     );
 }
+
+/// A burst answered together is the same frames, in the same order, as the
+/// same requests answered one at a time: each request's frames in request
+/// order, a `Pixmap` ahead of the `App` that names it, a repeated name
+/// resolved once and answered twice, a kind that is not ours skipped.
+#[test]
+fn a_burst_resolved_together_answers_as_one_at_a_time_would() {
+    let fx = Fixtures::new("burst");
+    let mut requests = Vec::new();
+    for n in 0..6u8 {
+        let icon = fx.0.join(format!("burst-{n}.png"));
+        install(&icon, &png([40 * n, 200, 10, 255]), u64::from(n));
+        fx.write(
+            &format!("caustics.test.Burst{n}.desktop"),
+            &format!(
+                "[Desktop Entry]\nName=Burst {n}\nIcon={}\nExec=true\n",
+                icon.display()
+            ),
+        );
+        requests.push(request(REQ_APP, &format!("caustics.test.Burst{n}")));
+        if n % 2 == 0 {
+            requests.push(request(REQ_ICON, icon.to_str().unwrap()));
+        }
+    }
+    let missing = fx.0.join("no-such.png");
+    requests.push(request(REQ_ICON, missing.to_str().unwrap()));
+    requests.push(request(REQ_APP, "com.example.Nothing"));
+    requests.push(request(REQ_APP, "caustics.test.Burst3"));
+    requests.push(request(wire::REQ_GLYPH, "audio-volume-high-symbolic"));
+
+    let mut together = fx.apps();
+    let batch = together.answer_all(&requests);
+    let mut alone = fx.apps();
+    let serial: Vec<Frame> = requests
+        .iter()
+        .flat_map(|request| alone.answer(request))
+        .collect();
+    assert_eq!(batch, serial);
+    assert_eq!(together.apps.len(), 7, "six entries and the missing one");
+    assert_eq!(together.icons.len(), 4, "three icons and the miss");
+    // The first request's answer leads: its pixels, then the entry naming them.
+    match (&batch[0], &batch[1]) {
+        (Frame::Pixmap(pixmap), Frame::App(app)) => {
+            assert_eq!(pixmap.key, "caustics.test.Burst0");
+            assert_eq!(app.app_id, "caustics.test.Burst0");
+            assert_ne!(app.flags & APP_ICON_PIXMAP, 0);
+        }
+        other => panic!("expected the pixmap then the app, got {other:?}"),
+    }
+}

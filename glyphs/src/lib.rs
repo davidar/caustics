@@ -66,7 +66,7 @@
 //! reaches the bar's journal as this sidecar's own words.
 
 use std::borrow::Cow;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -571,7 +571,9 @@ fn glyph_frame(name: &str, glyph: Option<u32>) -> Frame {
 /// every [`SWEEP`], looks again at the icon names it
 /// answered, so stdin is read on a thread beside the loop
 /// (`caustics_sidecar::inbox`). `wire::read`'s `Ok(None)` is EOF, which is the bar
-/// being gone, and the exit is 0.
+/// being gone, and the exit is 0. Requests that arrived together are not
+/// answered in arrival order: the icon names among them go ahead of the
+/// covers ([`next_up`]).
 pub fn run() -> i32 {
     witness_tracing();
     let loaded = match Loaded::load_requiring(COMPOSED) {
@@ -612,7 +614,9 @@ pub fn run() -> i32 {
 
     // The read on a thread of its own and a clock beside it: a request is
     // answered as it comes, and every `SWEEP` the names
-    // answered so far are looked at again.
+    // answered so far are looked at again. What has arrived waits in `queue`,
+    // which `next_up` takes from icon names first: a cover can take a second
+    // cold, and an icon name behind three of them waited the lot.
     let stdin = io::stdin();
     let mut failed = false;
     let mut inbox = Inbox::spawn(SWEEP, move || {
@@ -623,40 +627,48 @@ pub fn run() -> i32 {
         failed = read.is_err();
         read.transpose()
     });
+    let mut queue: VecDeque<io::Result<Frame>> = VecDeque::new();
     loop {
-        let next = match inbox.next() {
-            Next::Closed => Ok(None),
-            Next::Tick => {
-                if let Err(err) = sidecar.sweep(&mut out) {
-                    return broken(&err, "a changed icon");
+        if queue.is_empty() {
+            match inbox.next() {
+                Next::Closed => {
+                    witness("stdin closed; exiting");
+                    return 0;
                 }
-                continue;
+                Next::Tick => {
+                    if let Err(err) = sidecar.sweep(&mut out) {
+                        return broken(&err, "a changed icon");
+                    }
+                    continue;
+                }
+                Next::Item(read) => queue.push_back(read),
             }
-            Next::Item(read) => read.map(Some),
+        }
+        // Again after every answer, so a name that arrived during a cover
+        // goes ahead of the covers still waiting.
+        queue.extend(inbox.waiting());
+        let Some(next) = next_up(&mut queue) else {
+            continue;
         };
         match next {
-            Ok(None) => {
-                witness("stdin closed; exiting");
-                return 0;
-            }
-            Ok(Some(Frame::Request(request))) if request.kind == REQ_GLYPH => {
+            Ok(Frame::Request(request)) if request.kind == REQ_GLYPH => {
                 if let Err(err) = sidecar.answer_glyph(&mut out, &request.name) {
                     return broken(&err, &request.name);
                 }
             }
             // A cover: the `name` that is not a name — the bytes of a run the bar's
             // shaper could not draw.
-            Ok(Some(Frame::Request(request))) if request.kind == REQ_COVER => {
+            Ok(Frame::Request(request)) if request.kind == REQ_COVER => {
                 if let Err(err) = sidecar.answer_cover(&mut out, &request.name) {
                     return broken(&err, "a cover");
                 }
             }
-            Ok(Some(Frame::Request(request))) => witness(&format!(
+            Ok(Frame::Request(request)) => witness(&format!(
                 "request kind {} is not this sidecar's",
                 request.kind
             )),
-            Ok(Some(Frame::Skipped(skipped))) => witness(&format!("stdin: {skipped}")),
-            Ok(Some(other)) => witness(&format!(
+            Ok(Frame::Skipped(skipped)) => witness(&format!("stdin: {skipped}")),
+            Ok(other) => witness(&format!(
                 "stdin: frame kind {} has no meaning here",
                 other.kind()
             )),
@@ -666,6 +678,22 @@ pub fn run() -> i32 {
             }
         }
     }
+}
+
+/// The item waiting that is answered next: the first `REQ_GLYPH`, else the
+/// first of whatever is there.
+///
+/// An icon name is a theme search and a few curves, milliseconds, and an icon
+/// with no answer is a gap in the bar; a cover is a fallback face opened and
+/// filled, up to a second cold, for a run already drawn with a notdef. So the
+/// names go first, each kind in the order it came. A read error is the
+/// reader's last item, so it stays behind everything that came before it, and
+/// the process answers those before it leaves.
+fn next_up<E>(queue: &mut VecDeque<Result<Frame, E>>) -> Option<Result<Frame, E>> {
+    let glyph = queue
+        .iter()
+        .position(|item| matches!(item, Ok(Frame::Request(request)) if request.kind == REQ_GLYPH));
+    queue.remove(glyph.unwrap_or(0))
 }
 
 /// A write that failed: a closed pipe is the bar leaving and is not an error.

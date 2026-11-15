@@ -22,7 +22,7 @@
 pub mod entry;
 pub mod icon;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -54,6 +54,16 @@ pub fn witness(line: &str) {
 /// `stat` per remembered file, twice a minute.
 pub const SWEEP: Duration = Duration::from_secs(30);
 
+/// The most names one burst is resolved on at once.
+///
+/// A burst is what a build asks for together — the dock's entries at login,
+/// a tray's icons — and each name is a desktop-entry search, a theme walk and
+/// perhaps a resvg pass, tens of milliseconds that do not depend on each
+/// other. Eight threads is the whole of a bar's dock in one round, and past
+/// it the theme walks share one disk and one lock (`caustics_sidecar::icons`'
+/// miss list).
+pub const RESOLVERS: usize = 8;
+
 /// Read requests, answer them, look again every [`SWEEP`], exit 0 at EOF.
 pub fn run() -> i32 {
     let mut apps = Apps::new();
@@ -84,32 +94,38 @@ pub fn run() -> i32 {
     let mut out = stdout.lock();
 
     loop {
+        // One request wakes the loop, and whatever else the bar has written
+        // since is answered with it: the names of a burst are resolved at
+        // once (`Apps::answer_all`), not one after another.
+        let mut read_error = None;
         let replies = match inbox.next() {
             Next::Closed => {
                 witness("stdin closed; exiting");
                 return 0;
             }
-            Next::Item(Err(err)) => {
-                witness(&format!("stdin: {err}"));
-                return 1;
-            }
             Next::Tick => apps.sweep(),
-            Next::Item(Ok(frame)) => match frame {
-                Frame::Request(request) => apps.answer(&request),
-                // A frame `wire::read` would not decode — a `Request` from a
-                // newer bar, or a kind this one does not know — says why it
-                // went.
-                Frame::Skipped(skipped) => {
-                    witness(&format!("skipped: {skipped}"));
-                    continue;
+            Next::Item(first) => {
+                let mut requests = Vec::new();
+                for item in std::iter::once(first).chain(inbox.waiting()) {
+                    match item {
+                        Ok(Frame::Request(request)) => requests.push(request),
+                        // A frame `wire::read` would not decode — a `Request`
+                        // from a newer bar, or a kind this one does not know —
+                        // says why it went.
+                        Ok(Frame::Skipped(skipped)) => witness(&format!("skipped: {skipped}")),
+                        // The bar writes actions to every sidecar that owns
+                        // rows; this one owns none, so anything else is noise.
+                        Ok(other) => witness(&format!("ignoring frame kind {}", other.kind())),
+                        // The reader's last item: what came before it is
+                        // still answered, and then the process leaves.
+                        Err(err) => {
+                            read_error = Some(err);
+                            break;
+                        }
+                    }
                 }
-                // The bar writes actions to every sidecar that owns rows; this
-                // one owns none, so anything else is noise.
-                other => {
-                    witness(&format!("ignoring frame kind {}", other.kind()));
-                    continue;
-                }
-            },
+                apps.answer_all(&requests)
+            }
         };
         for reply in replies {
             if let Err(err) = wire::write(&mut out, &reply) {
@@ -120,6 +136,10 @@ pub fn run() -> i32 {
                 witness(&format!("stdout write failed: {err}"));
                 return 1;
             }
+        }
+        if let Some(err) = read_error {
+            witness(&format!("stdin: {err}"));
+            return 1;
         }
     }
 }
@@ -153,6 +173,13 @@ struct HeldApp {
     icon: Seen,
     /// The icon names tried, in order — what a miss is looked for under again.
     candidates: Vec<String>,
+}
+
+/// What one thread of [`Apps::answer_all`] worked out for one name.
+enum Resolution {
+    App(HeldApp),
+    /// The answer, and the witness's reason when it is silence.
+    Icon(HeldIcon, String),
 }
 
 /// One `REQ_ICON` name's answer, and what it was made from.
@@ -217,6 +244,90 @@ impl Apps {
                     request.name
                 ));
                 Vec::new()
+            }
+        }
+    }
+
+    /// The frames a burst of requests is answered with, in request order —
+    /// each request's own frames exactly as [`Self::answer`] gives them, a
+    /// `Pixmap` still ahead of the `App` that names it.
+    ///
+    /// What none of them has been asked before is resolved first, each
+    /// distinct name once, on up to [`RESOLVERS`] threads: a name's answer
+    /// depends on the disk and on nothing another name does, and seven dock
+    /// entries one after another were seven frames of the bar's apart.
+    pub fn answer_all(&mut self, requests: &[wire::Request]) -> Vec<Frame> {
+        self.resolve_ahead(requests);
+        requests
+            .iter()
+            .flat_map(|request| self.answer(request))
+            .collect()
+    }
+
+    /// Resolve the names of `requests` no answer is held for, together, and
+    /// hold them — witnessed in request order, as [`Self::answer`] would.
+    fn resolve_ahead(&mut self, requests: &[wire::Request]) {
+        let mut seen: HashSet<(u32, &str)> = HashSet::new();
+        let jobs: Vec<(u32, &str)> = requests
+            .iter()
+            .map(|request| (request.kind, request.name.as_str()))
+            .filter(|&(kind, name)| match kind {
+                REQ_APP => !name.is_empty() && !self.apps.contains_key(name),
+                REQ_ICON => !name.is_empty() && !self.icons.contains_key(name),
+                _ => false,
+            })
+            .filter(|&job| seen.insert(job))
+            .collect();
+        // One name is resolved where it is answered, as it always was.
+        if jobs.len() < 2 {
+            return;
+        }
+        let threads = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1)
+            .clamp(1, RESOLVERS)
+            .min(jobs.len());
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let this = &*self;
+        let mut done: Vec<(usize, Resolution)> = std::thread::scope(|scope| {
+            let workers: Vec<_> = (0..threads)
+                .map(|_| {
+                    scope.spawn(|| {
+                        let mut mine = Vec::new();
+                        loop {
+                            let at = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            let Some(&(kind, name)) = jobs.get(at) else {
+                                return mine;
+                            };
+                            mine.push((
+                                at,
+                                match kind {
+                                    REQ_APP => Resolution::App(this.resolve_app(name)),
+                                    _ => {
+                                        let (held, why) = this.resolve_named_icon(name);
+                                        Resolution::Icon(held, why)
+                                    }
+                                },
+                            ));
+                        }
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .flat_map(|worker| {
+                    worker
+                        .join()
+                        .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+                })
+                .collect()
+        });
+        done.sort_by_key(|(at, _)| *at);
+        for (at, resolution) in done {
+            let name = jobs[at].1;
+            match resolution {
+                Resolution::App(held) => self.hold_app(name, held),
+                Resolution::Icon(held, why) => self.hold_icon(name, held, &why),
             }
         }
     }
@@ -290,10 +401,15 @@ impl Apps {
             return frames_for(held.app.clone(), held.pixels.clone());
         }
         let held = self.resolve_app(app_id);
-        witness(&format!("{app_id:?} -> {}", describe_app(&held)));
         let frames = frames_for(held.app.clone(), held.pixels.clone());
-        self.apps.insert(app_id.to_owned(), held);
+        self.hold_app(app_id, held);
         frames
+    }
+
+    /// A new answer for an app id, witnessed and kept.
+    fn hold_app(&mut self, app_id: &str, held: HeldApp) {
+        witness(&format!("{app_id:?} -> {}", describe_app(&held)));
+        self.apps.insert(app_id.to_owned(), held);
     }
 
     /// The whole answer for an app id, from the disk, remembering nothing.
@@ -363,6 +479,16 @@ impl Apps {
             };
         }
         let (held, why) = self.resolve_named_icon(name);
+        let frames = match &held.texels {
+            Some(texels) => vec![pixmap_frame(name.to_owned(), texels.clone())],
+            None => Vec::new(),
+        };
+        self.hold_icon(name, held, &why);
+        frames
+    }
+
+    /// A new answer for a `REQ_ICON` name, witnessed and kept.
+    fn hold_icon(&mut self, name: &str, held: HeldIcon, why: &str) {
         witness(&format!(
             "icon {name:?} -> {}{why}",
             if held.texels.is_some() {
@@ -371,12 +497,7 @@ impl Apps {
                 "nothing"
             }
         ));
-        let frames = match &held.texels {
-            Some(texels) => vec![pixmap_frame(name.to_owned(), texels.clone())],
-            None => Vec::new(),
-        };
         self.icons.insert(name.to_owned(), held);
-        frames
     }
 
     /// A `REQ_ICON` name's answer from the disk, and the witness's reason when

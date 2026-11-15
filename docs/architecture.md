@@ -166,6 +166,15 @@ against a different ABI is refused on its first frame and not restarted
 no BlueZ, no session bus) stays up for its stdin, says `absent: <service>`
 once, and publishes an empty frame, so its chip is simply not there.
 
+**The two that answer requests take a burst as a burst.** A build asks for
+what it shows together, so a request wakes `caustics-apps` and
+`caustics-glyphs` with the rest of the burst already in the pipe, and each
+takes all of it (`Inbox::waiting`) before it answers. `caustics-apps`
+resolves the burst's new names at once on up to eight threads and writes the
+answers in request order; `caustics-glyphs` answers the icon names ahead of
+the covers, since a cover can take a second cold and a name behind three of
+them waited for all three.
+
 **A sidecar's settings are its own.** The bar passes none: `caustics-sysmon`
 reads `$CAUSTICS_SYSMON_CHARTS`, `caustics-glyphs`'s engine reads
 `$PUNCHCUTTER_FONT`, and the bar has no opinion about either. This is also the extension story. A third-party

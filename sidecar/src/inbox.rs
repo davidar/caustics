@@ -6,10 +6,11 @@
 //! over a channel, and the loop waits on the channel **with a deadline**: a
 //! frame is [`Next::Item`], the deadline passing is [`Next::Tick`], and the
 //! reader finishing (EOF, or the error it handed over last) is
-//! [`Next::Closed`]. Std only — neither sidecar has an async runtime, and one
+//! [`Next::Closed`]; [`Inbox::waiting`] takes whatever else has arrived
+//! without waiting. Std only — neither sidecar has an async runtime, and one
 //! is not worth having for a clock.
 
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, TryRecvError, channel};
 use std::time::{Duration, Instant};
 
 /// What the loop wakes up to.
@@ -64,6 +65,24 @@ impl<T> Inbox<T> {
                 Next::Tick
             }
             Err(RecvTimeoutError::Disconnected) => Next::Closed,
+        }
+    }
+
+    /// Every item the reader has already handed over, in order, without
+    /// waiting for more and without touching the clock.
+    ///
+    /// For a loop that answers a burst as one batch — several requests
+    /// resolved at once, or the quick ones ahead of the slow — after
+    /// [`Self::next`] woke it with the first. A reader that has finished leaves
+    /// its last items here, and the next [`Self::next`] is
+    /// [`Next::Closed`].
+    pub fn waiting(&mut self) -> Vec<T> {
+        let mut items = Vec::new();
+        loop {
+            match self.rx.try_recv() {
+                Ok(item) => items.push(item),
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return items,
+            }
         }
     }
 }

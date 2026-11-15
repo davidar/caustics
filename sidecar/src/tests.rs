@@ -123,4 +123,33 @@ mod inbox {
         }
         assert!(saw.iter().all(|next| *next == Next::Tick), "{saw:?}");
     }
+
+    /// What has arrived is taken whole and in order without a wait; nothing
+    /// waiting is an empty batch at once, not a tick; a reader that ended
+    /// leaves its last items to `waiting` and is `Closed` after them.
+    #[test]
+    fn waiting_takes_what_arrived_and_never_blocks() {
+        let (tx, rx) = std::sync::mpsc::channel::<Option<u32>>();
+        let mut inbox = Inbox::spawn(Duration::from_secs(3600), move || rx.recv().ok().flatten());
+        let empty = Instant::now();
+        assert!(inbox.waiting().is_empty());
+        assert!(empty.elapsed() < Duration::from_secs(1), "it did not wait");
+
+        for n in 1..=4 {
+            tx.send(Some(n)).unwrap();
+        }
+        tx.send(None).unwrap();
+        assert_eq!(inbox.next(), Next::Item(1));
+        // The reader thread forwards as it goes; gather until it has, with a
+        // deadline that only a wedged thread reaches.
+        let mut batch = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while batch.len() < 3 && Instant::now() < deadline {
+            batch.extend(inbox.waiting());
+            std::thread::yield_now();
+        }
+        assert_eq!(batch, vec![2, 3, 4], "in order, all of them");
+        assert_eq!(inbox.next(), Next::Closed);
+        assert!(inbox.waiting().is_empty());
+    }
 }
