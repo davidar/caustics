@@ -175,6 +175,35 @@ fn a_repeat_request_is_answered_from_the_map_and_is_byte_identical() {
     );
 }
 
+/// The caustic asks for pixels beside curves, so a symbolic name reaches this
+/// process as a `REQ_ICON` too: silence, remembered with the file it was
+/// found at, so the sweep looks at it with one `stat` and says nothing.
+#[test]
+fn a_symbolic_name_asked_for_pixels_is_silence_and_one_stat_a_sweep() {
+    let fx = Fixtures::new("symbolic");
+    let path = fx.0.join("caustics-test-symbolic.svg");
+    std::fs::write(
+        &path,
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"16\" height=\"16\">\
+         <path d=\"M0 0h16v16H0z\"/></svg>",
+    )
+    .expect("fixture written");
+    let name = path.to_str().unwrap().to_owned();
+    let mut apps = fx.apps();
+    assert!(
+        apps.answer(&request(REQ_ICON, &name)).is_empty(),
+        "curves are not this process's"
+    );
+    let held = apps.icons.get(&name).expect("the answer is remembered");
+    assert!(held.texels.is_none());
+    assert!(held.file.is_some(), "with the file, so a sweep is a stat");
+    assert!(
+        apps.sweep().is_empty(),
+        "and an unchanged file says nothing"
+    );
+    assert!(apps.answer(&request(REQ_ICON, &name)).is_empty());
+}
+
 #[test]
 fn a_request_kind_that_is_not_ours_is_answered_with_nothing() {
     let fx = Fixtures::new("kinds");

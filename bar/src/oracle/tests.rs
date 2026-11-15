@@ -1468,6 +1468,132 @@ fn a_tray_chip_whose_icon_nothing_answers_wears_its_titles_letter() {
     eprintln!("oracle: the title chips wear S and ?, the curves win, a label stays a label");
 }
 
+/// A tray item's colour icon, sent ahead as a `Pixmap` under a minted key:
+/// the first build asks for curves **and** pixels in one go, the store lands
+/// the pixels, and the next build draws them with no glyph answer yet. Then
+/// the name answers as curves, the glyph wins, and the mask leaves the slot
+/// undrawn, which frees it.
+#[test]
+fn pixels_are_asked_beside_curves_and_drawn_before_the_glyph_answer() {
+    const KEY: &str = "caustics-tray:00000000000000aa";
+    if std::env::var("CAUSTICS_BAR_ORACLE").as_deref() != Ok("1") {
+        eprintln!("skipping the oracle: set CAUSTICS_BAR_ORACLE=1 to run it");
+        return;
+    }
+    let mut oracle = match Oracle::new() {
+        Ok(oracle) => oracle,
+        Err(err) => {
+            eprintln!("skipping the oracle: {err:#}");
+            return;
+        }
+    };
+    let mut builder = RowsBuilder::new(abi::APPLET_TRAY, 1);
+    builder.item(1, Some("steam"), Some(KEY), -1.0, wire::RFLAG_LABEL_TITLE);
+    let model = with_rows(fixture(), builder.build());
+    let strings = crate::strings::baked();
+    let mut facts = Facts::new(slots());
+    let slot = facts.slot_of(DEMO).expect("the demo has a slot");
+    let mut images = Images::new();
+    let themed = Facts::themed_key(KEY);
+    // The tray's `Pixmap`, before the frame that names it: kept, not landed.
+    assert_eq!(
+        facts.learn_pixmap(&mut images, DEMO, KEY, &vec![0x80; Images::slot_bytes()]),
+        None
+    );
+    let scenario = Scenario {
+        name: "a tray pixmap asked for",
+        model,
+        level: (0, 0),
+        capped: false,
+    };
+    let chip_icon = |private: &[u8]| -> (u32, u32) {
+        let id = applet_level(slot, 1);
+        let items = built_items(private);
+        let it = items
+            .iter()
+            .find(|it| it.kind == model_const("ITEM_APPLET") && it.id == id)
+            .unwrap_or_else(|| panic!("the chip was not built: {items:?}"));
+        if it.icon_block == abi::NO_INDEX {
+            return (abi::NO_INDEX, 0);
+        }
+        let (kind, a, _) = built_block(private, it.icon_block);
+        (kind, a)
+    };
+    // The build pass's own ring: no `bar_apply` runs headless, so the frame
+    // the ring is stamped with is the build's, not the surface's.
+    let built = |state: &State, kind: u32| -> Vec<crate::abi::Note> {
+        state
+            .live_actions()
+            .iter()
+            .filter(|note| note.head == kind)
+            .copied()
+            .collect()
+    };
+    let drawn = |state: &State| -> Vec<u32> {
+        let masks = built(state, abi::ACT_IMAGES_DRAWN);
+        assert_eq!(masks.len(), 1, "one mask a build");
+        masks[0].images_drawn().to_vec()
+    };
+
+    // Build one: nothing has answered, so both questions go out together.
+    let (state, _) = oracle
+        .build(&mut facts, &mut images, &strings, &scenario)
+        .expect("the build pass runs");
+    let wants: Vec<abi::WantIcon> = built(&state, abi::ACT_WANT_ICON)
+        .iter()
+        .map(|note| note.want_icon())
+        .collect();
+    let asked: Vec<u32> = wants
+        .iter()
+        .filter(|want| facts.bytes_at(want.source, want.off, want.len).as_deref() == Some(KEY))
+        .map(|want| want.kind)
+        .collect();
+    assert_eq!(
+        asked,
+        vec![wire::REQ_GLYPH, wire::REQ_ICON],
+        "curves and pixels in the same build, curves first"
+    );
+    images.touch_drawn(&drawn(&state));
+    // The drain: the store answers the pixel want with a slot and asks no one.
+    let landed = wants.into_iter().fold(false, |landed, want| {
+        matches!(
+            facts.want_icon(&mut images, want),
+            crate::facts::Wanted::Landed
+        ) || landed
+    });
+    assert!(landed, "the store landed the pixels");
+    let held = images.slot_of(&themed).expect("a slot holds them");
+
+    // Build two: no glyph answer yet, and the picture is drawn.
+    let (state, _) = oracle
+        .build(&mut facts, &mut images, &strings, &scenario)
+        .expect("the build pass runs");
+    let private = oracle.gpu.read_private();
+    assert_eq!(
+        chip_icon(&private),
+        (model_const("BLOCK_IMAGE"), held),
+        "the pixels, before any glyph answer"
+    );
+    assert!(!images.touch_drawn(&drawn(&state)), "a drawn slot is kept");
+    assert_eq!(images.slot_of(&themed), Some(held));
+
+    // The curves answer comes late and says it is curves: the glyph wins, and
+    // the slot no build draws any more is freed by the mask.
+    facts.learn_glyph(KEY, Some(3));
+    let (state, _) = oracle
+        .build(&mut facts, &mut images, &strings, &scenario)
+        .expect("the build pass runs");
+    let private = oracle.gpu.read_private();
+    assert_eq!(
+        chip_icon(&private),
+        (model_const("BLOCK_GLYPH"), 3),
+        "curves win"
+    );
+    assert!(images.touch_drawn(&drawn(&state)), "the slot is let go");
+    assert_eq!(images.slot_of(&themed), None);
+    eprintln!("oracle: pixels asked beside curves, drawn on arrival, freed when curves win");
+}
+
 // ---------------------------------------------------------------------------
 // Toasts: a chip that carries `RFLAG_SHOW` is shown without a click
 // ---------------------------------------------------------------------------

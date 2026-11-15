@@ -388,7 +388,7 @@ one typed accessor per kind.
 | 14 | `ANCHOR` | `edge, height` | the layer surface's anchor and size |
 | 15 | `REBUILD` | — | the shape submission runs next frame |
 | 16 | `COVER` | `off, len, source` | `REQ_COVER` to the curves sidecar with those bytes (*Request*). `source` says which buffer the bytes are in: a title or literal in `SRC_STRINGS`, a sidecar's row label in its slot's region, an app's name in `SRC_ANSWERS` |
-| 17 | `WANT_ICON` | `off, len, kind, source` | `REQ_GLYPH` / `REQ_ICON` / `REQ_APP` with those bytes, `kind` the wire's `REQ_*`. `source` says **which buffer** they are in, as for `COVER`, because a name the caustic wants lives in one of three places and a range alone cannot say which |
+| 17 | `WANT_ICON` | `off, len, kind, source` | `REQ_GLYPH` / `REQ_ICON` / `REQ_APP` with those bytes, `kind` the wire's `REQ_*`. A themed name nothing has answered comes as two in one build, `REQ_GLYPH` and `REQ_ICON`; the process asks once per name and kind. `source` says **which buffer** they are in, as for `COVER`, because a name the caustic wants lives in one of three places and a range alone cannot say which |
 | 18 | `WATCHDOG` | `ms` | how long one `bar_shape` dispatch may take before the process calls it a runaway. `SHAPE_WATCHDOG_MS` in the tunables. The *response* (one witness, and no shaping until the OpenType arena's front block is written again) is fixed and the process's, because only it holds the queue and the timestamp query pair |
 | 19 | `IMAGES_DRAWN` | `mask[0..(MAX_IMAGE_SLOTS + 31) / 32]` | the image slots this build placed in an image block, slot `n` at bit `n % 32` of word `n / 32`. Pushed by `bar_build` once per build, an empty mask included, **before** its `WANT_ICON`s, so the drain frees what left the bar before it serves a want that lands a picture. The process copies the mask into the slot array whole: a set bit is drawn, and a clear one **frees the slot there and then**, unless its picture landed after the last compose (no build has yet been told where it is). A freed slot's name is un-asked by the next compose, so a later want lands it again from the store. A picture is never put in a taken slot, and is refused only when every slot is taken. The array is not a cache: what is in use is the caustic's word, because only the caustic lays the blocks out |
 
@@ -1027,7 +1027,11 @@ composed by the caustic from `SlotFact` and the row's id (*The witness ring*).
 A row's icon is a **name**, never pixels. A sidecar whose icon is pixels sends
 them as a `Pixmap` frame (*Pixmap*) under a key it minted, **before** the first
 `Rows` frame that names the key, and the row carries the key. `caustics-tray`
-mints `caustics-tray:<fnv1a64 of the fitted texels, 16 hex digits>`.
+mints `caustics-tray:<fnv1a64 of the fitted texels, 16 hex digits>`. The
+caustic resolves a minted key like any themed name, so its first build asks
+`REQ_GLYPH` (which `caustics-glyphs` answers missing) and `REQ_ICON` (which
+the store answers with the pixels already sent) together, and the picture is
+drawn from the build after it lands, not after the glyph answer.
 
 Pixels inside a rows frame were tried and withdrawn: four 64² icons put a
 tray past its 64 KiB region before a single row, every frame was refused, and
@@ -1289,7 +1293,7 @@ struct RequestBody {    // 16 B
 |---|---|---|---|
 | 1 | `REQ_GLYPH` | a themed icon name | `Glyph` |
 | 2 | `REQ_APP` | an app id | `App` |
-| 3 | `REQ_ICON` | a themed icon name that is not curves | `Pixmap` keyed by the name |
+| 3 | `REQ_ICON` | a themed icon name not known to be curves (asked beside its `REQ_GLYPH`) | `Pixmap` keyed by the name, or silence when it is curves or no theme has it |
 | 4 | `REQ_COVER` | the bytes of a string | the curves sidecar appends what its font lacks, and answers in `Bytes` |
 | 5 | `REQ_PROGRAM` | the swapchain format's define; `arg` the program | a generation of `Module`s |
 | 6 | `REQ_ACTIVATION` | an xdg-activation token | none |
@@ -1439,8 +1443,13 @@ lands a slot and **sends no request**. A slot freed from the image array
 id alike, so the caustic's next want for that picture lands it from the
 store. Bounded at 256 keys and 4 MiB, the key longest unwanted let go past it
 with one witness; a sidecar that exits takes its keys with it. The caustic's
-resolution order: a name is asked of `caustics-glyphs` first (`GLYPH_MISSING`,
-fast), then `REQ_ICON`, which the store answers.
+resolution: a name nothing has answered is asked of `caustics-glyphs`
+(`REQ_GLYPH`) and for pixels (`REQ_ICON`, which the store answers or
+`caustics-apps` does) **in the same build**, rather than pixels only after
+`GLYPH_MISSING` came back, which was two round trips in series for every
+colour icon and every pixmap a sidecar sent ahead. Curves win: a slot is
+drawn while the name is not known to be curves, and a name that answers as
+curves after its pixels landed leaves the slot for the next mask to free.
 
 ### Module: `WIRE_MODULE`
 

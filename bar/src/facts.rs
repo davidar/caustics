@@ -183,10 +183,11 @@ pub struct Facts {
     apps_asked: HashSet<String>,
     /// Themed names a `REQ_GLYPH` has gone out for.
     glyphs_asked: HashSet<String>,
-    /// Names a `REQ_ICON` has gone out for: a themed name `caustics-glyphs`
-    /// answered `GLYPH_MISSING` for, whose pixels `caustics-apps` may have. A name
-    /// no theme has is answered with **silence**, so this is the only thing
-    /// that stops the same dead name being asked about on every build.
+    /// Names a `REQ_ICON` has gone out for: a themed name not known to be
+    /// curves (the caustic asks beside its `REQ_GLYPH`), whose pixels the
+    /// store or `caustics-apps` may have. A name no theme has, or one that is
+    /// curves, is answered with **silence**, so this is the only thing that
+    /// stops the same dead name being asked about on every build.
     icons_asked: HashSet<String>,
     /// The strings a `REQ_COVER` has gone out for (docs/abi.md, *Request*):
     /// one question per distinct string for the life of the glyph space,
@@ -785,7 +786,7 @@ impl Facts {
     ///
     /// The wire keys the pixmap by the name it was asked under, and this side
     /// asks two kinds of name: an app id (`REQ_APP`, whose slot is keyed bare)
-    /// and a themed icon that is not curves (`REQ_ICON`, keyed under the
+    /// and a themed icon that may be pixels (`REQ_ICON`, keyed under the
     /// themed prefix so it can never shadow an app id). The frame does not say
     /// which request it answers, so the name is read against what was asked;
     /// a pixmap filed under the wrong key would never be drawn. A key nobody

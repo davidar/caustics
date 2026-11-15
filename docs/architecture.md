@@ -406,9 +406,12 @@ What the bar adds on top:
   without a round trip. (Marking a slot as used merely because its name had
   once been asked for filled the array within a day, after which every new
   icon was refused.)
-- **The resolution order** for a name: curves first (`caustics-glyphs`, which
-  answers fast with "missing" for anything not symbolic), then pixels. A chip
-  whose icon has not resolved wears its title's first letter.
+- **The resolution order** for a name: curves win, but both are asked at
+  once. A name nothing has answered goes to `caustics-glyphs` and for pixels
+  in the same build, and a picture that lands is drawn until the name is
+  known to be curves; asking for pixels only after the curves answer came back
+  "missing" was two round trips in series for every colour icon. A chip whose
+  icon has not resolved wears its title's first letter.
 - **Hover previews** are stills of the window under the pointer, captured
   over `ext-image-copy-capture` into shm at no more than two frames a second,
   one capture session at a time, created on hover and torn down on leave. The

@@ -118,13 +118,20 @@ public uint compose_store(uint byte_offset, Composed c)
     return len;
 }
 
-/// How many names one build may ask about. The eight-deep list is the
-/// caustic's, and so is the preference that fills it: a glyph question stops
-/// an icon being drawn at all, where a pixel question is a fallback for a name
-/// that already came back "not curves" — so a full list gives a glyph question
-/// a pixel question's place rather than starving behind a name nothing will
-/// ever answer for. The embassy cannot dedup a want it never saw.
-public static const uint WANT_LIST = 8u;
+/// How many questions one build may ask. The list is the caustic's, and so
+/// is the preference that fills it: a glyph question stops an icon being
+/// drawn at all, where a pixel question is a fallback (asked beside the glyph
+/// question for a name nothing has answered, and alone for one that came back
+/// "not curves") — so a full list gives a glyph question a pixel question's
+/// place rather than starving behind a name nothing will ever answer for. The
+/// embassy cannot dedup a want it never saw.
+///
+/// Sixteen, so a first build can carry both questions for the eight names a
+/// bar shows at login. Each want is one record of the action ring
+/// (`MAX_ACTIONS`, 64), which leaves the ring three quarters of its room for
+/// the mask and the rest, and the list is five words a want in one thread's
+/// `Build`.
+public static const uint WANT_LIST = 16u;
 
 /// Words of the image slots this build drew, one bit a slot — what an
 /// `ACT_IMAGES_DRAWN` carries (docs/abi.md, *The action ring*). The embassy
@@ -469,8 +476,8 @@ public uint build_letter(inout Build b, uint source, uint off, uint len, bool la
 /// ever the dedup within one build.
 ///
 /// A glyph question stops an icon being drawn at all; a pixel question is a
-/// fallback for a name that already came back "not curves". So when the list
-/// is full a glyph question takes a pixel question's place, rather than
+/// fallback, asked beside it or after it came back "not curves". So when the
+/// list is full a glyph question takes a pixel question's place, rather than
 /// starving behind a name nothing will ever answer for. Which wants fit is the
 /// caustic's to decide, because the embassy cannot dedup a want it never saw;
 /// asking twice for the same name costs nothing, since the embassy asks once
@@ -481,9 +488,11 @@ public void build_want(inout Build b, uint key, uint source, uint off, uint len,
     {
         return;
     }
+    // One question of each kind per name: the stitch may ask the same name
+    // for curves and for pixels in one build.
     for (uint i = 0u; i < b.wants; ++i)
     {
-        if (b.want_key[i] == key)
+        if (b.want_key[i] == key && b.want_req[i] == req)
         {
             return;
         }
@@ -590,9 +599,19 @@ public uint answer_of(uint hash, bool glyph)
 
 /// One themed icon name — a literal's bytes, a row's `icon` range, an
 /// `AppBody.icon` — as a block: curves if `caustics-glyphs` has them, pixels if
-/// `caustics-apps` does, **nothing for one round trip** while an answer is
+/// a slot holds them, **nothing for one round trip** while both answers are
 /// pending, and `stop = false` when no theme has it at all, which is what
 /// makes a preference list fall through to its next name.
+///
+/// **Both questions at once.** A name nothing has answered is asked of
+/// `caustics-glyphs` (`REQ_GLYPH`) and for pixels (`REQ_ICON`) in the same
+/// build, rather than pixels only after the glyph answer came back "missing":
+/// that order was two round trips in series for every colour icon, and for
+/// every pixmap a sidecar sent ahead of its frame. A picture that lands is
+/// drawn whenever the name is not known to be curves, glyph answer or not —
+/// and it has to be, because a slot no build draws is freed by the next
+/// mask (docs/architecture.md, *Images and icons*). If the name then answers
+/// as curves the glyph wins and the slot goes with the next mask.
 ///
 /// A list is a preference order, and settling on a later candidate before the
 /// earlier one has answered would take a slot for the wrong picture — which is
@@ -606,25 +625,28 @@ public uint build_stitch_named(inout Build b, uint source, uint off, uint len, f
     }
     uint key = hash_bytes(source, off, len);
     uint at = answer_of(key, true);
-    if (at == NO_INDEX)
-    {
-        // Never asked, or asked and not yet answered. The embassy asks once
-        // per name and remembers (docs/abi.md, *Request*), so repeating this costs nothing.
-        build_want(b, key, source, off, len, REQ_GLYPH);
-        return NO_INDEX;
-    }
-    uint flags = answer_byte_word(at + 4u);
-    if ((flags & GLYPH_MISSING) == 0u)
+    if (at != NO_INDEX && (answer_byte_word(at + 4u) & GLYPH_MISSING) == 0u)
     {
         return build_icon(b, BLOCK_GLYPH, answer_byte_word(at), px, ICON_INK);
     }
-    // Not curves. The pixels may already be in a slot under this name, which
-    // is what a `REQ_ICON` answer is.
+    // Not known to be curves. The pixels may already be in a slot under this
+    // name, which is what a `REQ_ICON` answer is.
     uint slot = image_by_name(source, off, len);
     if (slot != NO_INDEX)
     {
         return build_icon(b, BLOCK_IMAGE, slot, px, IMAGE_INK);
     }
+    // The embassy asks once per name and kind and remembers (docs/abi.md,
+    // *Request*), so repeating these costs nothing. Curves first, so a list
+    // with one place left gives it to the question that can stop the wait.
+    if (at == NO_INDEX)
+    {
+        // Never asked, or asked and not yet answered: both, and wait.
+        build_want(b, key, source, off, len, REQ_GLYPH);
+        build_want(b, key, source, off, len, REQ_ICON);
+        return NO_INDEX;
+    }
+    // Answered "missing" and no slot: pixels are the only hope left.
     build_want(b, key, source, off, len, REQ_ICON);
     stop = false;
     return NO_INDEX;
