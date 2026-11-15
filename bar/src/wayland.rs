@@ -1606,6 +1606,12 @@ impl Bar {
         for note in mirror.actions[start..end].to_vec() {
             self.forward(&note);
         }
+        // A slot the build stopped drawing is still in the directory the
+        // caustic reads, so its going owes a compose — after the ring, whose
+        // ranges were read against the buffers this build saw.
+        if self.images.has_freed() {
+            self.mark_facts_dirty();
+        }
     }
 
     /// One record of the action ring, handed to whoever owns it.
@@ -1702,9 +1708,12 @@ impl Bar {
             abi::ACT_COVER => self.cover(note.cover()),
             // What the build drew: the caustic's mask, copied whole into the
             // slot array, because only the caustic knows what is on the bar
-            // (docs/architecture.md, *Images and icons*). It arrives before the
-            // build's wants, so a want that evicts never takes a drawn slot.
-            abi::ACT_IMAGES_DRAWN => self.images.touch_drawn(note.images_drawn()),
+            // (docs/architecture.md, *Images and icons*). A slot it did not
+            // draw is free from here, so it arrives before the build's wants,
+            // which may land a picture in one. `drain_actions` composes after.
+            abi::ACT_IMAGES_DRAWN => {
+                self.images.touch_drawn(note.images_drawn());
+            }
             // The store answers first: a key a sidecar already sent lands a
             // slot, and the compose that names it is what the facts owe.
             abi::ACT_WANT_ICON => match self.facts.want_icon(&mut self.images, note.want_icon()) {
@@ -2031,20 +2040,20 @@ impl Bar {
         // Two facts: how many image slots are taken of how many there
         // are, and how many curves there are — the font's glyphs plus the icons
         // that joined them. The one number worth watching is `images`: a bar
-        // that is evicting slots every rebuild is a bar whose tray has outgrown
-        // the array.
+        // that refuses a picture is a bar drawing more of them at once than
+        // the array holds.
         // And the pixmap store behind the slots: what the
         // sidecars sent, and how many keys its bound has let go.
         // `drawn` is how many of the taken slots the caustic's last build put
-        // on the bar: the rest are what an eviction may take. After the
-        // `N/M slots` the harness greps for (bar-test.sh).
+        // on the bar: the rest landed since and wait for their first build.
+        // After the `N/M slots` the harness greps for (bar-test.sh).
         let images = format!(
-            "{}/{} slots, {} drawn, gen {}, {} evicted{}, {} pixmaps stored{}",
+            "{}/{} slots, {} drawn, gen {}, {} freed{}, {} pixmaps stored{}",
             self.images.len(),
             Images::capacity(),
             self.images.drawn(),
             self.images.generation(),
-            self.images.evictions(),
+            self.images.frees(),
             if self.images.refusals() > 0 {
                 format!(", {} refused", self.images.refusals())
             } else {

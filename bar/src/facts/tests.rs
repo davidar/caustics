@@ -358,8 +358,8 @@ fn want_row_icon(facts: &mut Facts, images: &mut Images, name: &str, kind: u32) 
 }
 
 /// The tray's case (docs/abi.md, *Pixmap*): its `Pixmap` arrives before any build
-/// has named the key, is kept, and the `REQ_ICON` the caustic's icon stitch (`caustics/bar_table.slang`) sends after the
-/// glyph sidecar's `GLYPH_MISSING` lands it — with no request out.
+/// has named the key, is kept, and the `REQ_ICON` the caustic's icon stitch
+/// (`caustics/bar_table.slang`) sends lands it — with no request out.
 #[test]
 fn a_pixmap_nobody_asked_for_is_kept_and_a_want_lands_it_without_asking() {
     let key = "caustics-tray:00000000000000aa";
@@ -417,10 +417,14 @@ fn a_want_the_store_lacks_is_asked_of_a_sidecar() {
     );
 }
 
-/// An eviction un-asks a themed name (`compose`, `take_evicted`), and the next
-/// want finds the store again: the tray is never asked twice for anything.
+/// A build that draws nothing, as the caustic's mask says it.
+const NOTHING_DRAWN: [u32; abi::IMAGE_DRAWN_WORDS] = [0; abi::IMAGE_DRAWN_WORDS];
+
+/// A slot freed because the build stopped drawing it un-asks a themed name
+/// (`compose`, `take_freed`), and the next want finds the store again: the
+/// tray is never asked twice for anything.
 #[test]
-fn an_evicted_icon_comes_back_from_the_store() {
+fn a_freed_icon_comes_back_from_the_store() {
     let mut facts = facts();
     let mut images = Images::new();
     let key = "caustics-tray:00000000000000cc";
@@ -431,14 +435,10 @@ fn an_evicted_icon_comes_back_from_the_store() {
     );
     facts.compose(&Model::default(), &Strings::new(), &mut images);
 
-    // Fill every slot with newer pictures in later generations, so the key's
-    // slot is the oldest and goes.
-    for n in 0..abi::MAX_IMAGE_SLOTS {
-        images.begin_generation();
-        images.insert(&format!("filler-{n}"), &slot_rgba(1));
-    }
+    // The menu closes: a build that no longer draws the key.
+    assert!(images.touch_drawn(&NOTHING_DRAWN));
     facts.compose(&Model::default(), &Strings::new(), &mut images);
-    assert!(!directory(&facts).contains(&key.to_owned()), "evicted");
+    assert!(!directory(&facts).contains(&key.to_owned()), "freed");
 
     assert_eq!(
         want_row_icon(&mut facts, &mut images, key, wire::REQ_ICON),
@@ -496,12 +496,12 @@ fn the_store_lets_the_oldest_key_go_past_its_bound() {
     );
 }
 
-/// An app id's picture evicted from its slot is un-asked by the next compose
+/// An app id's picture freed from its slot is un-asked by the next compose
 /// — the listing does not refill it — and the caustic's next want
 /// lands it from the store with no request out, because the `App` answer is
 /// already here.
 #[test]
-fn an_evicted_app_icon_is_unasked_and_the_next_want_lands_it_from_the_store() {
+fn a_freed_app_icon_is_unasked_and_the_next_want_lands_it_from_the_store() {
     let mut facts = facts();
     let mut images = Images::new();
     facts.set_app(app_frame("kitty", "Kitty", 0));
@@ -521,13 +521,9 @@ fn an_evicted_app_icon_is_unasked_and_the_next_want_lands_it_from_the_store() {
     facts.compose(&Model::default(), &Strings::new(), &mut images);
     assert!(directory(&facts).contains(&"kitty".to_owned()));
 
-    // Newer pictures in later generations, none of them drawn: kitty's slot
-    // is the oldest and goes.
-    for n in 0..abi::MAX_IMAGE_SLOTS {
-        images.begin_generation();
-        images.insert(&format!("filler-{n}"), &slot_rgba(1));
-    }
-    assert!(images.slot_of("kitty").is_none(), "evicted");
+    // The app closes: a build that no longer draws its entry.
+    assert!(images.touch_drawn(&NOTHING_DRAWN));
+    assert!(images.slot_of("kitty").is_none(), "freed");
     facts.compose(&Model::default(), &Strings::new(), &mut images);
     assert!(
         !directory(&facts).contains(&"kitty".to_owned()),
@@ -550,11 +546,11 @@ fn an_evicted_app_icon_is_unasked_and_the_next_want_lands_it_from_the_store() {
     );
 }
 
-/// An evicted app picture the store has also let go is asked for again: the
+/// A freed app picture the store has also let go is asked for again: the
 /// `App` answer being here is no reason to stay silent, because the pixels
 /// travel with it and nothing else brings them back.
 #[test]
-fn an_evicted_app_icon_the_store_lost_is_asked_for_again() {
+fn a_freed_app_icon_the_store_lost_is_asked_for_again() {
     let mut facts = facts();
     let mut images = Images::new();
     facts.set_app(app_frame("kitty", "Kitty", wire::APP_ICON_PIXMAP));
@@ -564,10 +560,8 @@ fn an_evicted_app_icon_the_store_lost_is_asked_for_again() {
         Wanted::Landed
     );
     facts.take_requests();
-    for n in 0..abi::MAX_IMAGE_SLOTS {
-        images.begin_generation();
-        images.insert(&format!("filler-{n}"), &slot_rgba(1));
-    }
+    facts.compose(&Model::default(), &Strings::new(), &mut images);
+    assert!(images.touch_drawn(&NOTHING_DRAWN));
     facts.compose(&Model::default(), &Strings::new(), &mut images);
     facts.pixmaps.remove("kitty");
     facts.pixmap_order.retain(|key| key != "kitty");
@@ -583,12 +577,11 @@ fn an_evicted_app_icon_the_store_lost_is_asked_for_again() {
 }
 
 /// Every slot holds a key the bar asked about and every compose lists, and
-/// nothing draws any of them. A listing that stamped every slot with the
-/// current generation would refuse a 65th want ("all 64 slots are drawn this
-/// frame") for the life of the process; the oldest undrawn picture must go
-/// and the new one land.
+/// the build draws all of them: one more want is refused rather than taking
+/// a picture off the bar. When the build stops drawing them the slots are
+/// free and the want lands.
 #[test]
-fn a_full_array_nothing_draws_gives_way_to_a_new_want() {
+fn a_full_array_refuses_while_drawn_and_gives_way_once_it_is_not() {
     let mut facts = facts();
     let mut images = Images::new();
     for n in 0..abi::MAX_IMAGE_SLOTS {
@@ -598,37 +591,57 @@ fn a_full_array_nothing_draws_gives_way_to_a_new_want() {
             want_row_icon(&mut facts, &mut images, &key, wire::REQ_ICON),
             Wanted::Landed
         );
-        facts.compose(&Model::default(), &Strings::new(), &mut images);
     }
+    facts.compose(&Model::default(), &Strings::new(), &mut images);
     assert_eq!(directory(&facts).len(), abi::MAX_IMAGE_SLOTS, "all listed");
+    assert!(!images.touch_drawn(&[u32::MAX; abi::IMAGE_DRAWN_WORDS]));
 
     let key = "caustics-tray:00000000000000ff";
     facts.learn_pixmap(&mut images, TRAY, key, &slot_rgba(0xff));
     assert_eq!(
         want_row_icon(&mut facts, &mut images, key, wire::REQ_ICON),
-        Wanted::Landed
-    );
-    assert_eq!(images.refusals(), 0, "the listing kept nothing young");
-    assert_eq!(images.evictions(), 1);
-    facts.compose(&Model::default(), &Strings::new(), &mut images);
-    let listed = directory(&facts);
-    assert!(listed.contains(&key.to_owned()), "the new picture is named");
-    assert!(
-        !listed.contains(&format!("caustics-tray:{:016x}", 0)),
-        "the oldest went"
-    );
-    assert_eq!(listed.len(), abi::MAX_IMAGE_SLOTS);
-
-    // And when the caustic says it draws every slot, a want is refused rather
-    // than taking a picture off the bar.
-    images.touch_drawn(&[u32::MAX; abi::IMAGE_DRAWN_WORDS]);
-    let key = "caustics-tray:00000000000000fe";
-    facts.learn_pixmap(&mut images, TRAY, key, &slot_rgba(0xfe));
-    assert_eq!(
-        want_row_icon(&mut facts, &mut images, key, wire::REQ_ICON),
         Wanted::Nothing
     );
     assert_eq!(images.refusals(), 1);
+
+    // The build draws none of them now. The refused want was marked asked,
+    // and a name with no slot is not one the freeing un-asks, so it is
+    // un-asked here as the caustic's own reload would.
+    assert!(images.touch_drawn(&NOTHING_DRAWN));
+    facts.compose(&Model::default(), &Strings::new(), &mut images);
+    assert!(directory(&facts).is_empty(), "the listing kept nothing");
+    facts.icons_asked.remove(key);
+    assert_eq!(
+        want_row_icon(&mut facts, &mut images, key, wire::REQ_ICON),
+        Wanted::Landed
+    );
+    facts.compose(&Model::default(), &Strings::new(), &mut images);
+    assert_eq!(directory(&facts), vec![key.to_owned()]);
+}
+
+/// A want the store answers makes its key the newest, so the bound lets go
+/// the key longest unwanted and not one that is reopened.
+#[test]
+fn a_wanted_key_outlives_the_keys_sent_after_it() {
+    let mut facts = facts();
+    let mut images = Images::new();
+    let rgba = slot_rgba(5);
+    let first = format!("caustics-tray:{:016x}", 0);
+    for n in 0..MAX_STORED_PIXMAPS {
+        facts.learn_pixmap(&mut images, TRAY, &format!("caustics-tray:{n:016x}"), &rgba);
+    }
+    assert_eq!(
+        want_row_icon(&mut facts, &mut images, &first, wire::REQ_ICON),
+        Wanted::Landed
+    );
+    facts.learn_pixmap(&mut images, TRAY, "caustics-tray:one-more", &rgba);
+    assert!(facts.pixmaps.contains_key(&first), "wanted, so kept");
+    assert!(
+        !facts
+            .pixmaps
+            .contains_key(&format!("caustics-tray:{:016x}", 1)),
+        "the longest unwanted went"
+    );
 }
 
 /// The idempotence the arena relies on is the model's: an identical frame is

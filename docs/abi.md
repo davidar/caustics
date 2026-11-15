@@ -290,7 +290,7 @@ every string is a range into `strings`, and nothing is hashed on this side.
 - **`images`**: the fixed-slot image array's directory. A `Pixmap` frame
   (*Pixmap*) is pixels for one slot; the process chose the slot, so it says
   which key sits there. A listing, not a draw: being named here does not keep
-  a slot from being evicted. Only `ACT_IMAGES_DRAWN` does (*The action ring*).
+  a slot. Only `ACT_IMAGES_DRAWN` does (*The action ring*).
 - **`slots`**: the sidecar slots, by name. Exists so a witness can say
   `applet-caustics-power-3` without the process naming anything.
 - **`literals`**: every `getStringHash` literal of the running caustic, from
@@ -390,7 +390,7 @@ one typed accessor per kind.
 | 16 | `COVER` | `off, len, source` | `REQ_COVER` to the curves sidecar with those bytes (*Request*). `source` says which buffer the bytes are in: a title or literal in `SRC_STRINGS`, a sidecar's row label in its slot's region, an app's name in `SRC_ANSWERS` |
 | 17 | `WANT_ICON` | `off, len, kind, source` | `REQ_GLYPH` / `REQ_ICON` / `REQ_APP` with those bytes, `kind` the wire's `REQ_*`. `source` says **which buffer** they are in, as for `COVER`, because a name the caustic wants lives in one of three places and a range alone cannot say which |
 | 18 | `WATCHDOG` | `ms` | how long one `bar_shape` dispatch may take before the process calls it a runaway. `SHAPE_WATCHDOG_MS` in the tunables. The *response* (one witness, and no shaping until the OpenType arena's front block is written again) is fixed and the process's, because only it holds the queue and the timestamp query pair |
-| 19 | `IMAGES_DRAWN` | `mask[0..(MAX_IMAGE_SLOTS + 31) / 32]` | the image slots this build placed in an image block, slot `n` at bit `n % 32` of word `n / 32`. Pushed by `bar_build` once per build, an empty mask included, **before** its `WANT_ICON`s, so the drain marks what is on the bar before it serves a want that may evict. The process copies the mask into the slot array whole: a set bit is drawn and stamped with the compose's generation, a clear one is not drawn. An eviction takes the least recently stamped slot that is neither drawn nor filled this generation, and is refused only when none is. The slots' age is the caustic's word, because only the caustic lays the blocks out |
+| 19 | `IMAGES_DRAWN` | `mask[0..(MAX_IMAGE_SLOTS + 31) / 32]` | the image slots this build placed in an image block, slot `n` at bit `n % 32` of word `n / 32`. Pushed by `bar_build` once per build, an empty mask included, **before** its `WANT_ICON`s, so the drain frees what left the bar before it serves a want that lands a picture. The process copies the mask into the slot array whole: a set bit is drawn, and a clear one **frees the slot there and then**, unless its picture landed after the last compose (no build has yet been told where it is). A freed slot's name is un-asked by the next compose, so a later want lands it again from the store. A picture is never put in a taken slot, and is refused only when every slot is taken. The array is not a cache: what is in use is the caustic's word, because only the caustic lays the blocks out |
 
 **Messages, not state.** The popup, the edge and the height are messages,
 because the caustic has the "have" side in `inputs` (`popup_w/h`, `edge`) and
@@ -1434,11 +1434,11 @@ first frame that names it.
 **The store.** The process keeps every `Pixmap` by key, asked for or not (a
 minted key arrives before any build has named it). A want for a stored key
 (`ACT_WANT_ICON` with `REQ_ICON`, or `REQ_APP` whose `App` answer is held)
-lands a slot and **sends no request**. A slot evicted from the image array
-takes its name's asked mark with it, themed name and app id alike, so the
-caustic's next want for a picture it still draws lands it from the store.
-Bounded at 256 keys and 4 MiB, the oldest inserted let go past it with one
-witness; a sidecar that exits takes its keys with it. The caustic's
+lands a slot and **sends no request**. A slot freed from the image array
+(no build drew it) takes its name's asked mark with it, themed name and app
+id alike, so the caustic's next want for that picture lands it from the
+store. Bounded at 256 keys and 4 MiB, the key longest unwanted let go past it
+with one witness; a sidecar that exits takes its keys with it. The caustic's
 resolution order: a name is asked of `caustics-glyphs` first (`GLYPH_MISSING`,
 fast), then `REQ_ICON`, which the store answers.
 

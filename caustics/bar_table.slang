@@ -127,10 +127,10 @@ public uint compose_store(uint byte_offset, Composed c)
 public static const uint WANT_LIST = 8u;
 
 /// Words of the image slots this build drew, one bit a slot — what an
-/// `ACT_IMAGES_DRAWN` carries (docs/abi.md, *The action ring*). The embassy ages its
-/// slots by this mask and nothing else, because only this file knows which
-/// pictures are on the bar: a slot the build stopped drawing ages toward
-/// reuse, and one still drawn is never evicted under it.
+/// `ACT_IMAGES_DRAWN` carries (docs/abi.md, *The action ring*). The embassy
+/// holds its slots by this mask and nothing else, because only this file knows
+/// which pictures are on the bar: a slot the build stopped drawing is freed on
+/// the spot, and one still drawn is never taken from under it.
 public static const uint DRAWN_WORDS = (MAX_IMAGE_SLOTS + 31u) / 32u;
 
 /// The four allocators and the two witnesses of one build. Passed `inout`
@@ -299,7 +299,7 @@ public uint build_icon(inout Build b, uint kind, uint payload, float px, float4 
     private[0].blocks[b.blocks] = blk;
     b.blocks += 1u;
     // A picture on the bar: its slot is in use, which the embassy hears once
-    // per build (`ACT_IMAGES_DRAWN`) and ages its slots by.
+    // per build (`ACT_IMAGES_DRAWN`); a slot no block marks is freed.
     if (kind == BLOCK_IMAGE && payload < MAX_IMAGE_SLOTS)
     {
         b.drawn[payload >> 5u] |= 1u << (payload & 31u);
@@ -923,10 +923,10 @@ public void build_publish(Build b, Id level)
 
     // ---- the image slots this build drew ----
     //
-    // Before the wants, so the embassy marks what is on the bar before it
-    // serves a want that may take a slot from something else. Every build
-    // says it, an empty mask included: a picture no longer drawn is then one
-    // the slots may let go.
+    // Before the wants, so the embassy frees what left the bar before it
+    // serves a want that lands a picture in a slot. Every build says it, an
+    // empty mask included: a picture no longer drawn is let go there and
+    // then.
     Args drawn = action_begin(ACT_IMAGES_DRAWN);
     for (uint w = 0u; w < DRAWN_WORDS; ++w)
     {

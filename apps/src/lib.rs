@@ -163,7 +163,7 @@ struct HeldIcon {
 }
 
 /// Every answer this process has worked out, so a repeat request — the bar
-/// restarted, or an image slot was evicted and wanted back — costs no walk of
+/// restarted, or an image slot was freed and wanted back — costs no walk of
 /// the filesystem, and the sweep knows what to look at again.
 pub struct Apps {
     /// Where `.desktop` files are looked for, and their mtimes at the last
@@ -175,7 +175,7 @@ pub struct Apps {
     /// `app_id` → its answer.
     apps: HashMap<String, HeldApp>,
     /// `REQ_ICON` name → its texels, or `None` for "no theme has it, or it is
-    /// curves" — which is answered with silence, and remembered so a burst of repeat requests (a bar restart, an evicted slot) costs one theme walk per name.
+    /// curves" — which is answered with silence, and remembered so a burst of repeat requests (a bar restart, a freed slot) costs one theme walk per name.
     icons: HashMap<String, HeldIcon>,
 }
 

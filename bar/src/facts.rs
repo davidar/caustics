@@ -24,11 +24,11 @@
 //! # The pixmap store
 //!
 //! Every `Pixmap` frame is kept by its key, asked for or not
-//! ([`Facts::learn_pixmap`]): an image slot is a cache the generation evicts
-//! from, and the store is what an evicted or not-yet-wanted icon comes back
+//! ([`Facts::learn_pixmap`]): an image slot is held only while the caustic
+//! draws it, and the store is what a freed or not-yet-wanted icon comes back
 //! from without a round trip. A want for a key the store holds lands a slot
 //! and asks no one ([`Facts::want_icon`]). Bounded at [`MAX_STORED_PIXMAPS`]
-//! and [`MAX_STORED_BYTES`], oldest inserted out first; a sidecar that exits
+//! and [`MAX_STORED_BYTES`], the key longest unwanted out first; a sidecar that exits
 //! takes the keys it sent with it ([`Facts::forget_slot`]). The store keeps
 //! bytes under the name they came with and reads none of them — the two membership tests it passes (docs/architecture.md, *The bar process*) are the pipe read (a frame in, filed under its key)
 //! and `ACT_WANT_ICON` (a name in, a slot or a request out).
@@ -312,15 +312,15 @@ impl Facts {
     /// names, then the zeroed region the caustic reserves its compositions
     /// from. Nothing decides anything; the caustic builds.
     pub fn compose(&mut self, model: &Model, strings: &Strings, images: &mut Images) {
-        // One compose, one generation. What keeps a slot young is the
-        // caustic's `ACT_IMAGES_DRAWN` (stamped with this generation) or a
-        // landing in it, never this pass's listing (`caustics_host::images`).
+        // One compose, one generation. What keeps a slot is the caustic's
+        // `ACT_IMAGES_DRAWN`, never this pass's listing
+        // (`caustics_host::images`).
         images.begin_generation();
-        // A slot taken from someone else takes that name's "asked" mark with
-        // it — a themed name's under its prefix, an app id's bare — so the
-        // next want lands the pixels again from the store rather than naming a
-        // slot that now holds someone else's picture.
-        for key in images.take_evicted() {
+        // A slot the caustic stopped drawing takes that name's "asked" mark
+        // with it — a themed name's under its prefix, an app id's bare — so
+        // the next want lands the pixels again from the store rather than
+        // finding the name answered and no slot behind it.
+        for key in images.take_freed() {
             match key.strip_prefix(THEMED_KEY) {
                 Some(name) => self.icons_asked.remove(name),
                 None => self.apps_asked.remove(&key),
@@ -511,8 +511,8 @@ impl Facts {
     fn image_directory(&mut self, images: &Images) {
         let mut rows: Vec<ImageFact> = Vec::new();
         // An app id's own pixels, keyed bare, as *Pixmap* keys a `REQ_APP`
-        // answer's pixmap. An evicted app id is un-asked by the compose, so
-        // the caustic's next want lands it from the store.
+        // answer's pixmap. A freed app id is un-asked by the compose, so the
+        // caustic's next want lands it from the store.
         let mut app_ids: Vec<String> = self.apps_asked.iter().cloned().collect();
         app_ids.sort();
         for app_id in app_ids {
@@ -813,6 +813,16 @@ impl Facts {
         landed
     }
 
+    /// A want the store answers makes its key the newest: what the bound
+    /// lets go is the key longest unwanted, never one a menu reopens daily.
+    fn pixmap_used(&mut self, key: &str) {
+        if let Some(at) = self.pixmap_order.iter().position(|held| held == key)
+            && let Some(key) = self.pixmap_order.remove(at)
+        {
+            self.pixmap_order.push_back(key);
+        }
+    }
+
     /// File a `Pixmap` frame in the store, newest last, and let the oldest go
     /// past the bound.
     fn keep_pixmap(&mut self, sidecar: &str, key: &str, rgba: &[u8]) {
@@ -927,6 +937,7 @@ impl Facts {
                 }
                 // The pixels may be here; the name and the argv are an `App`
                 // answer, and only `caustics-apps` has those.
+                self.pixmap_used(&name);
                 let held = self.pixmaps.get(&name);
                 // Pixels the store no longer holds (its bound let them go, or
                 // `caustics-apps` restarted and took its keys with it) come
@@ -957,9 +968,10 @@ impl Facts {
                 if !self.icons_asked.insert(name.clone()) {
                     return Wanted::Nothing;
                 }
+                self.pixmap_used(&name);
                 if let Some(held) = self.pixmaps.get(&name) {
                     // A key a sidecar sent before the frame that names it — the
-                    // tray's every colour icon — or pixels an eviction took.
+                    // tray's every colour icon — or pixels whose slot was freed.
                     return match images.insert(&Facts::themed_key(&name), &held.rgba) {
                         Some(_) => Wanted::Landed,
                         None => Wanted::Nothing,

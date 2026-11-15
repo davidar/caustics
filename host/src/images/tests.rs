@@ -56,34 +56,51 @@ fn mask(drawn: impl IntoIterator<Item = u32>) -> Vec<u32> {
     words
 }
 
-/// The eviction: a full array gives up the slot nothing has drawn for the
-/// longest, and the key that lost it no longer answers.
+/// A build that could have drawn a slot and did not frees it: the key no
+/// longer answers, the embassy hears the name, and the slot is the next
+/// insert's.
 #[test]
-fn a_full_array_evicts_the_least_recently_drawn() {
+fn a_slot_the_build_stops_drawing_is_freed() {
     let mut images = Images::new();
-    // Fill it, one key per generation, so every stamp is distinct.
-    for i in 0..Images::capacity() {
-        images.begin_generation();
-        assert!(images.insert(&format!("k{i}"), &pixels(i as u8)).is_some());
-    }
-    assert_eq!(images.len(), Images::capacity());
-
-    // A new generation whose build draws everything but the first key, then
-    // asks for one more.
     images.begin_generation();
-    images.touch_drawn(&mask(1..Images::capacity() as u32));
-    assert_eq!(images.drawn(), Images::capacity() - 1);
-    let slot = images.insert("new", &pixels(200)).expect("k0 is not drawn");
-    assert_eq!(slot, 0, "the slot k0 was in");
-    assert_eq!(images.slot_of("k0"), None, "k0 no longer answers");
-    assert_eq!(images.slot_of("new"), Some(0));
-    assert_eq!(images.evictions(), 1);
-    assert_eq!(images.take_evicted(), vec!["k0".to_owned()]);
-    assert_eq!(images.len(), Images::capacity());
+    images.insert("kept", &pixels(1)).expect("room");
+    images.insert("gone", &pixels(2)).expect("room");
+    // The compose that names both, and a build that draws only the first.
+    images.begin_generation();
+    assert!(images.touch_drawn(&mask([0])), "a slot was freed");
+    assert_eq!(images.slot_of("kept"), Some(0));
+    assert_eq!(images.slot_of("gone"), None);
+    assert_eq!(images.len(), 1);
+    assert_eq!(images.drawn(), 1);
+    assert_eq!(images.frees(), 1);
+    assert!(images.has_freed());
+    assert_eq!(images.take_freed(), vec!["gone".to_owned()]);
+    assert!(!images.has_freed(), "and only once");
+    assert_eq!(images.insert("next", &pixels(3)), Some(1));
+    // The same mask again frees nothing more.
+    images.begin_generation();
+    assert!(!images.touch_drawn(&mask([0, 1])));
 }
 
-/// More images in one frame than there are slots is a witness and a missing
-/// icon — never a slot stolen from something the same frame filled.
+/// A picture that landed after the last compose is one no build has been
+/// told of, so a mask without its bit leaves it alone — until a compose has
+/// named it.
+#[test]
+fn a_slot_no_build_has_seen_is_not_freed() {
+    let mut images = Images::new();
+    images.begin_generation();
+    images.insert("new", &pixels(1)).expect("room");
+    // A build made from the facts before this slot was named.
+    assert!(!images.touch_drawn(&mask([])));
+    assert_eq!(images.slot_of("new"), Some(0));
+    // The compose names it; a build that still does not draw it lets it go.
+    images.begin_generation();
+    assert!(images.touch_drawn(&mask([])));
+    assert_eq!(images.slot_of("new"), None);
+}
+
+/// More images at once than there are slots is a witness and a missing
+/// icon — never a slot taken from another key.
 #[test]
 fn a_frame_that_wants_more_than_it_has_is_refused() {
     let mut images = Images::new();
@@ -93,97 +110,33 @@ fn a_frame_that_wants_more_than_it_has_is_refused() {
     }
     assert_eq!(images.insert("one too many", &pixels(9)), None);
     assert_eq!(images.refusals(), 1);
-    // And nothing this frame filled was disturbed.
     for i in 0..Images::capacity() {
         assert!(images.slot_of(&format!("k{i}")).is_some());
     }
-    assert_eq!(images.evictions(), 0);
+    // Every slot drawn is every slot kept, and the refusal stands.
+    images.begin_generation();
+    assert!(!images.touch_drawn(&mask(0..Images::capacity() as u32)));
+    assert_eq!(images.insert("still too many", &pixels(9)), None);
+    assert_eq!(images.refusals(), 2);
+    assert_eq!(images.frees(), 0);
 }
 
-/// A lookup is a listing, not a draw. A slot only ever looked up —
-/// the image directory names every key ever asked, on every compose — ages
-/// like any other undrawn slot.
+/// A lookup is a listing, not a draw: a slot only ever looked up — the image
+/// directory names every key asked, on every compose — is freed like any
+/// other the build does not draw.
 #[test]
-fn a_lookup_does_not_keep_a_slot_young() {
-    let mut images = Images::new();
-    for i in 0..Images::capacity() {
-        images.begin_generation();
-        images.insert(&format!("k{i}"), &pixels(1)).expect("room");
-    }
-    // Every compose lists every key; no build draws any of them.
-    images.begin_generation();
-    for i in 0..Images::capacity() {
-        assert!(images.slot_of(&format!("k{i}")).is_some());
-    }
-    assert_eq!(
-        images.insert("new", &pixels(2)),
-        Some(0),
-        "k0, the oldest, goes"
-    );
-    assert_eq!(images.refusals(), 0);
-}
-
-/// A drawn slot is never taken while an undrawn one exists — however old the
-/// drawn one's last fill and however new the undrawn one's.
-#[test]
-fn a_drawn_slot_is_never_evicted_while_an_undrawn_one_exists() {
-    let mut images = Images::new();
-    for i in 0..Images::capacity() {
-        images.begin_generation();
-        images.insert(&format!("k{i}"), &pixels(1)).expect("room");
-    }
-    // The build draws all but the newest key.
-    images.begin_generation();
-    let last = Images::capacity() as u32 - 1;
-    images.touch_drawn(&mask(0..last));
-    images.begin_generation();
-    assert_eq!(
-        images.insert("new", &pixels(2)),
-        Some(last),
-        "the one slot not drawn"
-    );
-    // The next generation: "new" is undrawn but filled a generation ago, the
-    // drawn slots are still drawn — "new" is the only candidate.
-    images.begin_generation();
-    assert_eq!(images.insert("newer", &pixels(3)), Some(last));
-    assert_eq!(images.slot_of("new"), None);
-    for i in 0..last {
-        assert!(
-            images.slot_of(&format!("k{i}")).is_some(),
-            "k{i} is drawn and stays"
-        );
-    }
-}
-
-/// The refusal fires only when every slot is drawn or was filled this
-/// generation — and then it does.
-#[test]
-fn the_refusal_fires_only_when_every_slot_is_drawn_or_new() {
+fn a_lookup_does_not_keep_a_slot() {
     let mut images = Images::new();
     images.begin_generation();
-    for i in 0..Images::capacity() / 2 {
-        images.insert(&format!("old{i}"), &pixels(1)).expect("room");
-    }
+    images.insert("listed", &pixels(1)).expect("room");
     images.begin_generation();
-    images.touch_drawn(&mask(0..Images::capacity() as u32 / 2));
-    for i in 0..Images::capacity() / 2 {
-        images.insert(&format!("new{i}"), &pixels(1)).expect("room");
-    }
-    // Half drawn, half filled this generation: nothing to take.
-    assert_eq!(images.insert("refused", &pixels(9)), None);
-    assert_eq!(images.refusals(), 1);
-    assert_eq!(images.evictions(), 0);
-    // A generation later the new half is fair game.
-    images.begin_generation();
-    let slot = images
-        .insert("taken", &pixels(9))
-        .expect("an undrawn slot from last generation");
-    assert!(slot as usize >= Images::capacity() / 2);
-    assert_eq!(images.refusals(), 1);
+    assert!(images.slot_of("listed").is_some());
+    assert!(images.touch_drawn(&mask([])));
+    assert_eq!(images.slot_of("listed"), None);
 }
 
 /// A mask replaces the previous mask: a slot drawn last build and not this
-/// one is a candidate again.
+/// one goes.
 #[test]
 fn a_mask_replaces_the_previous_mask() {
     let mut images = Images::new();
@@ -192,22 +145,15 @@ fn a_mask_replaces_the_previous_mask() {
         images.insert(&format!("k{i}"), &pixels(1)).expect("room");
     }
     images.begin_generation();
-    images.touch_drawn(&mask(0..Images::capacity() as u32));
+    assert!(!images.touch_drawn(&mask(0..Images::capacity() as u32)));
     assert_eq!(images.drawn(), Images::capacity());
-    images.begin_generation();
-    assert_eq!(
-        images.insert("refused", &pixels(2)),
-        None,
-        "everything is drawn"
-    );
     // The next build draws everything but slot 5.
-    images.touch_drawn(&mask(
+    assert!(images.touch_drawn(&mask(
         (0..Images::capacity() as u32).filter(|slot| *slot != 5),
-    ));
+    )));
     assert_eq!(images.drawn(), Images::capacity() - 1);
-    images.begin_generation();
-    assert_eq!(images.insert("next", &pixels(3)), Some(5));
     assert_eq!(images.slot_of("k5"), None);
+    assert_eq!(images.insert("next", &pixels(3)), Some(5));
 }
 
 /// The slot size is the one the ABI declares, and one slot is square RGBA.

@@ -131,7 +131,7 @@ abi_consts! {
     /// Slots in the image array: everything the bar draws that is pixels rather
     /// than curves (a colour SVG, a PNG, a tray pixmap), each one slot.
     ///
-    /// Fixed, and evicted by least-recently-referenced generation, never packed.
+    /// Fixed, held only while the caustic draws a slot, never packed.
     /// Fixed slots need no packer, because every image is fitted to one size before it arrives.
     pub const MAX_IMAGE_SLOTS: usize = 64;
 
@@ -330,11 +330,12 @@ abi_consts! {
     /// `arg[0..(MAX_IMAGE_SLOTS + 31) / 32]`: a bitmask of the image slots
     /// this build placed in a `BLOCK_IMAGE`, slot `n` at bit `n % 32` of word
     /// `n / 32`. Pushed once per `bar_build`,
-    /// **before** its `ACT_WANT_ICON`s, so the drain marks what is on the bar
-    /// before it serves a want that may evict. The embassy copies the mask
-    /// into the slot array whole — a set bit is drawn, a clear one is not —
-    /// and decides nothing: only the caustic lays the blocks out, so only it
-    /// can say which pictures are in use.
+    /// **before** its `ACT_WANT_ICON`s, so the drain frees what left the bar
+    /// before it serves a want that lands a picture. The embassy copies the
+    /// mask into the slot array whole — a set bit is drawn, a clear one frees
+    /// the slot unless it landed since the last compose — and decides
+    /// nothing: only the caustic lays the blocks out, so only it can say
+    /// which pictures are in use.
     pub const ACT_IMAGES_DRAWN: u32 = 19;
 }
 

@@ -401,10 +401,11 @@ What the bar adds on top:
   process keeps every pixmap in a bounded store (256 keys, 4 MiB) and lands
   one in a slot when the caustic wants it.
 - **What is drawn is the caustic's word.** Each build reports the slots it
-  placed. A slot that is on the bar is never evicted, and an eviction takes
-  the least recently drawn slot. (Marking a slot as used merely because its
-  name had once been asked for filled the array within a day, after which
-  every new icon was refused.)
+  placed, and a slot it did not place is freed there and then: the array is
+  not a cache, and a picture that comes back is landed again from the store
+  without a round trip. (Marking a slot as used merely because its name had
+  once been asked for filled the array within a day, after which every new
+  icon was refused.)
 - **The resolution order** for a name: curves first (`caustics-glyphs`, which
   answers fast with "missing" for anything not symbolic), then pixels. A chip
   whose icon has not resolved wears its title's first letter.
