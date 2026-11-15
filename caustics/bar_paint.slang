@@ -319,9 +319,18 @@ public float4 draw_item_content(Element e, Item it, float2 p, float4 col)
     if (icon_w > 0.0)
     {
         float2 sz = block_size(it.icon_block);
-        col = draw_block_at(it.icon_block, float2(floor(x), e.rect.y + floor((content_h - sz.y) * 0.5)),
+        // Centred in the menu's icon column, which is its widest icon.
+        float col_w = in_menu ? max(menu_icon_col(), icon_w) : icon_w;
+        col = draw_block_at(it.icon_block,
+                            float2(floor(x + (col_w - icon_w) * 0.5),
+                                   e.rect.y + floor((content_h - sz.y) * 0.5)),
                             p, col, dim);
-        x += icon_w + gap;
+        x += col_w + gap;
+    }
+    else if (in_menu && menu_icon_col() > 0.0)
+    {
+        // No icon of its own: the label lines up with the level's others.
+        x += menu_icon_col() + gap;
     }
     uint aux = item_aux_block(it);
     if (aux != NO_INDEX)

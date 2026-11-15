@@ -535,6 +535,10 @@ public static const float MENU_GUTTER = 18.0;
 /// icons and labels are not set in from an empty column. MENU_GUTTER keeps
 /// every gutter its full width.
 public static const float MENU_GUTTER_BARE = 8.0;
+/// A menu level where some rows have an icon and some do not lines every
+/// label up past one icon column, as a desktop's menus do, rather than
+/// starting an icon-less row's label where the others' icons are.
+public static const bool MENU_ICON_COLUMN = true;
 public static const float MENU_RADIUS = 5.0;
 
 /// The popup's width is the widest row's content, clamped to this range. Too

@@ -292,6 +292,19 @@ public uint layout_menu(uint next, bool open, float2 popup, float ppad)
     float content_h = 0.0;
     bool checks = has_back;
     bool chevrons = false;
+    // The icon column: as wide as the level's widest icon, and every row is
+    // measured as it is drawn, its label past that column whether or not it
+    // has an icon of its own (MENU_ICON_COLUMN).
+    float icon_col = 0.0;
+    for (uint i = 0u; i < n && MENU_ICON_COLUMN; ++i)
+    {
+        Item it = private[0].items[i];
+        if (level_row(it, level))
+        {
+            icon_col = max(icon_col, item_icon_w(it));
+        }
+    }
+    private[0].menu_icon_col = icon_col;
     for (uint i = 0u; i < n; ++i)
     {
         Item it = private[0].items[i];
@@ -300,7 +313,13 @@ public uint layout_menu(uint next, bool open, float2 popup, float ppad)
             continue;
         }
         content_h += level_row_h(it);
-        widest = max(widest, level_row_w(it));
+        float w = level_row_w(it);
+        float icon = item_icon_w(it);
+        if ((it.flags & IFLAG_SEPARATOR) == 0u && icon_col > 0.0)
+        {
+            w += icon > 0.0 ? icon_col - icon : icon_col + gap_px();
+        }
+        widest = max(widest, w);
         checks = checks || (it.flags & IFLAG_CHECKABLE) != 0u;
         chevrons = chevrons || (it.flags & IFLAG_SUBMENU) != 0u;
     }

@@ -389,6 +389,11 @@ public struct Private
     /// to put in one, MENU_GUTTER_BARE where it has none
     /// (`layout_menu`; `menu_gutters()` is what the draw reads).
     public float2 menu_gutters;
+    /// The menu level's icon column, px: its widest row icon, 0 when no row
+    /// has one. A row without an icon starts its label past it, so a level's
+    /// labels line up (`layout_menu`; `menu_icon_col()` is what the draw
+    /// reads).
+    public float menu_icon_col;
     /// The band of popup y the scrolled rows are drawn and hit in: below the
     /// back row, above the bottom pad. `(0, 0)` is no band — nothing clips.
     public float2 menu_clip;
@@ -1274,6 +1279,18 @@ public bool rect_near(float4 r, float2 p, float pad)
 public float scale_px()
 {
     return float(max(inputs.scale, 1u));
+}
+
+/// The icon column a menu row's label is set past when the row has no icon
+/// of its own, px: `layout_menu`'s for the menu up, none for any other
+/// popup's rows (a toast's), or with MENU_ICON_COLUMN off.
+public float menu_icon_col()
+{
+    if (!MENU_ICON_COLUMN || private[0].popup_kind != POPUP_MENU)
+    {
+        return 0.0;
+    }
+    return private[0].menu_icon_col;
 }
 
 /// A menu row's left and right gutters, px: what `layout_menu` measured for
