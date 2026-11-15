@@ -384,6 +384,11 @@ public struct Private
     /// How far it *can* scroll: the level's rows less the popup's inner
     /// height, as the last layout measured it. 0 for a level that fits.
     public float menu_scroll_max;
+    /// The left and the right gutter of the menu level laid out, px: the full
+    /// MENU_GUTTER where the level has a check mark, a back row or a chevron
+    /// to put in one, MENU_GUTTER_BARE where it has none
+    /// (`layout_menu`; `menu_gutters()` is what the draw reads).
+    public float2 menu_gutters;
     /// The band of popup y the scrolled rows are drawn and hit in: below the
     /// back row, above the bottom pad. `(0, 0)` is no band — nothing clips.
     public float2 menu_clip;
@@ -1269,6 +1274,19 @@ public bool rect_near(float4 r, float2 p, float pad)
 public float scale_px()
 {
     return float(max(inputs.scale, 1u));
+}
+
+/// A menu row's left and right gutters, px: what `layout_menu` measured for
+/// the menu level up, and the full MENU_GUTTER for any other popup's rows
+/// (a toast's).
+public float2 menu_gutters()
+{
+    float2 g = private[0].menu_gutters;
+    if (private[0].popup_kind != POPUP_MENU || g.x <= 0.0 || g.y <= 0.0)
+    {
+        return float2(MENU_GUTTER, MENU_GUTTER) * scale_px();
+    }
+    return g;
 }
 
 /// How far a pixel size puts the cap height from a whole pixel.

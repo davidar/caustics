@@ -307,7 +307,7 @@ public float4 draw_item_content(Element e, Item it, float2 p, float4 col)
     // content in what is left above the band.
     bool in_menu = it.kind == ITEM_MENU_ROW || it.kind == ITEM_SLIDER;
     float x = in_menu
-              ? e.rect.x + MENU_GUTTER * s
+              ? e.rect.x + menu_gutters().x
               : e.rect.x + floor((e.rect.z - inner) * 0.5);
     float content_h = it.kind == ITEM_SLIDER
                       ? max(e.rect.w - SLIDER_BAND * s, 1.0)

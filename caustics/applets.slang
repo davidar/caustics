@@ -41,17 +41,17 @@ extern static const uint APPLETS_CAFFEINE_TAG;
 // grabbing the knob not jump.
 // ===========================================================================
 
-/// The track inside a slider row's rect: the row inset by the menu gutter on
-/// each side (so it lines up with the label column above it), across the
-/// bottom band.
+/// The track inside a slider row's rect: the row inset by the menu's left
+/// gutter on each side (so it starts under the label column above it and sits
+/// centred in the row), across the bottom band.
 public float4 slider_track(float4 rect)
 {
     float s = scale_px();
-    float g = MENU_GUTTER * s;
+    float2 g = menu_gutters();
     float band = SLIDER_BAND * s;
     float h = SLIDER_TRACK_H * s;
-    float x = rect.x + g;
-    float w = max(rect.z - 2.0 * g, 1.0);
+    float x = rect.x + g.x;
+    float w = max(rect.z - 2.0 * g.x, 1.0);
     float y = rect.y + rect.w - band + floor((band - h) * 0.5);
     return float4(x, y, w, h);
 }
@@ -279,7 +279,6 @@ public uint layout_menu(uint next, bool open, float2 popup, float ppad)
     float s = scale_px();
     uint n = live_items();
     uint level = menu_level();
-    float gutter = MENU_GUTTER * s;
 
     // A back row exists exactly when the level is itself a row — i.e. the bar has
     // descended into a submenu. At the root the level is the item whose menu
@@ -291,6 +290,8 @@ public uint layout_menu(uint next, bool open, float2 popup, float ppad)
     float back_h = has_back ? MENU_ROW_H * s : 0.0;
     float widest = 0.0;
     float content_h = 0.0;
+    bool checks = has_back;
+    bool chevrons = false;
     for (uint i = 0u; i < n; ++i)
     {
         Item it = private[0].items[i];
@@ -300,8 +301,15 @@ public uint layout_menu(uint next, bool open, float2 popup, float ppad)
         }
         content_h += level_row_h(it);
         widest = max(widest, level_row_w(it));
+        checks = checks || (it.flags & IFLAG_CHECKABLE) != 0u;
+        chevrons = chevrons || (it.flags & IFLAG_SUBMENU) != 0u;
     }
-    float wanted_w = clamp(widest + 2.0 * (ppad + gutter), MENU_MIN_W * s, MENU_MAX_W * s);
+    // A gutter only as wide as what this level puts in it.
+    float2 gutters = float2(checks ? MENU_GUTTER : MENU_GUTTER_BARE,
+                            chevrons ? MENU_GUTTER : MENU_GUTTER_BARE) * s;
+    private[0].menu_gutters = gutters;
+    float wanted_w = clamp(widest + 2.0 * ppad + gutters.x + gutters.y,
+                           MENU_MIN_W * s, MENU_MAX_W * s);
     float wanted_h = 2.0 * ppad + back_h + content_h;
     // No taller than the output less the bar less a margin: tailscale's
     // exit-node level is ~130 rows, and a surface asked for
@@ -573,13 +581,13 @@ public float4 draw_row_marks(Element e, Item it, float2 p, float4 col)
     float s = scale_px();
     float m = MENU_MARK * s;
     float stroke = MARK_STROKE * s * 0.5;
-    float gutter = MENU_GUTTER * s;
+    float2 gutters = menu_gutters();
     float y = e.rect.y + floor((row_band_h(e, it) - m) * 0.5);
     float dim = (it.flags & IFLAG_DISABLED) != 0u ? DISABLED_ALPHA : 1.0;
 
     if ((it.flags & IFLAG_CHECKABLE) != 0u)
     {
-        float2 org = float2(e.rect.x + floor((gutter - m) * 0.5), y);
+        float2 org = float2(e.rect.x + floor((gutters.x - m) * 0.5), y);
         if ((it.flags & IFLAG_CHECKED) != 0u)
         {
             col = ink(MARK_INK, dim * coverage(check_sdf(p, org, m) - stroke), col);
@@ -596,7 +604,7 @@ public float4 draw_row_marks(Element e, Item it, float2 p, float4 col)
 
     if ((it.flags & IFLAG_SUBMENU) != 0u)
     {
-        float2 org = float2(e.rect.x + e.rect.z - gutter + floor((gutter - m) * 0.5), y);
+        float2 org = float2(e.rect.x + e.rect.z - gutters.y + floor((gutters.y - m) * 0.5), y);
         col = ink(MARK_INK, dim * coverage(chevron_sdf(p, org, m, 1.0) - stroke), col);
     }
     return col;

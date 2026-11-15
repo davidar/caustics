@@ -530,6 +530,11 @@ public static const uint TOAST_MAX_ROWS = 4u;
 public static const float MENU_ROW_H = 26.0;
 public static const float MENU_SEP_H = 9.0;
 public static const float MENU_GUTTER = 18.0;
+/// A gutter a level has no use for — no row in it checkable and no back row
+/// on the left, no submenu on the right — narrows to this, so a plain menu's
+/// icons and labels are not set in from an empty column. MENU_GUTTER keeps
+/// every gutter its full width.
+public static const float MENU_GUTTER_BARE = 8.0;
 public static const float MENU_RADIUS = 5.0;
 
 /// The popup's width is the widest row's content, clamped to this range. Too
