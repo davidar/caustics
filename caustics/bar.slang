@@ -582,6 +582,10 @@ void bar_apply(uint3 gid: SV_DispatchThreadID)
     // The clocks: the preview's dwell, the chart numbers' hover and the wake,
     // after the layout so the strip is this frame's; then the springs.
     resolve_hover_item();
+    // With a chip's menu up, the pointer on another chip with a menu opens
+    // that one in its place; before the clocks, so the chart numbers' see a
+    // menu the hover has just switched to as theirs.
+    dispatch_menu_hover();
     bool dwelling = dispatch_step(dt);
     bool moving = integrate_springs(dt);
 

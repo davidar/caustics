@@ -263,12 +263,22 @@ pub struct Bar {
     ///
     /// Kept because an `ACT_POPUP_MOVE` carries a size and nothing else: the
     /// anchor has not moved — the chip the menu hangs off is where it was —
-    /// and a reposition needs a whole positioner.
+    /// and a reposition needs a whole positioner. An `ACT_POPUP_SWITCH`
+    /// replaces it.
     popup_anchor: [f32; 4],
     /// The logical size last asked of the positioner.
     popup_want: (i32, i32),
     /// The reposition token; `xdg_popup.reposition` echoes it back.
     popup_serial: u32,
+    /// The reposition token of an `ACT_POPUP_SWITCH` still in flight. Its
+    /// configure is answered with a `CMD_POPUP_MAPPED` even when the size is
+    /// the one the popup had, because the caustic waits for one to call the
+    /// new menu up; and no configure before it is, because that one is the
+    /// last menu's size.
+    popup_switch: Option<u32>,
+    /// The switch's configure has come, and `service_surfaces` owes the
+    /// caustic its `CMD_POPUP_MAPPED`.
+    popup_switch_landed: bool,
 
     // --- input ------------------------------------------------------------
     seat: Option<wl_seat::WlSeat>,
@@ -521,6 +531,8 @@ impl Bar {
             popup_anchor: [0.0; 4],
             popup_want: (0, 0),
             popup_serial: 0,
+            popup_switch: None,
+            popup_switch_landed: false,
             seat: None,
             pointer: None,
             last_button_serial: 0,
@@ -1214,15 +1226,19 @@ impl Bar {
         }
         if let Some((width, height)) = self.pending_popup.take() {
             // A popup that already has a swapchain was *repositioned*, not
-            // created: a submenu descent changes the size of a mapped popup.
+            // created: a submenu descent changes the size of a mapped popup,
+            // and a switch moves it to another chip's menu.
             let attached = self
                 .gpu
                 .as_ref()
                 .is_some_and(|gpu| gpu.popup_size() != (0, 0));
             if attached {
-                if let Some(gpu) = self.gpu.as_mut()
-                    && gpu.resize_popup(width, height)
-                {
+                let resized = self
+                    .gpu
+                    .as_mut()
+                    .is_some_and(|gpu| gpu.resize_popup(width, height));
+                let landed = std::mem::take(&mut self.popup_switch_landed);
+                if landed || (resized && self.popup_switch.is_none()) {
                     self.queue(Command::popup_mapped(width, height));
                 }
             } else {
@@ -1271,6 +1287,58 @@ impl Bar {
         }
         let want = [size[0] as f32, size[1] as f32];
         self.reposition_popup(want);
+    }
+
+    /// `ACT_POPUP_SWITCH`: the grabbed menu that is up becomes another chip's
+    /// menu, on the same surface (docs/abi.md, *The action ring*).
+    ///
+    /// **Why the surface stays.** The caustic switches when the pointer
+    /// moves onto another chip while a menu is up, and a motion carries no
+    /// serial: a new `xdg_popup` would need a fresh button serial for its
+    /// grab, and the newest there is belongs to the click that opened the
+    /// first menu, which the compositor may refuse for a second grab and
+    /// would dismiss the popup over. `xdg_popup.reposition` takes a whole
+    /// positioner, anchor rect included, so the popup that holds the grab
+    /// moves to the new chip at the new size and keeps it.
+    ///
+    /// The sidecars hear it as a close and an open would tell them, unless it
+    /// is the same row of the same sidecar, which has had nothing close.
+    fn switch_popup(&mut self, open: abi::PopupOpen) {
+        if self.popup.is_none() || self.popup_kind != abi::POPUP_MENU {
+            // The popup went (the compositor dismissed it) after the caustic
+            // decided: the `CMD_POPUP_DONE` that says so is already queued,
+            // and a menu made here would be one the caustic does not hold.
+            tracing::info!("popup: a switch with no menu up; nothing to move");
+            return;
+        }
+        let same = open.slot != abi::NO_INDEX
+            && self.open_menu_notice.as_ref().is_some_and(|(name, row)| {
+                *row == open.row && self.facts.sidecar(open.slot) == Some(name.as_str())
+            });
+        if !same {
+            self.menu_closed();
+            self.prepare_menu(open.slot, open.row);
+        }
+        self.popup_anchor = open.anchor;
+        let before = self.popup_serial;
+        self.reposition_popup([open.want[0] as f32, open.want[1] as f32]);
+        if self.popup_serial == before {
+            // No reposition went out (its warning says why): the popup stays
+            // where it is, and the caustic is told it is up at that size.
+            if let Some(gpu) = self.gpu.as_ref() {
+                let (width, height) = gpu.popup_size();
+                self.queue(Command::popup_mapped(width, height));
+            }
+            return;
+        }
+        self.popup_switch = Some(self.popup_serial);
+        tracing::info!(
+            "popup: switched to anchor={},{},{},{}",
+            open.anchor[0] as i32,
+            open.anchor[1] as i32,
+            open.anchor[2] as i32,
+            open.anchor[3] as i32,
+        );
     }
 
     /// A menu popup was asked for: tell the sidecar whose rows it is.
@@ -1481,6 +1549,8 @@ impl Bar {
         // is not the new one's: its size would attach a swapchain to a
         // surface the compositor has not configured.
         self.pending_popup = None;
+        self.popup_switch = None;
+        self.popup_switch_landed = false;
     }
 
     /// Resize a mapped popup in place with `xdg_popup.reposition` (xdg_wm_base
@@ -1517,6 +1587,8 @@ impl Bar {
         self.popup_kind = 0;
         self.popup_want = (0, 0);
         self.pending_popup = None;
+        self.popup_switch = None;
+        self.popup_switch_landed = false;
         if had {
             tracing::info!("popup: closed ({why})");
         }
@@ -1681,6 +1753,7 @@ impl Bar {
                 }
             }
             abi::ACT_POPUP_MOVE => self.move_popup(note.popup_size()),
+            abi::ACT_POPUP_SWITCH => self.switch_popup(note.popup_open()),
             abi::ACT_POPUP_CLOSE => {
                 if !self.popup_closing {
                     self.popup_closing = true;
@@ -2364,6 +2437,12 @@ impl PopupHandler for Bar {
         // Every configure counts, not only the first: a submenu descent
         // repositions a *mapped* popup, and its new size arrives this way.
         // Recorded, not acted on: see `Bar::service_surfaces`.
+        if let ConfigureKind::Reposition { token } = configure.kind
+            && self.popup_switch == Some(token)
+        {
+            self.popup_switch = None;
+            self.popup_switch_landed = true;
+        }
         self.popup_configured = true;
         self.pending_popup = Some(px);
         self.dirty = true;

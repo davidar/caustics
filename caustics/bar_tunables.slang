@@ -546,6 +546,15 @@ public static const float MENU_MAX_W = 420.0;
 /// its rows on every frame keeps a build from settling that long.
 public static const float MENU_OPEN_WAIT_S = 0.25;
 
+/// With a chip's menu up, the pointer moving onto another chip that opens a
+/// menu on a click opens that one in its place, with no click (an applet or
+/// a tray item with a menu, the clock, the charts); a chip with no menu, or
+/// the bar between chips, leaves the menu that is up alone. A dock entry's
+/// menu is a right click's and takes no part, either way. The switch is
+/// immediate: a menu hangs below the bar, so the pointer going down into one
+/// crosses no other chip on the way.
+public static const bool MENU_HOVER_SWITCH = true;
+
 /// Check marks and chevrons are SDF strokes, not glyphs, so they draw even when no installed font has those two symbols. This is the mark
 /// box's side and the stroke's width, logical px.
 public static const float MENU_MARK = 11.0;

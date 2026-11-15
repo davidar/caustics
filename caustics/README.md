@@ -24,7 +24,7 @@ names, so that a subject is found in one place.
 |---|---|
 | `bar.slang` | the seven entry points (`bar_build`, `bar_compose`, `bar_shape`, `bar_apply`, `bar_visibility`, `bar_sample`, `bar_draw`), each a short sequence of calls into the modules below, the witnesses' naming, and the oracle's `#include` |
 | `bar_state.slang` | what every module reads and writes: the bindings of sets 0 and 2, the `Private` struct and its buffer (with one scratch struct per subject), `ensure_private`, the action and witness rings, the witness-name vocabulary, the scale and the item and id helpers, the rows arena's readers |
-| `bar_popups.slang` | the popup as a window: decided, asked for (a menu once its level's rows are built, at the size they measure), mapped, moved, ended, and the menu level it walks |
+| `bar_popups.slang` | the popup as a window: decided, asked for (a menu once its level's rows are built, at the size they measure), mapped, moved, switched to another chip's menu on the same surface, ended, and the menu level it walks |
 | `bar_layout.slang` | the layout engine: what an item's rect is made of, the strip's wings, `place`, the hit test, a row's body wrapped into lines, the springs |
 | `bar_paint.slang` | the drawing every subject shares: the premultiplied rules, the chip, one block (a run, a glyph, an image), an item's content, a row's body |
 | `bar_table.slang` | the item and block tables' machinery: the build's allocators, the stitch, the wants, the answers index, composed bytes, the shape pass's block, the build's own witnesses |

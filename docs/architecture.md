@@ -454,6 +454,18 @@ What the bar adds on top:
   measured and be drawn at that size until a move landed. The wait is bounded
   (`MENU_OPEN_WAIT_S`), and a level with no rows opens at the least a menu is
   and grows when they come.
+- **With a menu up, the pointer switches it.** As on GNOME's top bar, once a
+  chip's menu is open, moving the pointer onto another chip whose click opens
+  a menu (an applet or a tray item with one, the clock, the charts) opens that
+  menu in its place; a chip with none, or the bar between chips, leaves it
+  alone (`MENU_HOVER_SWITCH`). A motion carries no input serial, and a new
+  popup's grab needs a fresh one, so the switch keeps the popup that holds
+  the grab and repositions it to the new chip at the new menu's size
+  (`ACT_POPUP_SWITCH`, `xdg_popup.reposition`, whose positioner carries the
+  anchor too). A click on another chip goes the same way. The sidecars hear a
+  close and an open, as clicks would tell them; between the two menus the
+  popup is drawn empty until the move lands, never the new rows at the old
+  size.
 - **Long menus scroll.** The caustic knows the output's size and clamps a
   menu to it, less the bar and a margin. The wheel scrolls rows within the
   band while the back row stays pinned.

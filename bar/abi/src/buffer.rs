@@ -338,6 +338,15 @@ abi_consts! {
     /// nothing: only the caustic lays the blocks out, so only it can say
     /// which pictures are in use.
     pub const ACT_IMAGES_DRAWN: u32 = 19;
+    /// `arg[0..9]`: [`ACT_POPUP_OPEN`]'s operands, `kind` always
+    /// [`POPUP_MENU`]. The grabbed menu that is up becomes this one: the same
+    /// `xdg_popup` and its grab, repositioned to the new anchor and size
+    /// (`xdg_popup.reposition`). The slot that got the last open is sent
+    /// `ACTION_MENU_CLOSE` and this `slot` `ACTION_MENU_OPEN {row}`, as a close
+    /// and an open would send them. A menu opened by a hover has no button
+    /// serial of its own to grab with, which is why it moves the popup that
+    /// has one rather than making another.
+    pub const ACT_POPUP_SWITCH: u32 = 20;
 }
 
 abi_consts! {
@@ -741,7 +750,7 @@ impl Note {
         }
     }
 
-    /// An `ACT_POPUP_OPEN`'s operands.
+    /// An `ACT_POPUP_OPEN`'s operands, and an `ACT_POPUP_SWITCH`'s.
     pub fn popup_open(&self) -> PopupOpen {
         PopupOpen {
             kind: self.arg_u(0),

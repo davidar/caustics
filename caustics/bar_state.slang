@@ -354,6 +354,10 @@ public struct Private
     public uint popup_state;
     /// Seconds a `POPUP_PENDING` menu has waited for its build.
     public float popup_pending_secs;
+    /// 1 while the menu pending or asked for is to be had by moving the
+    /// grabbed menu that is up (`ACT_POPUP_SWITCH`) rather than by a popup of
+    /// its own, until its `CMD_POPUP_MAPPED`; 0 otherwise.
+    public uint popup_switch;
     /// POPUP_MENU, POPUP_PREVIEW, POPUP_TOAST, or 0.
     public uint popup_kind;
     /// The sidecar slot the open named, or NO_INDEX (a dock entry's menu).

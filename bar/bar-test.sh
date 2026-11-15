@@ -3298,6 +3298,162 @@ else
     pass "no 'reshaped under the open menu' anywhere: a reshape never closes a menu"
 fi
 
+say "18d. with a menu up, the pointer on another chip opens that chip's menu in its place"
+# GNOME's top bar: once a menu is open, the pointer moving onto another chip
+# with a menu switches to it, with no click; onto a chip with none, the menu
+# stays. The caustic decides (MENU_HOVER_SWITCH) and the embassy moves the one
+# grabbed popup (`ACT_POPUP_SWITCH`, `xdg_popup.reposition`), since a motion
+# has no serial a new popup's grab could be taken with. The demo echoes its
+# menu notices (kind 7 open, 8 close); the power menu's Suspend, under the
+# dry run, proves a click on a switched-to menu reaches its sidecar, which
+# is to say the grab survived the switch.
+bar_env sidecars "CAUSTICS_SIDECARS=caustics-sysmon caustics-tray caustics-power caustics-glyphs caustics-reload rows_demo"
+bar_env power "CAUSTICS_POWER_DRY_RUN=1"
+restart_bar "rows_demo beside the power button, in the dry run"
+wait_for_journal "layout: applet-rows_demo target=bar" 30
+wait_for_journal "layout: applet-caustics-power target=bar" 30
+sleep 1
+# The screen point at the middle of a bar element, by its layout name.
+bar_point() { # bar_point <ELEM_NAME> -> "x y", or nothing
+    local r
+    r=($(layout_rect "$1"))
+    [[ ${#r[@]} -eq 4 ]] || return 1
+    python3 -c "print(round(${r[0]} + ${r[2]} / 2), round($bar_origin_y + ${r[1]} + ${r[3]} / 2))"
+}
+demo_at=($(bar_point applet-rows_demo))
+power_at=($(bar_point applet-caustics-power))
+clock_at=($(bar_point clock))
+# A chip with no menu: the caffeine chip's click toggles, it opens nothing.
+plain_at=($(bar_point caffeine))
+if [[ ${#demo_at[@]} -ne 2 || ${#power_at[@]} -ne 2 || ${#clock_at[@]} -ne 2 ]]; then
+    fail "no rect for the demo's chip, the power button or the clock; the switch cannot be driven"
+else
+    hover_mark=$(journal_lines)
+    click_at "${demo_at[@]}"
+    if wait_for_journal "rows_demo: action row=1 kind=7" 10 &&
+        wait_for_journal "layout: applet-rows_demo-2 target=popup" 10; then
+        pass "a click opened the demo's menu, and the demo was told"
+    else
+        fail "the demo's menu did not open on a click"
+    fi
+
+    # 1. A chip with no menu leaves the menu up.
+    if [[ ${#plain_at[@]} -eq 2 ]]; then
+        plain_mark=$(journal_lines)
+        plain_hovers=$(journal_count "hover: caffeine")
+        pointer_to "${plain_at[@]}"
+        if wait_for_journal_more "hover: caffeine" 5 "$plain_hovers"; then
+            sleep 0.6
+            if journal_since "$plain_mark" | jgrep -E 'popup: (switched|closed|requested)|rows_demo: action row=1 kind=8'; then
+                fail "the pointer on a chip with no menu moved the menu: $(journal_since "$plain_mark" |
+                    grep -oE 'popup: (switched|closed|requested)[^(]*|rows_demo: action row=1 kind=8' | tr '\n' ';')"
+            else
+                pass "the pointer on the caffeine chip, which has no menu, leaves the demo's menu up"
+            fi
+        else
+            fail "the bar never saw the pointer on the caffeine chip while the menu was up"
+        fi
+    else
+        note "no caffeine chip on this compositor; the chip-without-a-menu half is the oracle's"
+    fi
+
+    # 2. The power button: its menu in the demo's place, on the same popup.
+    power_mark=$(journal_lines)
+    switches=$(journal_count "popup: switched to anchor=")
+    pointer_to "${power_at[@]}"
+    if wait_for_journal_more "popup: switched to anchor=" 8 "$switches" &&
+        wait_for_journal "layout: applet-caustics-power-5 target=popup" 8; then
+        pass "the pointer on the power button switched the menu to its rows: $(journal_since "$power_mark" |
+            grep -F 'popup: switched to' | tail -1 | sed -n 's/.*popup: //p')"
+    else
+        fail "no switch to the power menu ($(journal_since "$power_mark" |
+            grep -oE 'popup: [a-z]+[^(]*' | tr '\n' ';'))"
+    fi
+    sleep 0.6
+    power_slice=$(journal_since "$power_mark")
+    if [[ "$(printf '%s\n' "$power_slice" | grep -cF 'rows_demo: action row=1 kind=8')" -eq 1 ]]; then
+        pass "the demo was told its menu closed, once"
+    else
+        fail "the demo heard $(printf '%s\n' "$power_slice" |
+            grep -cF 'rows_demo: action row=1 kind=8') closes when the menu left it"
+    fi
+    if printf '%s\n' "$power_slice" | grep -qE 'popup: (closed|requested|replaced)'; then
+        fail "the switch made or ended a popup: $(printf '%s\n' "$power_slice" |
+            grep -oE 'popup: (closed|requested|replaced)[^(]*' | tr '\n' ';')"
+    else
+        pass "and no popup was made or ended: the one surface moved"
+    fi
+    # Switched at the size its rows measure: the switch's configure is the
+    # last, and nothing moves it after (its rows do not change while it is up).
+    switched=$(printf '%s\n' "$power_slice" | grep -F 'popup: repositioned to' | head -1 |
+        sed -n 's/.*repositioned to \([0-9]*x[0-9]*\).*/\1/p')
+    if [[ -n "$switched" && "$(printf '%s\n' "$power_slice" | grep -cF 'popup: repositioned to')" -eq 1 ]] &&
+        printf '%s\n' "$power_slice" | grep -F 'popup: open kind=menu' | tail -1 | grep -qF " $switched "; then
+        pass "at the size its rows measure ($switched), never moved after"
+    else
+        fail "the switch's sizes: $(printf '%s\n' "$power_slice" |
+            grep -oE 'popup: (repositioned to|open kind=menu) [0-9x]*' | tr '\n' ';')"
+    fi
+
+    # 3. The clock: the calendar, a menu with no sidecar behind it.
+    cal_mark=$(journal_lines)
+    cal_lines=$(journal_count "layout: calendar-")
+    pointer_to "${clock_at[@]}"
+    if wait_for_journal_more "layout: calendar-" 8 "$cal_lines" &&
+        journal_since "$cal_mark" | jgrep -F 'popup: switched to anchor='; then
+        pass "the pointer on the clock switched to the calendar"
+    else
+        fail "no switch to the calendar"
+    fi
+
+    # 4. Back onto the demo's chip: its menu again, and the demo told.
+    back_mark=$(journal_lines)
+    demo_opens=$(journal_count "rows_demo: action row=1 kind=7")
+    demo_rows=$(journal_count "layout: applet-rows_demo-2 target=popup")
+    pointer_to "${demo_at[@]}"
+    if wait_for_journal_more "rows_demo: action row=1 kind=7" 8 "$demo_opens" &&
+        wait_for_journal_more "layout: applet-rows_demo-2 target=popup" 8 "$demo_rows"; then
+        pass "back on the demo's chip: its menu, and its open notice"
+    else
+        fail "the demo's menu did not come back on the pointer"
+    fi
+    if journal_since "$back_mark" | jgrep -E 'popup: (closed|requested|replaced)'; then
+        fail "a popup was made or ended on the way back"
+    else
+        pass "on the same popup still"
+    fi
+
+    # 5. The power button again, and a click on Suspend acts on it: the grab
+    #    the first click took is the one the switched menu holds.
+    power_rows=$(journal_count "layout: applet-caustics-power-5 target=popup")
+    pointer_to "${power_at[@]}"
+    if wait_for_journal_more "layout: applet-caustics-power-5 target=popup" 8 "$power_rows"; then
+        sleep 0.6
+        suspend_mark=$(journal_lines)
+        closes_before=$(journal_count "popup: closed")
+        if popup_click applet-caustics-power-5; then
+            if wait_for_journal "caustics-power: suspend: dry run" 8 &&
+                journal_since "$suspend_mark" | jgrep -F 'caustics-power: suspend: dry run'; then
+                pass "a click on the switched-to menu's Suspend reached its sidecar"
+            else
+                fail "no 'caustics-power: suspend: dry run' after clicking Suspend in the switched menu"
+            fi
+            if wait_for_journal_more "popup: closed" 5 "$closes_before"; then
+                pass "and the menu closed behind it"
+            else
+                fail "the switched menu stayed up after a leaf row"
+            fi
+        fi
+    else
+        fail "the power menu did not come back for the click"
+    fi
+    if journal_since "$hover_mark" | jgrep -F 'popup: a switch with no menu up'; then
+        fail "a switch found no menu to move: $(journal_since "$hover_mark" |
+            grep -F 'popup: a switch with no menu up' | tail -1)"
+    fi
+fi
+bar_env_clear power
+
 say "18c. an icon that alternates keeps both pictures in their slots"
 # The demo's chip alternates between two pictures of its own twice a second,
 # a tray item's sync animation (`ROWS_DEMO_BLINK_MS`). Each picture keeps its

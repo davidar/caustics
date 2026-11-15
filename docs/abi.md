@@ -253,7 +253,7 @@ All `uint`, all rendered into `bar_abi.slang` from the Rust declaration.
   `CMD_POPUP_DONE` 6, `CMD_ROWS` 7, `CMD_DUMP_STALL` 8, `CMD_AXIS` 9 (a
   wheel or touchpad scroll, vertical only, carried as the compositor sent it;
   what a step is worth and what scrolls are the caustic's).
-- **Actions.** *The action ring*'s table, `ACT_NONE` 0 through `ACT_IMAGES_DRAWN` 19;
+- **Actions.** *The action ring*'s table, `ACT_NONE` 0 through `ACT_POPUP_SWITCH` 20;
   `POPUP_MENU` 1, `POPUP_PREVIEW` 2, `POPUP_TOAST` 3; `SRC_STRINGS` =
   `MAX_SLOTS`, `SRC_ANSWERS` = `MAX_SLOTS + 1` (`ACT_WANT_ICON`'s fourth
   operand, `ACT_COVER`'s third).
@@ -391,6 +391,7 @@ one typed accessor per kind.
 | 17 | `WANT_ICON` | `off, len, kind, source` | `REQ_GLYPH` / `REQ_ICON` / `REQ_APP` with those bytes, `kind` the wire's `REQ_*`. A themed name nothing has answered comes as two in one build, `REQ_GLYPH` and `REQ_ICON`; the process asks once per name and kind. `source` says **which buffer** they are in, as for `COVER`, because a name the caustic wants lives in one of three places and a range alone cannot say which |
 | 18 | `WATCHDOG` | `ms` | how long one `bar_shape` dispatch may take before the process calls it a runaway. `SHAPE_WATCHDOG_MS` in the tunables. The *response* (one witness, and no shaping until the OpenType arena's front block is written again) is fixed and the process's, because only it holds the queue and the timestamp query pair |
 | 19 | `IMAGES_DRAWN` | `mask[0..(MAX_IMAGE_SLOTS + 31) / 32]` | the image slots this build placed in an image block, slot `n` at bit `n % 32` of word `n / 32`. Pushed by `bar_build` once per build, an empty mask included, **before** its `WANT_ICON`s, so the drain frees what left the bar before it serves a want that lands a picture. A slot counts as placed for `IMAGE_LINGER_S` (a tunable, a second and a half) after the last build that put it in a block: the caustic keeps each slot's time in its own memory against `inputs.time` and sets the bit while it lasts, so a picture an alternating icon comes back to is still in its slot, and the bit clears at the first build past the time (no build is asked for to clear it). The process copies the mask into the slot array whole: a set bit is drawn, and a clear one **frees the slot there and then**, unless its picture landed after the last compose (no build has yet been told where it is). A freed slot's name is un-asked by the next compose, so a later want lands it again from the store. A picture is never put in a taken slot, and is refused only when every slot is taken; a refused name is not left asked, and its next want is tried once a slot has been freed since (one refusal per name while the array stays full, and no sidecar asked again for pixels the store holds). A run of refusals is one warning, the first after a successful claim; the rest are debug lines, still counted on the health line. The array is not a cache: what is in use is the caustic's word, because only the caustic lays the blocks out |
+| 20 | `POPUP_SWITCH` | `POPUP_OPEN`'s, `kind` always `POPUP_MENU` | the grabbed menu that is up becomes this one: the same `xdg_popup` and its grab, repositioned (`xdg_popup.reposition`) to the new anchor and `w × h`, then `CMD_POPUP_MAPPED` at the configured size whether or not it changed. The slot that got the last open is sent `ACTION_MENU_CLOSE` and `slot` `ACTION_MENU_OPEN {row}`, as a close and an open would send them (neither, when it is the same row of the same sidecar). Pushed when another menu is decided while one is up: a click on another chip, or the pointer moving onto one (`MENU_HOVER_SWITCH`). A hover carries no button serial, and an `xdg_popup.grab` needs a fresh one, so a menu the pointer opens can only be had by moving the popup that holds the grab. With no menu up the process does nothing, since the `CMD_POPUP_DONE` that says so is already on its way |
 
 **Messages, not state.** The popup, the edge and the height are messages,
 because the caustic has the "have" side in `inputs` (`popup_w/h`, `edge`) and
@@ -402,7 +403,9 @@ preview's and a toast's go out when decided. A `CMD_POPUP_MAPPED` moves the
 caustic's popup to up only while one is asked for or up.
 The popup's life: `POPUP_OPEN` → `CMD_POPUP_MAPPED {w, h}` (or
 `CMD_POPUP_DONE` at once if the compositor refused) → zero or more
-`POPUP_MOVE` when the caustic's want differs from `inputs.popup_w/h` →
+`POPUP_MOVE` when the caustic's want differs from `inputs.popup_w/h`, and
+zero or more `POPUP_SWITCH` → `CMD_POPUP_MAPPED`, each a menu in place of the
+last on the same surface →
 `POPUP_CLOSE` → `CMD_POPUP_DONE`. The compositor dismissing it is a
 `CMD_POPUP_DONE` without a `POPUP_CLOSE`. `ANCHOR` is pushed on the caustic's
 first frame and whenever a reload changes its tunables' answer; `inputs.edge`
@@ -1087,9 +1090,11 @@ click on a row, by button), `ACTION_SET_VALUE` 6 (a slider moved),
 process and never reaches a sidecar.)
 
 **`ACTION_MENU_OPEN` and `ACTION_MENU_CLOSE`** are the two kinds the process
-writes rather than copies, on `ACT_POPUP_OPEN`/`ACT_POPUP_CLOSE` with a slot
-(*The action ring*): the bar tells the sidecar that owns a menu when it opens and when it
-closes. `row` is the item whose menu it is, the same row both times; `pos`,
+writes rather than copies, on `ACT_POPUP_OPEN`/`ACT_POPUP_CLOSE` with a slot,
+and both on an `ACT_POPUP_SWITCH` (*The action ring*): the bar tells the
+sidecar that owns a menu when it opens and when it closes, and a menu
+switched to by a hover is opened and the one left closed exactly as clicks
+would. `row` is the item whose menu it is, the same row both times; `pos`,
 `button` and `value` are zero. **A sidecar may ignore both**, and
 `caustics-tray` does, without a witness. Four
 sidecars want them: `caustics-network`, which scans for the access points in
@@ -1104,7 +1109,7 @@ up and end one when it opens. The dock's own right-click menu sends
 neither: its rows are the bar's, and there is no sidecar at the other end.
 `ACTION_MENU_CLOSE` is sent however the popup's life ends (a click elsewhere,
 a leaf row performing, the compositor dismissing it, the caustic moving to
-another popup) and exactly once. A bar that exits instead closes the pipe,
+another popup or switching the menu to another chip's) and exactly once. A bar that exits instead closes the pipe,
 which is the EOF every sidecar already reads.
 
 **`ACTION_TOAST_SHOWN`** is the caustic's: a toast (*The action ring*, `POPUP_TOAST`) that

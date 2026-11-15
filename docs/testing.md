@@ -258,6 +258,17 @@ outputs` and the sidecar's next frame report it, and clicks Scale 2 at the
 bar's new scale to put it back (with `niri msg` as the fallback, since
 every later step assumes scale 2).
 
+**The menu switch step** (18d) opens the rows demo's menu with a click,
+moves the pointer onto the caffeine chip (no menu: the menu stays, no notice
+is sent), then onto the power button (its menu replaces the demo's by a
+`popup: switched` on the same popup, no popup made or ended, the demo told
+its menu closed once, and the switch's size the last one), onto the clock
+(the calendar) and back onto the demo's chip (its open notice again), and
+onto the power button once more, where a click on Suspend reaches the
+sidecar's dry run and closes the menu: the grab the first click took is the
+one the switched menu still holds. Step 15 checks that a menu's first open
+asks for its rows' size and is never moved.
+
 **The canvas's steps** (27 to 35) run last: the canvas host as a fixture
 with `CAUSTICS_SIDECARS="caustics-wallpaper caustics-reload"`, its log in
 `$T_HOME/canvas.log`, on an empty workspace so a screenshot below the bar is

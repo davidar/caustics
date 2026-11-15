@@ -221,6 +221,46 @@ public void dispatch_bar_press(float2 pos)
     wake_click(pos);
 }
 
+/// The pointer on another item while a chip's menu is up: the item's subject
+/// opens its menu in that one's place, as a left click would, when it has one
+/// (`MENU_HOVER_SWITCH`). Only a menu a left click opened takes part, by the
+/// tag of what it hangs off — a chip's, the clock's calendar, the chart
+/// numbers — and only an item whose left click opens one: a dock entry's
+/// menu is a right click's, and its hover is the preview's.
+public void dispatch_menu_hover()
+{
+    uint ii;
+    uint elem;
+    if (!menu_hover_candidate(ii, elem))
+    {
+        return;
+    }
+    switch (id_tag(private[0].popup_id))
+    {
+    case ID_APPLET:
+    case ID_CLOCK:
+    case ID_CHART:
+        break;
+    default:
+        return;
+    }
+    Item it = private[0].items[ii];
+    switch (it.kind)
+    {
+    case ITEM_APPLET:
+        applets_hover_chip(ii, it, elem);
+        break;
+    case ITEM_CLOCK:
+        clock_hover(ii, elem);
+        break;
+    case ITEM_CHART:
+        sysmon_hover_chart(ii);
+        break;
+    default:
+        break;
+    }
+}
+
 /// The popup ended without the caustic asking (`CMD_POPUP_DONE`): each
 /// subject whose popup it was holds it.
 public void dispatch_popup_done()

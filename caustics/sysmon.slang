@@ -877,6 +877,21 @@ public void sysmon_click(uint ii, uint button)
     open_numbers(POPUP_MENU, ii, strip);
 }
 
+/// The pointer is on chart `ii` while another chip's menu is up
+/// (`MENU_HOVER_SWITCH`): the numbers as a menu in its place, as a click
+/// opens them. The numbers already up stay as they are: the strip is one
+/// popup's anchor, whichever chart the pointer crosses.
+public bool sysmon_hover_chart(uint ii)
+{
+    float4 strip;
+    if (numbers_live() || !chart_strip(strip))
+    {
+        return false;
+    }
+    open_numbers(POPUP_MENU, ii, strip);
+    return true;
+}
+
 /// The popup ended without this module asking (`CMD_POPUP_DONE`).
 ///
 /// The chart numbers the compositor ended — a click elsewhere under the

@@ -114,10 +114,28 @@ public void clock_click(uint ii, Item it, uint elem, uint button)
     }
     // A dock preview still in its grace period when the click lands.
     end_preview_for_menu();
+    clock_open_calendar(ii, elem);
+}
+
+/// The calendar, anchored at the clock: a click's open, and a hover's.
+void clock_open_calendar(uint ii, uint elem)
+{
     set_menu_level(ii);
-    request_popup(POPUP_MENU, private[0].elements[elem].rect, own,
+    request_popup(POPUP_MENU, private[0].elements[elem].rect, item_of(ii).id,
                   calendar_want(POPUP_PAD * scale_px(), 0.0));
     witness_calendar();
+}
+
+/// The pointer is on the clock while another chip's menu is up
+/// (`MENU_HOVER_SWITCH`): the calendar in its place, when there is one.
+public bool clock_hover(uint ii, uint elem)
+{
+    if (!CLOCK_SHOW_CALENDAR)
+    {
+        return false;
+    }
+    clock_open_calendar(ii, elem);
+    return true;
 }
 
 /// The calendar's cells, measured and placed. Returns the

@@ -4411,3 +4411,168 @@ fn a_menu_is_asked_for_at_the_size_its_rows_measure() {
     );
     eprintln!("oracle: a menu is asked for at the size its rows measure");
 }
+
+/// Frames until one action of `kind` is pushed, as the embassy runs them
+/// (each frame's `ACT_REBUILD` answered); `first` goes with the first frame.
+/// At most four frames. Returns the action's popup operands and the frames.
+fn until_popup_action(
+    oracle: &mut Oracle,
+    inputs: &FrameInputs,
+    first: &[Command],
+    kind: u32,
+) -> (crate::abi::PopupOpen, usize) {
+    let mut commands = first.to_vec();
+    for frame in 1..=4 {
+        let state = oracle.gpu.run_apply(inputs, &commands);
+        commands.clear();
+        assert!(
+            actions_of(&state, abi::ACT_POPUP_CLOSE).is_empty(),
+            "nothing closes on the way"
+        );
+        let found = actions_of(&state, kind);
+        if !found.is_empty() {
+            assert_eq!(found.len(), 1, "one: {found:?}");
+            return (found[0].popup_open(), frame);
+        }
+        oracle.gpu.mark_shape_pending();
+    }
+    panic!("no action {kind} in four frames");
+}
+
+/// With a chip's menu up, the pointer moving onto another chip with a menu
+/// opens that one in its place with no click, by **switching** the popup
+/// that is up: one `ACT_POPUP_SWITCH` (never an `ACT_POPUP_OPEN` or an
+/// `ACT_POPUP_CLOSE`), anchored at the second chip and at the size its rows
+/// measure, once they are built; mapped, the second menu's rows are laid out
+/// at that size and a click on one is its row's `ACT_SIDECAR` and ends the
+/// menu. The pointer on a chip with no menu, or on the bar between chips,
+/// leaves the menu up alone; back on the first chip, the first menu again.
+#[test]
+fn a_hovered_chip_switches_the_menu_up() {
+    if std::env::var("CAUSTICS_BAR_ORACLE").as_deref() != Ok("1") {
+        eprintln!("skipping the oracle: set CAUSTICS_BAR_ORACLE=1 to run it");
+        return;
+    }
+    let mut oracle = match Oracle::new() {
+        Ok(oracle) => oracle,
+        Err(err) => {
+            eprintln!("skipping the oracle: {err:#}");
+            return;
+        }
+    };
+    let (base, slot, chips) = two_menus_bar(&mut oracle);
+    let (first, second, plain) = (chips[0].1, chips[1].1, chips[2].1);
+    let popup_state = |oracle: &mut Oracle| {
+        word(
+            &oracle.gpu.read_private(),
+            crate::gpu::private_field_offset("popup_state"),
+        )
+    };
+    let up = bar_const("POPUP_UP");
+
+    // The first menu, by a click.
+    let (open, _) = until_popup_action(&mut oracle, &base, &bar_click(first), abi::ACT_POPUP_OPEN);
+    let mut mapped = FrameInputs {
+        popup_size: open.want,
+        ..base
+    };
+    oracle.gpu.run_apply(
+        &mapped,
+        &[Command::popup_mapped(open.want[0], open.want[1])],
+    );
+    assert_eq!(popup_state(&mut oracle), up, "the first menu is up");
+
+    // A chip with no menu, then the bar left of the first chip: nothing.
+    for (what, at) in [
+        ("a chip with no menu", centre(plain)),
+        ("the bar between chips", [first[0] - 3.0, centre(first)[1]]),
+    ] {
+        for _ in 0..3 {
+            oracle.gpu.mark_shape_pending();
+            let state = oracle
+                .gpu
+                .run_apply(&mapped, &[Command::pointer_motion(abi::TARGET_BAR, at)]);
+            for kind in [
+                abi::ACT_POPUP_SWITCH,
+                abi::ACT_POPUP_OPEN,
+                abi::ACT_POPUP_CLOSE,
+            ] {
+                assert!(
+                    actions_of(&state, kind).is_empty(),
+                    "{what}: no action {kind}"
+                );
+            }
+        }
+        assert_eq!(popup_state(&mut oracle), up, "{what}: the menu stays up");
+        let rows = laid(&oracle.gpu.read_private()).rows.len();
+        assert_eq!(rows, 2, "{what}: the first menu's two rows");
+    }
+
+    // The second chip: its menu in the first one's place, on the same popup.
+    let (switch, frames) = until_popup_action(
+        &mut oracle,
+        &mapped,
+        &[Command::pointer_motion(abi::TARGET_BAR, centre(second))],
+        abi::ACT_POPUP_SWITCH,
+    );
+    eprintln!("switch: {switch:?} after {frames} frame(s)");
+    assert_eq!(switch.kind, abi::POPUP_MENU);
+    assert_eq!((switch.slot, switch.row), (slot, 10), "the second chip's");
+    assert_eq!(switch.anchor, second, "anchored at the second chip");
+    assert!(frames <= 3, "switched within three frames of the hover");
+    mapped.popup_size = switch.want;
+    let state = oracle.gpu.run_apply(
+        &mapped,
+        &[Command::popup_mapped(switch.want[0], switch.want[1])],
+    );
+    assert!(actions_of(&state, abi::ACT_POPUP_MOVE).is_empty());
+    assert_eq!(popup_state(&mut oracle), up, "the second menu is up");
+    let second_menu = laid(&oracle.gpu.read_private());
+    assert_eq!(
+        second_menu.want.map(|v| v.round() as u32),
+        switch.want,
+        "switched at the size its rows measure"
+    );
+    assert_eq!(second_menu.rows.len(), 5, "the second menu's five rows");
+    assert_ne!(switch.want, open.want, "a menu of another size");
+
+    // Back on the first chip: the first menu again, by the same route.
+    let (back, _) = until_popup_action(
+        &mut oracle,
+        &mapped,
+        &[Command::pointer_motion(abi::TARGET_BAR, centre(first))],
+        abi::ACT_POPUP_SWITCH,
+    );
+    assert_eq!((back.row, back.anchor, back.want), (1, first, open.want));
+    mapped.popup_size = back.want;
+    oracle.gpu.run_apply(
+        &mapped,
+        &[Command::popup_mapped(back.want[0], back.want[1])],
+    );
+    // And to the second once more, where a click on a row acts on it.
+    let (again, _) = until_popup_action(
+        &mut oracle,
+        &mapped,
+        &[Command::pointer_motion(abi::TARGET_BAR, centre(second))],
+        abi::ACT_POPUP_SWITCH,
+    );
+    mapped.popup_size = again.want;
+    oracle.gpu.run_apply(
+        &mapped,
+        &[Command::popup_mapped(again.want[0], again.want[1])],
+    );
+    let row = laid(&oracle.gpu.read_private()).rows[0];
+    let (clicks, state) = click_rect(&mut oracle, &mapped, row.1, abi::BTN_LEFT);
+    assert_eq!(clicks.len(), 1, "one action for the row: {clicks:?}");
+    assert_eq!(
+        (clicks[0].slot, clicks[0].row, clicks[0].kind),
+        (slot, 11, wire::ACTION_ACTIVATE),
+        "the second menu's first row"
+    );
+    assert_eq!(
+        actions_of(&state, abi::ACT_POPUP_CLOSE).len(),
+        1,
+        "and the menu ends"
+    );
+    eprintln!("oracle: a hovered chip switches the menu up, and a chip without one leaves it");
+}

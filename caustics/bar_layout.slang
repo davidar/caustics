@@ -1092,6 +1092,37 @@ public void resolve_hover_item()
     private[0].hover_item = hover_elem == NO_INDEX ? NO_INDEX : private[0].elements[hover_elem].item;
 }
 
+/// The bar's half of a hover switch (`MENU_HOVER_SWITCH`): whether a grabbed
+/// menu's surface is mapped, the pointer is on the bar with no button held,
+/// and over an item that is not the one the menu hangs off. Then `ii` is
+/// that item and `elem` its element, and the subject whose item it is
+/// decides whether it opens a menu (`dispatch_menu_hover`). After the
+/// layout, so the element is this frame's; what the pointer is over is the
+/// hit test's answer, as a press's is (`press_target`).
+public bool menu_hover_candidate(out uint ii, out uint elem)
+{
+    ii = NO_INDEX;
+    elem = NO_INDEX;
+    if (!MENU_HOVER_SWITCH || !menu_surface_up() || private[0].pointer_target != TARGET_BAR
+        || private[0].pressed_element != NO_INDEX)
+    {
+        return false;
+    }
+    uint h = press_target(TARGET_BAR, private[0].pointer);
+    if (h >= live_elements())
+    {
+        return false;
+    }
+    uint item = private[0].elements[h].item;
+    if (item >= live_items() || private[0].items[item].id.eq(private[0].popup_id))
+    {
+        return false;
+    }
+    ii = item;
+    elem = h;
+    return true;
+}
+
 /// A button went down at `pos` on `target`: the pointer is kept, and so is
 /// what the press landed on, by element and by item.
 public void press(uint target, float2 pos)

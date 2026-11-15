@@ -150,9 +150,29 @@ public void applets_click_chip(uint ii, Item it, uint elem, uint button, float2 
         close_popup();
         return;
     }
+    applets_open_menu(ii, it, elem);
+}
+
+/// Chip `ii`'s menu, at its rect on the bar: a click's open, and a hover's.
+void applets_open_menu(uint ii, Item it, uint elem)
+{
     set_menu_level(ii);
-    request_popup(POPUP_MENU, private[0].elements[elem].rect, own,
+    request_popup(POPUP_MENU, private[0].elements[elem].rect, it.id,
                   private[0].popup_want);
+}
+
+/// The pointer is on chip `ii` while another chip's menu is up
+/// (`MENU_HOVER_SWITCH`): a chip with a menu opens it in that one's place,
+/// as a left click would; one without (an applet whose click activates, the
+/// caffeine chip) leaves the menu up alone. True when it opened.
+public bool applets_hover_chip(uint ii, Item it, uint elem)
+{
+    if (id_tag(it.id) != APPLETS_TAG || (it.flags & IFLAG_HAS_MENU) == 0u)
+    {
+        return false;
+    }
+    applets_open_menu(ii, it, elem);
+    return true;
 }
 
 /// A sidecar's menu row, not in a toast. The right button is the sidecar's
