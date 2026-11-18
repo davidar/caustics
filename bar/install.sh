@@ -283,7 +283,10 @@ settle() {
 
     cursor=$(journalctl --user -u "$unit" --no-pager -n 0 --show-cursor 2>/dev/null |
         sed -n 's/^-- cursor: //p')
-    systemctl --user restart "$unit" || die "$unit would not restart"
+    # `--no-block`: the bar's unit is `Type=notify` and a plain restart
+    # waits for its first whole frame, which after a driver update is a cold
+    # compile; what the new host says is read from the journal below.
+    systemctl --user restart --no-block "$unit" || die "$unit would not restart"
     say "restarted $unit"
 
     # The first thing the new host says about itself. `set:` names the

@@ -343,7 +343,9 @@ bar_restart() {
     gssh 30 'systemctl --user daemon-reload; systemctl --user reset-failed caustics-bar 2>/dev/null
         systemctl --user stop caustics-bar' >/dev/null
     [[ -n "$JOURNAL_CURSOR" ]] && mark_journal
-    gssh 30 'systemctl --user start caustics-bar' >/dev/null
+    # `--no-block`: the unit is `Type=notify`, and a plain start would wait
+    # for the bar's first whole frame, which is the guest's cold compile.
+    gssh 30 'systemctl --user start --no-block caustics-bar' >/dev/null
 }
 
 bar_stop() {

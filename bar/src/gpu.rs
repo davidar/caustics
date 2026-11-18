@@ -1039,6 +1039,13 @@ impl Gpu {
         self.program.warming()
     }
 
+    /// Whether every pipeline of the running program is built
+    /// (`Program::whole`): a frame drawn from here on is the bar with its
+    /// chips and its text, not the frame submission alone.
+    pub fn whole(&self) -> bool {
+        self.program.whole()
+    }
+
     /// Whether a frame can be drawn: the frame submission's four pipelines
     /// are built. The model passes and the shaper come after, on their own.
     ///

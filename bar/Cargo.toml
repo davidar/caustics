@@ -50,6 +50,11 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # against it: building needs no development symlink.
 wayland-client = { version = "0.31.15", features = ["system"] }
 wgpu = "30.0.0"
+# One datagram to the service manager when the bar is first drawn whole, so a
+# `Type=notify` unit is `active` when there is a bar to look at and not when
+# the process was forked (bar/systemd/README.md, *The unit*). Outside a unit
+# there is no `$NOTIFY_SOCKET` and it does nothing.
+sd-notify = "0.5.0"
 # No zbus, tokio, image decoders: the tray, the battery and the power menu are
 # sidecars (`caustics-tray`, `caustics-power`), so the bar process knows Wayland, the
 # compositor's IPC socket and pipes, and carries no async executor at all —

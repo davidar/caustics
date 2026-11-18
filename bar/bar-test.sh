@@ -637,6 +637,13 @@ fi
 log="$(journal)"
 printf '%s\n' "$log" > "$SHOTS/journal-start.txt"
 note "journal saved to $SHOTS/journal-start.txt"
+# The unit is `activating` until the bar says it is up, which is the first
+# frame its whole program draws: after the layout above when the cache is cold.
+if wait_for_journal "ready: the first frame of the whole program is drawn" 180; then
+    pass "the bar said it is up"
+else
+    fail "no 'ready:' line within 180 s"
+fi
 assert_contains "unit is active" "$(bar_active)" active
 assert_contains "adapter is the target's ($T_ADAPTER)" "$log" "$T_ADAPTER"
 assert_contains "surface format negotiated" "$log" "surface format negotiated"

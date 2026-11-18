@@ -8,6 +8,21 @@ StartLimitIntervalSec=60
 StartLimitBurst=10
 
 [Service]
+# The bar says when it is up: `READY=1` at the first frame its whole program
+# draws, chips and text included. Until then the unit is `activating`, so
+# `systemctl --user is-active caustics-bar` and an `After=caustics-bar.service`
+# mean "there is a bar on screen", which is what a session waits for before
+# it starts its applications: after a driver update the bar's pipelines
+# compile cold, a few seconds with the machine to itself and several times
+# that beside a dozen applications starting.
+Type=notify
+NotifyAccess=main
+# No limit on how long that takes. A cold compile is seconds on a GPU and
+# minutes on a software rasteriser, and the default start timeout would kill
+# a bar that was only compiling, and then the next one. A bar that cannot
+# start exits by itself (below); whoever waits on the unit brings its own
+# timeout. `systemctl start` waits for the ready too: `--no-block` does not.
+TimeoutStartSec=infinity
 ExecStart=%h/.local/bin/caustics-bar
 # No Vulkan driver is pinned here: the bar prefers a low-power adapter and
 # refuses an NVIDIA one by itself (bar/src/gpu.rs). On a laptop with a

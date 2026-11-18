@@ -80,6 +80,18 @@ both; a plain compositor configuration runs `systemctl --user
 import-environment WAYLAND_DISPLAY NIRI_SOCKET XDG_CURRENT_DESKTOP` and starts
 a session target from its startup. What the unit sets, and why:
 
+- `Type=notify`, `NotifyAccess=main`, `TimeoutStartSec=infinity`. The bar
+  sends `READY=1` at the first frame its whole program draws (the journal
+  line `ready: the first frame of the whole program is drawn`), and the unit
+  is `activating` until then. So `systemctl --user is-active caustics-bar`
+  says whether there is a bar on screen, and a unit ordered
+  `After=caustics-bar.service` starts once there is. That is for whatever
+  starts a session's applications: after a driver update the pipelines
+  compile cold, a few seconds with the machine to itself and several times
+  that beside a dozen applications starting, so a session that waits for the
+  bar (with a timeout of its own) gets its panel first. No start timeout,
+  because a cold compile on a software rasteriser is minutes; `systemctl
+  --user start caustics-bar` waits for the ready, and `--no-block` does not.
 - `Restart=always`, `RestartSec=1`, at most ten starts a minute. Exit 1, a
   Wayland protocol error or a fatal dispatch failure, is a restart: a dead bar
   must never linger on screen with no surface.

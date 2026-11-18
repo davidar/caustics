@@ -440,8 +440,29 @@ pub struct Bar {
     /// presented frame, so the unit's restart path is exercised for real.
     fault_protocol: bool,
     fault_fired: bool,
+    /// Whether the service manager has been told the bar is up
+    /// (`tell_ready`), which happens once.
+    ready_told: bool,
 
     pub exit: Option<Exit>,
+}
+
+/// Tell the service manager the bar is up: `READY=1` on `$NOTIFY_SOCKET`,
+/// which turns a `Type=notify` unit from `activating` to `active`
+/// (bar/systemd/README.md, *The unit*). Whatever starts a session's
+/// applications can wait for that and leave the driver's compile the machine
+/// to itself, which matters after a driver update: the compile is several
+/// times slower beside a dozen applications starting. Run by hand or under a
+/// supervisor that is not systemd there is no socket, and this is the line
+/// in the journal and nothing else.
+fn tell_ready() {
+    // Told first and logged second, so a reader of the journal who sees the
+    // line finds the datagram already sent.
+    let told = sd_notify::notify(&[sd_notify::NotifyState::Ready]);
+    tracing::info!("ready: the first frame of the whole program is drawn");
+    if let Err(err) = told {
+        tracing::warn!("ready: the service manager was not told: {err}");
+    }
 }
 
 impl Bar {
@@ -588,6 +609,7 @@ impl Bar {
             health: Health::new(),
             fault_protocol: std::env::var("CAUSTICS_BAR_FAULT").as_deref() == Ok("protocol"),
             fault_fired: false,
+            ready_told: false,
             exit: None,
         })
     }
@@ -2063,6 +2085,14 @@ impl Bar {
         self.commands.clear();
         self.frames += 1;
         self.dirty = false;
+        // The first frame drawn by the whole program is the bar a person
+        // would call up: the frame submission alone draws a bar with no chips
+        // and no text, for the seconds a cold driver cache takes over the
+        // model passes and the shaper.
+        if !self.ready_told && self.gpu.as_ref().is_some_and(|gpu| gpu.whole()) {
+            self.ready_told = true;
+            tell_ready();
+        }
         self.pacing.set_animating(mirror.surface.wants_redraw != 0);
         // **In this order**: the witnesses first, so a `layout:` line and the
         // `action:` line the same click produced read in the order they
